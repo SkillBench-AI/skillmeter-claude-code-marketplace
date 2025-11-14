@@ -1,0 +1,13 @@
+{
+  "name": "SkillBench",
+  "owner": {
+    "name": "SkillBench"
+  },
+  "plugins": [
+    {
+      "name": "skillmeter",
+      "source": "./skillmeter",
+      "description": "A simple greeting plugin to learn the basics"
+    }
+  ]
+}
