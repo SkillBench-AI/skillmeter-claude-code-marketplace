@@ -1,7 +1,7 @@
 {
-  "name": "SkillBench",
+  "name": "skillbench",
   "owner": {
-    "name": "SkillBench"
+    "name": "skillbench"
   },
   "plugins": [
     {

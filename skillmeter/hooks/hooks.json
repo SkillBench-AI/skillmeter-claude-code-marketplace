@@ -5,7 +5,17 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo 'Session started'"
+            "command": "$CLAUDE_PLUGIN_ROOT/scripts/session_start.sh"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PLUGIN_ROOT/scripts/session_end.sh"
           }
         ]
       }
@@ -16,7 +26,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo 'Preparing to use Edit or Write tool'"
+            "command": "$CLAUDE_PLUGIN_ROOT/scripts/pre_tool_use.sh"
           }
         ]
       }
@@ -26,7 +36,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo 'User prompt submitted'"
+            "command": "$CLAUDE_PLUGIN_ROOT/scripts/user_prompt_submit.sh",
+            "timeout": 10
           }
         ]
       }
