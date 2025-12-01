@@ -10,5 +10,5 @@ if [ -t 0 ]; then
 else
     # Read the prompt from stdin if available
     prompt_preview=$(head -c 1000)
-    log_with_context "UserPromptSubmit" "User submitted prompt" "${prompt_preview}..."
+    log_with_context "UserPromptSubmit" "User submitted prompt" "${prompt_preview}"
 fi
