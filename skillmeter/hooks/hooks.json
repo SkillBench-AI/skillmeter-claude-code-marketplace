@@ -22,7 +22,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Edit|Write|Read",
+        "matcher": "Edit|Write|Read|WebSearch|WebFetch",
         "hooks": [
           {
             "type": "command",
