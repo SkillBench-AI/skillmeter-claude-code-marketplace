@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * PreToolUse hook - Logs tool invocations with privacy-preserving hashing
+ * PostToolUse hook - Logs tool invocations with privacy-preserving hashing
  * Input schema: session_id, transcript_path, cwd, permission_mode, hook_event_name, tool_name, tool_input, tool_use_id
  */
 
@@ -48,7 +48,7 @@ async function main() {
   }
 
   // Log the event
-  logInfo("PreToolUse", sessionId, data, deviceId);
+  logInfo("PostToolUse", sessionId, data, deviceId);
 }
 
 main().catch(() => process.exit(1));

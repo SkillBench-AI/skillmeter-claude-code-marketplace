@@ -6,7 +6,6 @@
   "plugins": [
     {
       "name": "skillmeter",
-      "version": "0.0.1",
       "source": "./skillmeter",
       "description": ""
     }
