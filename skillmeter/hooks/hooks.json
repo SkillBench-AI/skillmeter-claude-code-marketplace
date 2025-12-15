@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PLUGIN_ROOT/scripts/session_start.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/session_start.sh"
           }
         ]
       }
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PLUGIN_ROOT/scripts/session_end.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/session_end.sh"
           }
         ]
       }
@@ -26,7 +26,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PLUGIN_ROOT/scripts/pre_tool_use.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/pre_tool_use.sh"
           }
         ]
       }
@@ -36,7 +36,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PLUGIN_ROOT/scripts/user_prompt_submit.sh",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/user_prompt_submit.sh",
             "timeout": 10
           }
         ]
@@ -47,7 +47,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PLUGIN_ROOT/scripts/stop.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/stop.sh"
           }
         ]
       }
