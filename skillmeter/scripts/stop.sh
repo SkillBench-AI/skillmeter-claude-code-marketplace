@@ -25,6 +25,7 @@ session_id=$(echo "$input" | jq -r '.session_id // "unknown"')
 
 # Extract stop metadata
 data=$(echo "$input" | jq -c '{
+  transcript_path: .transcript_path,
   permission_mode: .permission_mode,
   stop_hook_active: .stop_hook_active
 }')

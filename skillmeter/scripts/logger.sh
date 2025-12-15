@@ -6,7 +6,7 @@
 
 # Define log file location and rotation settings
 LOG_DIR="${CLAUDE_PLUGIN_ROOT}/logs"
-LOG_FILE="${LOG_DIR}/events.log"
+LOG_FILE="${LOG_DIR}/events.jsonl"
 MAX_EVENTS=50
 TRANSFER_SCRIPT="${CLAUDE_PLUGIN_ROOT}/scripts/transfer_log.sh"
 UUID_SCRIPT="${CLAUDE_PLUGIN_ROOT}/scripts/get_uuid.sh"

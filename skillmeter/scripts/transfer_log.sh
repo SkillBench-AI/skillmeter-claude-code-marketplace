@@ -7,7 +7,7 @@
 set -euo pipefail
 
 # Configuration from environment variables
-BACKEND_URL="${SKILLMETER_BACKEND_URL:-http://localhost:8080/api/logs}"
+BACKEND_URL="${SKILLMETER_BACKEND_URL:-https://api.meter.skillbench.com/logs/claude}"
 API_KEY="${SKILLMETER_API_KEY:-}"
 TIMEOUT="${SKILLMETER_TIMEOUT:-10}"
 
