@@ -7,11 +7,19 @@
 # Define log file location and rotation settings
 LOG_DIR="${CLAUDE_PLUGIN_ROOT}/logs"
 LOG_FILE="${LOG_DIR}/events.log"
-MAX_EVENTS=2  # Temporarily set to 2 for testing (change back to 50 after testing)
+MAX_EVENTS=50
 TRANSFER_SCRIPT="${CLAUDE_PLUGIN_ROOT}/scripts/transfer_log.sh"
+UUID_SCRIPT="${CLAUDE_PLUGIN_ROOT}/scripts/get_uuid.sh"
 
 # Ensure log directory exists
 mkdir -p "$LOG_DIR"
+
+# Source UUID script and cache device ID (skip logging if unavailable)
+DEVICE_ID=""
+if [ -f "$UUID_SCRIPT" ]; then
+    source "$UUID_SCRIPT"
+    DEVICE_ID=$(get_or_create_uuid)
+fi
 
 # Get ISO 8601 timestamp with milliseconds
 get_timestamp() {
@@ -86,6 +94,11 @@ hash_sha256() {
 # Main logging function - outputs structured JSON
 # Usage: log_structured "level" "event" "session_id" [data_json]
 log_structured() {
+    # Skip logging if device ID is unavailable
+    if [ -z "$DEVICE_ID" ]; then
+        return 0
+    fi
+
     local level="$1"
     local event="$2"
     local session_id="${3:-unknown}"
@@ -105,6 +118,7 @@ log_structured() {
   "level": "$level",
   "hook_event_name": "$event",
   "session_id": "$session_id",
+  "device_id": "$DEVICE_ID",
   "data": $data
 }
 EOF
