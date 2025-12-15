@@ -19,30 +19,50 @@ const { getDeviceId, logInfo, readStdin, expandHome, PLUGIN_ROOT } = require("./
 const TRACKING_DIR = path.join(PLUGIN_ROOT, "tracking");
 
 /**
- * Get current line count of a file
- * @param {string} filePath - Path to the file
- * @returns {number} Line count (0 if file doesn't exist)
+ * Parse transcript JSONL file and get tracking info
+ * @param {string} filePath - Path to the transcript JSONL file
+ * @returns {object} Tracking info with lineCount and lastUuid
  */
-function getLineCount(filePath) {
+function parseTranscript(filePath) {
+  const result = { lineCount: 0, lastUuid: null, messages: [] };
+
   try {
-    if (!fs.existsSync(filePath)) return 0;
+    if (!fs.existsSync(filePath)) return result;
+
     const content = fs.readFileSync(filePath, "utf8");
-    return content.split("\n").filter((line) => line.trim()).length;
+    const lines = content.split("\n").filter((line) => line.trim());
+
+    for (const line of lines) {
+      try {
+        const entry = JSON.parse(line);
+        result.messages.push(entry);
+        // Track UUID if available
+        if (entry.uuid) {
+          result.lastUuid = entry.uuid;
+        }
+      } catch {
+        // Skip invalid JSON lines
+      }
+    }
+
+    result.lineCount = result.messages.length;
   } catch {
-    return 0;
+    // Ignore file read errors
   }
+
+  return result;
 }
 
 /**
  * Create or update tracking file for a session
  * @param {string} sessionId - Session ID
- * @param {number} lineCount - Current line count to store
+ * @param {object} trackingInfo - Tracking info to store
  */
-function createTrackingFile(sessionId, lineCount) {
+function createTrackingFile(sessionId, trackingInfo) {
   try {
     fs.mkdirSync(TRACKING_DIR, { recursive: true });
-    const trackingFile = path.join(TRACKING_DIR, `${sessionId}.txt`);
-    fs.writeFileSync(trackingFile, String(lineCount), { mode: 0o600 });
+    const trackingFile = path.join(TRACKING_DIR, `${sessionId}.json`);
+    fs.writeFileSync(trackingFile, JSON.stringify(trackingInfo, null, 2), { mode: 0o600 });
   } catch {
     // Ignore errors
   }
@@ -68,8 +88,12 @@ async function main() {
   const transcriptPath = input.transcript_path || "";
   if (transcriptPath) {
     const expandedPath = expandHome(transcriptPath);
-    const currentLineCount = getLineCount(expandedPath);
-    createTrackingFile(sessionId, currentLineCount);
+    const trackingInfo = parseTranscript(expandedPath);
+    // Don't store messages in tracking file, just metadata
+    createTrackingFile(sessionId, {
+      lineCount: trackingInfo.lineCount,
+      lastUuid: trackingInfo.lastUuid,
+    });
   }
 
   // Build data object
