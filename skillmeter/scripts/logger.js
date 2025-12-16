@@ -4,7 +4,7 @@
  * Outputs NDJSON (newline-delimited JSON) for easy backend parsing
  */
 
-const { execSync } = require("child_process");
+const { execSync, spawn } = require("child_process");
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
@@ -13,6 +13,8 @@ const path = require("path");
 const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, "..");
 const LOG_DIR = path.join(PLUGIN_ROOT, "logs");
 const LOG_FILE = path.join(LOG_DIR, "events.jsonl");
+const MAX_EVENTS = 50;
+const TRANSFER_SCRIPT = path.join(PLUGIN_ROOT, "scripts", "transfer_log.js");
 const SERVICE_NAME = "com.skillbench.device-id";
 
 /**
@@ -89,6 +91,35 @@ function getTimestamp() {
 }
 
 /**
+ * Transfer log file if it has grown large enough
+ */
+function transferLogIfNeeded() {
+  if (!fs.existsSync(LOG_FILE)) return;
+
+  try {
+    const content = fs.readFileSync(LOG_FILE, "utf8");
+    const eventCount = content.split("\n").filter((line) => line.trim()).length;
+
+    if (eventCount >= MAX_EVENTS) {
+      // Atomically rename to prevent race conditions
+      const timestamp = Date.now();
+      const sendingFile = `${LOG_FILE}.${timestamp}`;
+      fs.renameSync(LOG_FILE, sendingFile);
+
+      // Transfer log in background (non-blocking)
+      if (fs.existsSync(TRANSFER_SCRIPT)) {
+        spawn("node", [TRANSFER_SCRIPT, sendingFile], {
+          detached: true,
+          stdio: "ignore",
+        }).unref();
+      }
+    }
+  } catch {
+    // Ignore errors (file might have been renamed by another session)
+  }
+}
+
+/**
  * Write structured JSON log entry
  * @param {string} level - Log level (info, error, warn, debug)
  * @param {string} event - Hook event name
@@ -111,6 +142,9 @@ function logStructured(level, event, sessionId, data, deviceId) {
   };
 
   fs.appendFileSync(LOG_FILE, JSON.stringify(logEntry) + "\n");
+
+  // Check if log should be transferred
+  transferLogIfNeeded();
 }
 
 // Convenience logging functions

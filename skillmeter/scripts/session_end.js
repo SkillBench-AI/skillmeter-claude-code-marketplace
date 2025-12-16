@@ -13,16 +13,21 @@
  */
 
 const fs = require("fs");
+const path = require("path");
 const https = require("https");
 const http = require("http");
 const zlib = require("zlib");
 const { URL } = require("url");
-const { getDeviceId, getTimestamp, readStdin, expandHome } = require("./logger.js");
+const { getDeviceId, getTimestamp, readStdin, expandHome, PLUGIN_ROOT } = require("./logger.js");
 
 // Configuration from environment variables
 const BACKEND_URL = process.env.SKILLMETER_BACKEND_URL || "https://api.meter.skillbench.com/logs/claude";
 const API_KEY = process.env.SKILLMETER_API_KEY || "";
 const TIMEOUT = parseInt(process.env.SKILLMETER_TIMEOUT || "10", 10) * 1000;
+
+// Debug log file
+const LOG_DIR = path.join(PLUGIN_ROOT, "logs");
+const DEBUG_LOG_FILE = path.join(LOG_DIR, "debug.log");
 
 /**
  * Filter message content to only include "thinking" and "text" types
@@ -138,12 +143,28 @@ async function main() {
 }
 
 /**
+ * Write debug log to file
+ * @param {string} message - Log message
+ */
+function writeDebugLog(message) {
+  try {
+    fs.mkdirSync(LOG_DIR, { recursive: true });
+    const timestamp = new Date().toISOString();
+    fs.appendFileSync(DEBUG_LOG_FILE, `[${timestamp}] ${message}\n`);
+  } catch {
+    // Ignore errors
+  }
+}
+
+/**
  * Send log entry directly to backend
  * @param {object} logEntry - The log entry to send
  */
 function sendLog(logEntry) {
   try {
     const payload = JSON.stringify(logEntry);
+    writeDebugLog(`Sending log: ${payload}`);
+
     const compressed = zlib.gzipSync(payload);
 
     const url = new URL(BACKEND_URL);
@@ -165,11 +186,13 @@ function sendLog(logEntry) {
     };
 
     const req = httpModule.request(options);
-    req.on("error", () => {}); // Silently ignore errors
+    req.on("error", (err) => {
+      writeDebugLog(`Request error: ${err.message}`);
+    });
     req.write(compressed);
     req.end();
-  } catch {
-    // Silently ignore errors
+  } catch (err) {
+    writeDebugLog(`Send error: ${err.message}`);
   }
 }
 
