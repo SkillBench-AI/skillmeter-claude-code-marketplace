@@ -138,8 +138,10 @@ async function main() {
     },
   };
 
-  // Send directly to backend
-  sendLog(logEntry);
+  // Send directly to backend if reason is "prompt_input_exit"
+  if (logEntry.data.reason === "prompt_input_exit") {
+    sendLog(logEntry);
+  }
 }
 
 /**
