@@ -21,6 +21,35 @@ const { getDeviceId, logInfo, readStdin, expandHome, PLUGIN_ROOT, LOG_FILE } = r
 const TRANSFER_SCRIPT = path.join(PLUGIN_ROOT, "scripts", "transfer_log.js");
 
 /**
+ * Filter message content to only include "thinking" and "text" types
+ * @param {object} message - The message object
+ * @returns {object|null} Filtered message or null if content should be excluded
+ */
+function filterMessageContent(message) {
+  if (!message || !message.content) return message;
+
+  // If content is not an array, pass through as-is
+  if (!Array.isArray(message.content)) {
+    return message;
+  }
+
+  // Filter to only include "thinking" and "text" types
+  const filteredContent = message.content.filter(
+    (item) => item && (item.type === "thinking" || item.type === "text")
+  );
+
+  // Return null if no valid content remains
+  if (filteredContent.length === 0) {
+    return null;
+  }
+
+  return {
+    ...message,
+    content: filteredContent,
+  };
+}
+
+/**
  * Parse transcript and extract user/assistant messages
  * @param {string} filePath - Path to the transcript JSONL file
  * @returns {Array} Array of user/assistant messages
@@ -39,9 +68,13 @@ function extractConversation(filePath) {
         const entry = JSON.parse(line);
         // Only extract user and assistant messages with essential fields only
         if (entry.type === "user" || entry.type === "assistant") {
+          const filteredMessage = filterMessageContent(entry.message);
+          // Skip if message content was filtered out entirely
+          if (filteredMessage === null) continue;
+
           messages.push({
             type: entry.type,
-            message: entry.message,
+            message: filteredMessage,
             version: entry.version,
             gitBranch: entry.gitBranch,
             timestamp: entry.timestamp,
