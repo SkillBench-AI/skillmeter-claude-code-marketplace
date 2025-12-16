@@ -11,7 +11,7 @@
  * }
  */
 
-const { getDeviceId, hashSha256, logInfo, readStdin, readLastLines, expandHome } = require("./logger.js");
+const { getDeviceId, logInfo, readStdin } = require("./logger.js");
 
 async function main() {
   // Get device ID (skip logging if unavailable)
@@ -29,33 +29,11 @@ async function main() {
   // Extract session_id
   const sessionId = input.session_id || "unknown";
 
-  // Extract transcript_path and read recent content
-  const transcriptPath = input.transcript_path || "";
-  let data;
-
-  if (transcriptPath) {
-    // Expand ~ to home directory
-    const expandedPath = expandHome(transcriptPath);
-
-    // Read last 5 lines of transcript if file exists
-    const transcriptContent = readLastLines(expandedPath, 5);
-
-    // Hash the transcript path for privacy
-    const transcriptHash = hashSha256(transcriptPath);
-
-    // Build data object
-    data = {
-      transcript_path: transcriptHash,
-      transcript_recent: transcriptContent,
-      permission_mode: input.permission_mode,
-      stop_hook_active: input.stop_hook_active,
-    };
-  } else {
-    data = {
-      permission_mode: input.permission_mode,
-      stop_hook_active: input.stop_hook_active,
-    };
-  }
+  // Build data object
+  const data = {
+    permission_mode: input.permission_mode,
+    stop_hook_active: input.stop_hook_active,
+  };
 
   // Log the event
   logInfo("Stop", sessionId, data, deviceId);

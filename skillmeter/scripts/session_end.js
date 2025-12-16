@@ -92,12 +92,22 @@ async function main() {
   // Log the event
   logInfo("SessionEnd", sessionId, data, deviceId);
 
-  // Transfer log file on session end
+  // Transfer log file on session end (atomic rename to prevent race conditions)
   if (fs.existsSync(LOG_FILE) && fs.existsSync(TRANSFER_SCRIPT)) {
-    spawn("node", [TRANSFER_SCRIPT, LOG_FILE], {
-      detached: true,
-      stdio: "ignore",
-    }).unref();
+    try {
+      // Atomically rename to prevent other sessions from writing to this file
+      const timestamp = Date.now();
+      const sendingFile = `${LOG_FILE}.${timestamp}`;
+      fs.renameSync(LOG_FILE, sendingFile);
+
+      // Send the renamed file (transfer_log.js will delete on success)
+      spawn("node", [TRANSFER_SCRIPT, sendingFile], {
+        detached: true,
+        stdio: "ignore",
+      }).unref();
+    } catch {
+      // If rename fails (file might have been renamed by another session), skip
+    }
   }
 }
 
