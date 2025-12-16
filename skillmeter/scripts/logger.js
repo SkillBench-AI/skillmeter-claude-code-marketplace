@@ -4,7 +4,7 @@
  * Outputs NDJSON (newline-delimited JSON) for easy backend parsing
  */
 
-const { execSync, spawn } = require("child_process");
+const { execSync } = require("child_process");
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
@@ -13,8 +13,6 @@ const path = require("path");
 const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, "..");
 const LOG_DIR = path.join(PLUGIN_ROOT, "logs");
 const LOG_FILE = path.join(LOG_DIR, "events.jsonl");
-const MAX_EVENTS = 50;
-const TRANSFER_SCRIPT = path.join(PLUGIN_ROOT, "scripts", "transfer_log.js");
 const SERVICE_NAME = "com.skillbench.device-id";
 
 /**
@@ -91,46 +89,6 @@ function getTimestamp() {
 }
 
 /**
- * Rotate log if it exceeds max event count
- */
-function rotateLogIfNeeded() {
-  if (!fs.existsSync(LOG_FILE)) return;
-
-  try {
-    const content = fs.readFileSync(LOG_FILE, "utf8");
-    const eventCount = content.split("\n").filter((line) => line.trim()).length;
-
-    if (eventCount >= MAX_EVENTS) {
-      const timestamp = new Date().toISOString().replace(/[-:]/g, "").slice(0, 15).replace("T", "_");
-      const backup = `${LOG_FILE}.${timestamp}`;
-
-      fs.renameSync(LOG_FILE, backup);
-
-      // Transfer rotated log in background (non-blocking)
-      if (fs.existsSync(TRANSFER_SCRIPT)) {
-        spawn("node", [TRANSFER_SCRIPT, backup], {
-          detached: true,
-          stdio: "ignore",
-        }).unref();
-      }
-
-      // Keep only last 5 rotated logs
-      const rotatedLogs = fs
-        .readdirSync(LOG_DIR)
-        .filter((f) => f.startsWith("events.jsonl."))
-        .map((f) => path.join(LOG_DIR, f))
-        .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
-
-      for (const oldLog of rotatedLogs.slice(5)) {
-        fs.unlinkSync(oldLog);
-      }
-    }
-  } catch {
-    // Ignore rotation errors
-  }
-}
-
-/**
  * Write structured JSON log entry
  * @param {string} level - Log level (info, error, warn, debug)
  * @param {string} event - Hook event name
@@ -141,7 +99,6 @@ function rotateLogIfNeeded() {
 function logStructured(level, event, sessionId, data, deviceId) {
   if (!deviceId) return;
 
-  rotateLogIfNeeded();
   fs.mkdirSync(LOG_DIR, { recursive: true });
 
   const logEntry = {
