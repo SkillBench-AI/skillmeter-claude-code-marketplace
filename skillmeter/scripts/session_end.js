@@ -151,8 +151,7 @@ async function main() {
 function writeDebugLog(message) {
   try {
     fs.mkdirSync(LOG_DIR, { recursive: true });
-    const timestamp = new Date().toISOString();
-    fs.appendFileSync(DEBUG_LOG_FILE, `[${timestamp}] ${message}\n`);
+    fs.appendFileSync(DEBUG_LOG_FILE, `${message}\n`);
   } catch {
     // Ignore errors
   }
