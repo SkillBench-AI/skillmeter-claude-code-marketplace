@@ -17,7 +17,7 @@ const https = require("https");
 const http = require("http");
 const zlib = require("zlib");
 const { URL } = require("url");
-const { getDeviceId, getTimestamp, readStdin, expandHome } = require("./logger.js");
+const { getDeviceId, getTimestamp, logInfo, readStdin, expandHome } = require("./logger.js");
 
 // Configuration from environment variables
 const BACKEND_URL = process.env.SKILLMETER_BACKEND_URL || "https://api.meter.skillbench.com/logs/claude";
@@ -133,7 +133,10 @@ async function main() {
     },
   };
 
-  // Send directly to backend if reason is "prompt_input_exit"
+  // Log to events.jsonl
+  logInfo("SessionEnd", sessionId, logEntry.data, deviceId);
+
+  // Send directly to backend
   sendLog(logEntry);
 }
 
