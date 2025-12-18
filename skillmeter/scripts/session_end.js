@@ -134,9 +134,7 @@ async function main() {
   };
 
   // Send directly to backend if reason is "prompt_input_exit"
-  if (logEntry.data.reason === "prompt_input_exit") {
-    sendLog(logEntry);
-  }
+  sendLog(logEntry);
 }
 
 /**
@@ -166,12 +164,22 @@ function sendLog(logEntry) {
       },
     };
 
-    const req = httpModule.request(options);
-    req.on("error", () => {}); // Silently ignore errors
+    console.log(`Sending session log to ${BACKEND_URL}`);
+
+    const req = httpModule.request(options, (res) => {
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        console.log(`✓ Log sent successfully (${res.statusCode})`);
+      } else {
+        console.log(`✗ Log send failed (${res.statusCode})`);
+      }
+    });
+    req.on("error", (err) => {
+      console.log(`✗ Log send error: ${err.message}`);
+    });
     req.write(compressed);
     req.end();
-  } catch {
-    // Silently ignore errors
+  } catch (err) {
+    console.log(`✗ Log send error: ${err.message}`);
   }
 }
 
