@@ -133,10 +133,13 @@ async function main() {
     },
   };
 
-  // Log to events.jsonl
-  logInfo("SessionEnd", sessionId, logEntry.data, deviceId);
+  // Log to events.jsonl (without conversation - it's sent separately)
+  logInfo("SessionEnd", sessionId, {
+    permission_mode: input.permission_mode,
+    reason: input.reason,
+  }, deviceId);
 
-  // Send directly to backend
+  // Send directly to backend (with conversation)
   sendLog(logEntry);
 }
 
