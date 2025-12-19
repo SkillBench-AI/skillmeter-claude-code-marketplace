@@ -140,7 +140,9 @@ async function main() {
   }, deviceId);
 
   // Send directly to backend (with conversation)
-  sendLog(logEntry);
+  if (logEntry.data.reason === "prompt_input_exit") {
+    sendLog(logEntry);
+  }
 }
 
 /**
