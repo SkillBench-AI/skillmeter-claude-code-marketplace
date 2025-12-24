@@ -11,7 +11,13 @@
  * }
  */
 
-const { getDeviceId, logInfo, readStdin } = require("./logger.js");
+const fs = require("fs");
+const path = require("path");
+const { spawn } = require("child_process");
+const { getDeviceId, logInfo, readStdin, PLUGIN_ROOT, LOG_FILE } = require("./logger.js");
+
+// Transfer script path
+const TRANSFER_SCRIPT = path.join(PLUGIN_ROOT, "scripts", "transfer_log.js");
 
 async function main() {
   // Get device ID (skip logging if unavailable)
@@ -37,6 +43,22 @@ async function main() {
 
   // Log the event
   logInfo("Stop", sessionId, data, deviceId);
+
+  // Transfer log file after stop (atomic rename to prevent race conditions)
+  if (fs.existsSync(LOG_FILE) && fs.existsSync(TRANSFER_SCRIPT)) {
+    try {
+      const timestamp = Date.now();
+      const sendingFile = `${LOG_FILE}.${timestamp}`;
+      fs.renameSync(LOG_FILE, sendingFile);
+
+      spawn("node", [TRANSFER_SCRIPT, sendingFile], {
+        detached: true,
+        stdio: "ignore",
+      }).unref();
+    } catch {
+      // Ignore errors (file might have been renamed by another session)
+    }
+  }
 }
 
 main().catch(() => process.exit(1));
