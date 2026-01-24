@@ -4,7 +4,7 @@
  * Input schema: session_id, transcript_path, cwd, permission_mode, hook_event_name, tool_name, tool_input, tool_use_id
  */
 
-const { getDeviceId, hashSha256, logInfo, readStdin } = require("./logger.js");
+const { getDeviceId, hashSha256, logInfo, readStdin, processTranscript } = require("./logger.js");
 
 async function main() {
   // Get device ID (skip logging if unavailable)
@@ -19,8 +19,9 @@ async function main() {
     process.exit(0);
   }
 
-  // Extract session_id
+  // Extract session_id and transcript_path
   const sessionId = input.session_id || "unknown";
+  const transcriptPath = input.transcript_path || "";
 
   // Extract and hash file_path if present in tool_input
   const filePath = input.tool_input?.file_path || "";
@@ -49,6 +50,11 @@ async function main() {
 
   // Log the event
   logInfo("PostToolUse", sessionId, data, deviceId);
+
+  // Process transcript incrementally
+  if (transcriptPath) {
+    processTranscript(transcriptPath, "PostToolUse", sessionId, deviceId, data);
+  }
 }
 
 main().catch(() => process.exit(1));
