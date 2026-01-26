@@ -370,17 +370,15 @@ function readFromTranscript(transcriptPath, startOffset) {
     fs.readSync(fd, buffer, 0, buffer.length, startOffset);
     fs.closeSync(fd);
 
-    const content = buffer.toString("utf8");
-
-    // Find the last newline to only process complete lines
-    const lastNewlineIdx = content.lastIndexOf("\n");
-    if (lastNewlineIdx === -1) {
+    // Find the last newline byte to maintain byte-accurate offsets
+    const lastNewlineByteIdx = buffer.lastIndexOf(0x0a);
+    if (lastNewlineByteIdx === -1) {
       // No complete line yet, wait for more data
       return { messages, newOffset: startOffset };
     }
 
     // Only process content up to the last newline
-    const completeContent = content.slice(0, lastNewlineIdx);
+    const completeContent = buffer.subarray(0, lastNewlineByteIdx).toString("utf8");
     const lines = completeContent.split("\n");
 
     for (const line of lines) {
@@ -408,7 +406,7 @@ function readFromTranscript(transcriptPath, startOffset) {
     }
 
     // Set offset to byte after the last newline (start of next incomplete line or EOF)
-    newOffset = startOffset + lastNewlineIdx + 1;
+    newOffset = startOffset + lastNewlineByteIdx + 1;
   } catch {
     // Ignore file read errors
   }
