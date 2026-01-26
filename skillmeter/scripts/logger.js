@@ -94,6 +94,52 @@ function getTimestamp() {
 }
 
 /**
+ * Retry failed log transfers
+ * Finds files matching events.jsonl.* and conversations.*.jsonl.* patterns
+ * and spawns background processes to retry upload
+ * @param {string} deviceId - Device ID for conversation uploads
+ */
+function retryFailedLogs(deviceId, hookEventName) {
+  if (!fs.existsSync(LOG_DIR)) return;
+
+  try {
+    const files = fs.readdirSync(LOG_DIR);
+
+    for (const file of files) {
+      const filePath = path.join(LOG_DIR, file);
+
+      // Skip directories
+      if (!fs.statSync(filePath).isFile()) continue;
+
+      // Match events.jsonl.{timestamp}
+      if (/^events\.jsonl\.\d+$/.test(file)) {
+        if (fs.existsSync(TRANSFER_EVENT_SCRIPT)) {
+          spawn("node", [TRANSFER_EVENT_SCRIPT, filePath], {
+            detached: true,
+            stdio: "ignore",
+          }).unref();
+        }
+        continue;
+      }
+
+      // Match conversations.{sessionId}.jsonl.{timestamp}
+      const conversationMatch = file.match(/^conversations\.(.+)\.jsonl\.(\d+)$/);
+      if (conversationMatch) {
+        const sessionId = conversationMatch[1];
+        if (fs.existsSync(TRANSFER_CONVERSATION_SCRIPT) && deviceId) {
+          spawn("node", [TRANSFER_CONVERSATION_SCRIPT, filePath, hookEventName, sessionId, deviceId, "{}"], {
+            detached: true,
+            stdio: "ignore",
+          }).unref();
+        }
+      }
+    }
+  } catch {
+    // Ignore errors during retry
+  }
+}
+
+/**
  * Transfer log file if it has grown large enough
  */
 function transferLogIfNeeded() {
@@ -467,6 +513,7 @@ module.exports = {
   transferConversationIfNeeded,
   processTranscript,
   getConversationFilePath,
+  retryFailedLogs,
   PLUGIN_ROOT,
   LOG_DIR,
   LOG_FILE,

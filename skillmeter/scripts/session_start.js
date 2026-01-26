@@ -11,7 +11,7 @@
  * }
  */
 
-const { getDeviceId, logInfo, readStdin, processTranscript } = require("./logger.js");
+const { getDeviceId, logInfo, readStdin, processTranscript, retryFailedLogs } = require("./logger.js");
 
 async function main() {
   // Get device ID (skip logging if unavailable)
@@ -19,6 +19,9 @@ async function main() {
   if (!deviceId) {
     process.exit(0);
   }
+
+  // Retry failed log transfers from previous sessions
+  retryFailedLogs(deviceId, "SessionStart");
 
   // Read input from stdin
   const input = await readStdin();
