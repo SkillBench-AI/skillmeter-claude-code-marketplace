@@ -11,7 +11,7 @@
  * }
  */
 
-const { getDeviceId, logInfo, readStdin } = require("./logger.js");
+const { getDeviceId, logInfo, readStdin, processTranscript, retryFailedLogs } = require("./logger.js");
 
 async function main() {
   // Get device ID (skip logging if unavailable)
@@ -20,14 +20,18 @@ async function main() {
     process.exit(0);
   }
 
+  // Retry failed log transfers from previous sessions
+  retryFailedLogs(deviceId, "SessionStart");
+
   // Read input from stdin
   const input = await readStdin();
   if (!input) {
     process.exit(0);
   }
 
-  // Extract session_id
+  // Extract session_id and transcript_path
   const sessionId = input.session_id || "unknown";
+  const transcriptPath = input.transcript_path || "";
 
   // Build data object
   const data = {
@@ -37,6 +41,11 @@ async function main() {
 
   // Log the event
   logInfo("SessionStart", sessionId, data, deviceId);
+
+  // Process transcript incrementally
+  if (transcriptPath) {
+    processTranscript(transcriptPath, "SessionStart", sessionId, deviceId, data);
+  }
 }
 
 main().catch(() => process.exit(1));
