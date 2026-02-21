@@ -536,40 +536,142 @@ function saveTelemetryOptIn(cwd, value) {
 
 /**
  * Prompt the user interactively for telemetry opt-in via /dev/tty
- * Saves their choice and returns the boolean result
- * Falls back to false if /dev/tty is unavailable
+ * Renders an arrow-key selectable menu with two options.
+ * Saves their choice and returns the boolean result.
+ * Falls back to false if /dev/tty is unavailable.
  * @param {string} cwd - Working directory
  * @returns {Promise<boolean>} User's choice
  */
 function promptTelemetryOptIn(cwd) {
   return new Promise((resolve) => {
-    let ttyIn, ttyOut;
+    let ttyFd;
     try {
-      ttyIn = fs.createReadStream("/dev/tty", { encoding: "utf8" });
-      ttyOut = fs.createWriteStream("/dev/tty");
+      ttyFd = fs.openSync("/dev/tty", "r+");
     } catch {
       saveTelemetryOptIn(cwd, false);
       resolve(false);
       return;
     }
 
-    ttyOut.write("\n[SkillMeter] Enable telemetry for this project? (y/n): ");
+    const ttyOut = fs.createWriteStream(null, { fd: ttyFd });
+    const ttyIn = fs.createReadStream(null, { fd: ttyFd, encoding: "utf8" });
 
+    const options = [
+      { label: "Yes, enable telemetry", value: true },
+      { label: "No, disable telemetry", value: false },
+    ];
+    let selected = 0;
     let answered = false;
-    ttyIn.on("data", (chunk) => {
+
+    // ANSI helpers
+    const BOLD = "\x1b[1m";
+    const DIM = "\x1b[2m";
+    const CYAN = "\x1b[36m";
+    const RESET = "\x1b[0m";
+    const HIDE_CURSOR = "\x1b[?25l";
+    const SHOW_CURSOR = "\x1b[?25h";
+
+    function render() {
+      // Move cursor up to overwrite previous render (except first render)
+      const lines = options.length;
+      ttyOut.write(`\x1b[${lines}A`);
+      for (let i = 0; i < options.length; i++) {
+        const indicator = i === selected ? `${CYAN}❯${RESET}` : " ";
+        const label =
+          i === selected
+            ? `${BOLD}${options[i].label}${RESET}`
+            : `${DIM}${options[i].label}${RESET}`;
+        ttyOut.write(`\x1b[2K${indicator} ${label}\n`);
+      }
+    }
+
+    function finish() {
       if (answered) return;
       answered = true;
-      const answer = chunk.toString().trim().toLowerCase();
-      const enabled = answer === "y" || answer === "yes";
-      saveTelemetryOptIn(cwd, enabled);
+      const enabled = options[selected].value;
+      ttyOut.write(SHOW_CURSOR);
+      // Disable raw mode before closing
+      if (ttyIn.setRawMode) ttyIn.setRawMode(false);
       ttyIn.destroy();
       ttyOut.destroy();
+      saveTelemetryOptIn(cwd, enabled);
       resolve(enabled);
+    }
+
+    // Print header + initial options, then position cursor for re-renders
+    ttyOut.write(`\n${BOLD}[SkillMeter]${RESET} Enable telemetry for this project?\n`);
+    ttyOut.write(`${DIM}Use arrow keys to select, Enter to confirm${RESET}\n`);
+    for (let i = 0; i < options.length; i++) {
+      const indicator = i === selected ? `${CYAN}❯${RESET}` : " ";
+      const label =
+        i === selected
+          ? `${BOLD}${options[i].label}${RESET}`
+          : `${DIM}${options[i].label}${RESET}`;
+      ttyOut.write(`${indicator} ${label}\n`);
+    }
+    ttyOut.write(HIDE_CURSOR);
+
+    // Enable raw mode for keypress detection
+    if (ttyIn.setRawMode) {
+      ttyIn.setRawMode(true);
+    } else {
+      // Raw mode unavailable — fall back to simple y/n
+      ttyOut.write(SHOW_CURSOR);
+      ttyOut.write(`\n(y/n): `);
+      ttyIn.once("data", (chunk) => {
+        if (answered) return;
+        answered = true;
+        const answer = chunk.toString().trim().toLowerCase();
+        const enabled = answer === "y" || answer === "yes";
+        ttyIn.destroy();
+        ttyOut.destroy();
+        saveTelemetryOptIn(cwd, enabled);
+        resolve(enabled);
+      });
+      return;
+    }
+
+    ttyIn.on("data", (chunk) => {
+      if (answered) return;
+      const key = chunk.toString();
+
+      // Arrow up / k
+      if (key === "\x1b[A" || key === "k") {
+        selected = (selected - 1 + options.length) % options.length;
+        render();
+      }
+      // Arrow down / j
+      else if (key === "\x1b[B" || key === "j") {
+        selected = (selected + 1) % options.length;
+        render();
+      }
+      // Enter
+      else if (key === "\r" || key === "\n") {
+        finish();
+      }
+      // y — select Yes and confirm
+      else if (key === "y" || key === "Y") {
+        selected = 0;
+        render();
+        finish();
+      }
+      // n — select No and confirm
+      else if (key === "n" || key === "N") {
+        selected = 1;
+        render();
+        finish();
+      }
+      // Ctrl-C / q — default to No
+      else if (key === "\x03" || key === "q") {
+        selected = 1;
+        finish();
+      }
     });
 
     ttyIn.on("error", () => {
       if (answered) return;
       answered = true;
+      ttyOut.write(SHOW_CURSOR);
       saveTelemetryOptIn(cwd, false);
       resolve(false);
     });
