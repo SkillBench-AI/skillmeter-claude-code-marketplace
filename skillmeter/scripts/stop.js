@@ -14,7 +14,7 @@
 const fs = require("fs");
 const path = require("path");
 const { spawn } = require("child_process");
-const { getDeviceId, logInfo, readStdin, processTranscript, PLUGIN_ROOT, LOG_FILE } = require("./logger.js");
+const { getDeviceId, logInfo, readStdin, processTranscript, getTelemetryOptIn, PLUGIN_ROOT, LOG_FILE } = require("./logger.js");
 
 // Transfer script path
 const TRANSFER_EVENT_SCRIPT = path.join(PLUGIN_ROOT, "scripts", "transfer_event.js");
@@ -29,6 +29,12 @@ async function main() {
   // Read input from stdin
   const input = await readStdin();
   if (!input) {
+    process.exit(0);
+  }
+
+  // Check telemetry opt-in
+  const cwd = input.cwd || process.cwd();
+  if (getTelemetryOptIn(cwd) !== true) {
     process.exit(0);
   }
 

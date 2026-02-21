@@ -492,6 +492,90 @@ function processTranscript(transcriptPath, hookEventName, sessionId, deviceId, h
   }
 }
 
+// ============================================================================
+// Telemetry Opt-In Management
+// ============================================================================
+
+/**
+ * Read the telemetry opt-in preference for a given working directory
+ * @param {string} cwd - Working directory
+ * @returns {boolean|null} true/false if set, null if not yet configured
+ */
+function getTelemetryOptIn(cwd) {
+  try {
+    const settingsPath = path.join(cwd, ".claude", "settings.local.json");
+    if (!fs.existsSync(settingsPath)) return null;
+    const content = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+    if (!content.skillmeter || typeof content.skillmeter.telemetry !== "boolean") return null;
+    return content.skillmeter.telemetry;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Save the telemetry opt-in preference for a given working directory
+ * Merges with existing settings file content
+ * @param {string} cwd - Working directory
+ * @param {boolean} value - Opt-in value
+ */
+function saveTelemetryOptIn(cwd, value) {
+  const settingsPath = path.join(cwd, ".claude", "settings.local.json");
+  let content = {};
+  try {
+    if (fs.existsSync(settingsPath)) {
+      content = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+    }
+  } catch {
+    content = {};
+  }
+  content.skillmeter = { ...content.skillmeter, telemetry: value };
+  fs.mkdirSync(path.join(cwd, ".claude"), { recursive: true });
+  fs.writeFileSync(settingsPath, JSON.stringify(content, null, 2) + "\n");
+}
+
+/**
+ * Prompt the user interactively for telemetry opt-in via /dev/tty
+ * Saves their choice and returns the boolean result
+ * Falls back to false if /dev/tty is unavailable
+ * @param {string} cwd - Working directory
+ * @returns {Promise<boolean>} User's choice
+ */
+function promptTelemetryOptIn(cwd) {
+  return new Promise((resolve) => {
+    let ttyIn, ttyOut;
+    try {
+      ttyIn = fs.createReadStream("/dev/tty", { encoding: "utf8" });
+      ttyOut = fs.createWriteStream("/dev/tty");
+    } catch {
+      saveTelemetryOptIn(cwd, false);
+      resolve(false);
+      return;
+    }
+
+    ttyOut.write("\n[SkillMeter] Enable telemetry for this project? (y/n): ");
+
+    let answered = false;
+    ttyIn.on("data", (chunk) => {
+      if (answered) return;
+      answered = true;
+      const answer = chunk.toString().trim().toLowerCase();
+      const enabled = answer === "y" || answer === "yes";
+      saveTelemetryOptIn(cwd, enabled);
+      ttyIn.destroy();
+      ttyOut.destroy();
+      resolve(enabled);
+    });
+
+    ttyIn.on("error", () => {
+      if (answered) return;
+      answered = true;
+      saveTelemetryOptIn(cwd, false);
+      resolve(false);
+    });
+  });
+}
+
 module.exports = {
   getDeviceId,
   hashSha256,
@@ -512,6 +596,9 @@ module.exports = {
   processTranscript,
   getConversationFilePath,
   retryFailedLogs,
+  getTelemetryOptIn,
+  saveTelemetryOptIn,
+  promptTelemetryOptIn,
   PLUGIN_ROOT,
   LOG_DIR,
   LOG_FILE,

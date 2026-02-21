@@ -11,7 +11,7 @@
  * }
  */
 
-const { getDeviceId, logInfo, readStdin, processTranscript, retryFailedLogs } = require("./logger.js");
+const { getDeviceId, logInfo, readStdin, processTranscript, retryFailedLogs, getTelemetryOptIn, promptTelemetryOptIn } = require("./logger.js");
 
 async function main() {
   // Get device ID (skip logging if unavailable)
@@ -26,6 +26,16 @@ async function main() {
   // Read input from stdin
   const input = await readStdin();
   if (!input) {
+    process.exit(0);
+  }
+
+  // Check telemetry opt-in
+  const cwd = input.cwd || process.cwd();
+  let optIn = getTelemetryOptIn(cwd);
+  if (optIn === null) {
+    optIn = await promptTelemetryOptIn(cwd);
+  }
+  if (!optIn) {
     process.exit(0);
   }
 

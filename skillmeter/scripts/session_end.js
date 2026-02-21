@@ -21,6 +21,7 @@ const {
   readStdin,
   processTranscript,
   getConversationFilePath,
+  getTelemetryOptIn,
   PLUGIN_ROOT,
 } = require("./logger.js");
 
@@ -36,6 +37,12 @@ async function main() {
   // Read input from stdin
   const input = await readStdin();
   if (!input) {
+    process.exit(0);
+  }
+
+  // Check telemetry opt-in
+  const cwd = input.cwd || process.cwd();
+  if (getTelemetryOptIn(cwd) !== true) {
     process.exit(0);
   }
 
