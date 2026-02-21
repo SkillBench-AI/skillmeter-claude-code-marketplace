@@ -33,7 +33,7 @@ async function main() {
   const cwd = input.cwd || process.cwd();
   let optIn = getTelemetryOptIn(cwd);
   if (optIn === null) {
-    optIn = await promptTelemetryOptIn(cwd);
+    optIn = promptTelemetryOptIn(cwd);
   }
   if (!optIn) {
     process.exit(0);
