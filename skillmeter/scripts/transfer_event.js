@@ -61,8 +61,13 @@ function uploadLog(logFile) {
       res.on("end", () => {
         if (res.statusCode >= 200 && res.statusCode < 300) {
           console.log(`✓ Transfer successful: ${logFile}`);
-          // Delete log file after successful upload
-          fs.unlinkSync(logFile);
+          // Rename with .sent suffix so retryFailedLogs won't re-upload
+          const sentFile = `${logFile}.sent`;
+          try {
+            fs.renameSync(logFile, sentFile);
+          } catch {
+            // Ignore rename errors
+          }
           resolve();
         } else {
           reject(new Error(`HTTP ${res.statusCode}: ${data}`));
