@@ -20,6 +20,7 @@ const TRANSFER_EVENT_SCRIPT = path.join(PLUGIN_ROOT, "scripts", "transfer_event.
 const TRANSFER_CONVERSATION_SCRIPT = path.join(PLUGIN_ROOT, "scripts", "transfer_conversation.js");
 const SERVICE_NAME = "com.skillbench.device-id";
 const HASH_SALT_SERVICE = "com.skillbench.hash-salt";
+const LICENSE_SERVICE = "com.skillbench.license";
 
 /**
  * Get or create device UUID from macOS Keychain
@@ -124,6 +125,26 @@ function getFallbackHashSalt() {
     const newSalt = crypto.randomBytes(16).toString("hex");
     fs.writeFileSync(saltFile, newSalt, { mode: 0o600 });
     return newSalt;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Get license JWT from macOS Keychain
+ * Shared with VS Code extension (stored by AuthService)
+ * @returns {string|null} License JWT or null if unavailable
+ */
+function getLicenseToken() {
+  const account = process.env.USER || process.env.USERNAME || "";
+  if (!account) return null;
+
+  try {
+    const result = execSync(
+      `security find-generic-password -a "${account}" -s "${LICENSE_SERVICE}" -w 2>/dev/null`,
+      { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }
+    );
+    return result.trim() || null;
   } catch {
     return null;
   }
@@ -630,6 +651,7 @@ function promptTelemetryOptIn(cwd) {
 module.exports = {
   getDeviceId,
   getOrCreateHashSalt,
+  getLicenseToken,
   hashHmac,
   getTimestamp,
   logStructured,

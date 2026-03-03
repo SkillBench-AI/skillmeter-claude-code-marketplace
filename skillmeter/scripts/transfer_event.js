@@ -10,10 +10,10 @@ const https = require("https");
 const http = require("http");
 const zlib = require("zlib");
 const { URL } = require("url");
+const { getLicenseToken } = require("./logger.js");
 
 // Configuration from environment variables
 const BACKEND_URL = process.env.SKILLMETER_BACKEND_URL || "https://api.meter.skillbench.com/logs/claude";
-const API_KEY = process.env.SKILLMETER_API_KEY || "";
 const TIMEOUT = parseInt(process.env.SKILLMETER_TIMEOUT || "10", 10) * 1000; // Convert to ms
 
 /**
@@ -38,6 +38,9 @@ function uploadLog(logFile) {
     const isHttps = url.protocol === "https:";
     const httpModule = isHttps ? https : http;
 
+    // Get license token for authorization
+    const token = getLicenseToken();
+
     // Request options
     const options = {
       hostname: url.hostname,
@@ -49,7 +52,7 @@ function uploadLog(logFile) {
         "Content-Type": "application/x-ndjson",
         "Content-Encoding": "gzip",
         "Content-Length": compressed.length,
-        ...(API_KEY && { Authorization: `Bearer ${API_KEY}` }),
+        ...(token && { Authorization: `Bearer ${token}` }),
       },
     };
 
