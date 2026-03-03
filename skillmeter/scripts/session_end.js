@@ -17,6 +17,7 @@ const path = require("path");
 const { spawn } = require("child_process");
 const {
   getDeviceId,
+  getLicenseToken,
   logInfo,
   readStdin,
   processTranscript,
@@ -75,11 +76,15 @@ async function main() {
       fs.renameSync(conversationFile, sendingFile);
 
       if (fs.existsSync(TRANSFER_CONVERSATION_SCRIPT)) {
+        const token = getLicenseToken();
         spawn("node", [TRANSFER_CONVERSATION_SCRIPT, sendingFile, "SessionEnd", sessionId, deviceId, JSON.stringify(data)], {
           detached: true,
           stdio: "ignore",
         }).unref();
+        process.stderr.write(`SkillMeter: Chat data queued for transfer${token ? "" : " (no license token)"}\n`);
       }
+    } else {
+      process.stderr.write("SkillMeter: No chat data to transfer\n");
     }
   }
 }
