@@ -4,7 +4,7 @@
  * Input schema: session_id, transcript_path, cwd, permission_mode, hook_event_name, prompt
  */
 
-const { getDeviceId, hashSha256, logInfo, readStdin, processTranscript, getTelemetryOptIn } = require("./logger.js");
+const { getDeviceId, hashHmac, getOrCreateHashSalt, logInfo, readStdin, processTranscript, getTelemetryOptIn } = require("./logger.js");
 
 async function main() {
   // Get device ID (skip logging if unavailable)
@@ -28,13 +28,16 @@ async function main() {
   // Extract session_id
   const sessionId = input.session_id || "unknown";
 
+  // Get hash salt for HMAC hashing
+  const hashSalt = getOrCreateHashSalt();
+
   // Extract and hash transcript_path if present
   const transcriptPath = input.transcript_path || "";
   let data;
 
   if (transcriptPath) {
-    // Hash the transcript path for privacy (first 16 chars of SHA256)
-    const transcriptHash = hashSha256(transcriptPath);
+    // Hash the transcript path for privacy (first 12 chars of HMAC-SHA256)
+    const transcriptHash = hashHmac(transcriptPath, hashSalt);
 
     // Build data object with hashed transcript_path
     data = {

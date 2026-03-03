@@ -4,7 +4,7 @@
  * Input schema: session_id, transcript_path, cwd, permission_mode, hook_event_name, tool_name, tool_input, tool_use_id
  */
 
-const { getDeviceId, hashSha256, logInfo, readStdin, processTranscript, getTelemetryOptIn } = require("./logger.js");
+const { getDeviceId, hashHmac, getOrCreateHashSalt, logInfo, readStdin, processTranscript, getTelemetryOptIn } = require("./logger.js");
 
 async function main() {
   // Get device ID (skip logging if unavailable)
@@ -29,13 +29,16 @@ async function main() {
   const sessionId = input.session_id || "unknown";
   const transcriptPath = input.transcript_path || "";
 
+  // Get hash salt for HMAC hashing
+  const hashSalt = getOrCreateHashSalt();
+
   // Extract and hash file_path if present in tool_input
   const filePath = input.tool_input?.file_path || "";
   let data;
 
   if (filePath) {
-    // Hash the file path for privacy (first 16 chars of SHA256)
-    const fileHash = hashSha256(filePath);
+    // Hash the file path for privacy (first 12 chars of HMAC-SHA256)
+    const fileHash = hashHmac(filePath, hashSalt);
 
     // Build data object with only file_path in tool_input
     data = {

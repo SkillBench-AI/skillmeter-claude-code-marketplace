@@ -19,6 +19,8 @@ const MAX_CONVERSATION_SIZE = 100 * 1024; // 100KB
 const TRANSFER_EVENT_SCRIPT = path.join(PLUGIN_ROOT, "scripts", "transfer_event.js");
 const TRANSFER_CONVERSATION_SCRIPT = path.join(PLUGIN_ROOT, "scripts", "transfer_conversation.js");
 const SERVICE_NAME = "com.skillbench.device-id";
+const HASH_SALT_SERVICE = "com.skillbench.hash-salt";
+const LICENSE_SERVICE = "com.skillbench.license";
 
 /**
  * Get or create device UUID from macOS Keychain
@@ -76,11 +78,96 @@ function getFallbackDeviceId(account) {
 }
 
 /**
- * Hash a string using SHA256 (first 16 chars)
+ * Get or create HMAC hash salt from macOS Keychain
+ * Shared with VS Code extension for consistent hashing
+ * @returns {string|null} Hash salt or null if unavailable
+ */
+function getOrCreateHashSalt() {
+  const account = process.env.USER || process.env.USERNAME || "";
+  if (!account) return null;
+
+  try {
+    const result = execSync(
+      `security find-generic-password -a "${account}" -s "${HASH_SALT_SERVICE}" -w 2>/dev/null`,
+      { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }
+    );
+    if (result.trim()) {
+      return result.trim();
+    }
+  } catch {
+    // Salt not found, try to create one
+  }
+
+  try {
+    const newSalt = crypto.randomBytes(16).toString("hex");
+    execSync(
+      `security add-generic-password -a "${account}" -s "${HASH_SALT_SERVICE}" -w "${newSalt}" 2>/dev/null`,
+      { stdio: ["pipe", "pipe", "pipe"] }
+    );
+    return newSalt;
+  } catch {
+    // Keychain not available, use fallback
+    return getFallbackHashSalt();
+  }
+}
+
+/**
+ * Fallback hash salt storage for non-macOS systems
+ * @returns {string|null} Hash salt or null
+ */
+function getFallbackHashSalt() {
+  const saltFile = path.join(LOG_DIR, ".hash-salt");
+  try {
+    fs.mkdirSync(LOG_DIR, { recursive: true });
+    if (fs.existsSync(saltFile)) {
+      return fs.readFileSync(saltFile, "utf8").trim();
+    }
+    const newSalt = crypto.randomBytes(16).toString("hex");
+    fs.writeFileSync(saltFile, newSalt, { mode: 0o600 });
+    return newSalt;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Get license JWT from macOS Keychain
+ * Shared with VS Code extension (stored by AuthService)
+ * @returns {string|null} License JWT or null if unavailable
+ */
+function getLicenseToken() {
+  const account = process.env.USER || process.env.USERNAME || "";
+  if (!account) return null;
+
+  try {
+    const result = execSync(
+      `security find-generic-password -a "${account}" -s "${LICENSE_SERVICE}" -w 2>/dev/null`,
+      { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }
+    );
+    return result.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Hash a string using HMAC-SHA256 with salt (first 12 chars)
+ * Matches VS Code extension's HashingService.hash()
+ * @param {string} str - String to hash
+ * @param {string} salt - HMAC salt
+ * @returns {string} First 12 characters of HMAC-SHA256 hash
+ */
+function hashHmac(str, salt) {
+  if (!str || !salt) return "";
+  return crypto.createHmac("sha256", salt).update(str).digest("hex").slice(0, 12);
+}
+
+/**
+ * Hash a string using SHA256 (first 16 chars) — internal use only for offset filenames
  * @param {string} str - String to hash
  * @returns {string} First 16 characters of SHA256 hash
  */
-function hashSha256(str) {
+function hashForFilename(str) {
   if (!str) return "";
   return crypto.createHash("sha256").update(str).digest("hex").slice(0, 16);
 }
@@ -266,7 +353,7 @@ function expandHome(filepath) {
  * @returns {string} Path to offset file
  */
 function getOffsetFilePath(transcriptPath) {
-  const hash = hashSha256(transcriptPath);
+  const hash = hashForFilename(transcriptPath);
   return path.join(OFFSET_DIR, `${hash}.offset`);
 }
 
@@ -563,7 +650,9 @@ function promptTelemetryOptIn(cwd) {
 
 module.exports = {
   getDeviceId,
-  hashSha256,
+  getOrCreateHashSalt,
+  getLicenseToken,
+  hashHmac,
   getTimestamp,
   logStructured,
   logInfo,
