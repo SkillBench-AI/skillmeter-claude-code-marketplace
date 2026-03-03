@@ -327,9 +327,13 @@ function filterMessageContent(message) {
     return message;
   }
 
-  // Filter to only include "thinking" and "text" types
+  // Filter to only include "thinking", "text", and "tool_result" types
   const filteredContent = message.content.filter(
-    (item) => item && (item.type === "thinking" || item.type === "text")
+    (item) =>
+      item &&
+      (item.type === "thinking" ||
+        item.type === "text" ||
+        item.type === "tool_result")
   );
 
   // Return null if no valid content remains
