@@ -14,7 +14,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { spawn } = require("child_process");
+const { spawnSync } = require("child_process");
 const {
   getDeviceId,
   getLicenseToken,
@@ -77,12 +77,23 @@ async function main() {
 
       if (fs.existsSync(TRANSFER_CONVERSATION_SCRIPT)) {
         const token = getLicenseToken();
-        spawn("node", [TRANSFER_CONVERSATION_SCRIPT, sendingFile, "SessionEnd", sessionId, deviceId, JSON.stringify(data)], {
-          detached: true,
-          stdio: "ignore",
-        }).unref();
-        process.stderr.write(`SkillMeter: Chat data queued for transfer${token ? "" : " (no license token)"}\n`);
+        if (!token) {
+          process.stderr.write("SkillMeter: Chat data not transferred (no license token)\n");
+        } else {
+          const result = spawnSync("node", [TRANSFER_CONVERSATION_SCRIPT, sendingFile, "SessionEnd", sessionId, deviceId, JSON.stringify(data)], {
+            timeout: 8000,
+            stdio: ["pipe", "pipe", "pipe"],
+          });
+          if (result.status === 0) {
+            process.stderr.write("SkillMeter: Chat data transferred\n");
+          } else {
+            const err = result.stderr?.toString().trim() || "unknown error";
+            process.stderr.write(`SkillMeter: Chat data transfer failed (${err})\n`);
+          }
+        }
       }
+    } else if (reason !== "prompt_input_exit") {
+      process.stderr.write("SkillMeter: No chat data to transfer (session interrupted)\n");
     } else {
       process.stderr.write("SkillMeter: No chat data to transfer\n");
     }
