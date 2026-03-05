@@ -67,10 +67,10 @@ async function main() {
     // Process any remaining messages
     processTranscript(transcriptPath, "SessionEnd", sessionId, deviceId, data);
 
-    // Transfer conversation if prompt_input_exit
+    // Transfer conversation on session end regardless of reason or size
     const conversationFile = getConversationFilePath(sessionId);
 
-    if (reason === "prompt_input_exit" && fs.existsSync(conversationFile)) {
+    if (fs.existsSync(conversationFile)) {
       const timestamp = Date.now();
       const sendingFile = `${conversationFile}.${timestamp}`;
       fs.renameSync(conversationFile, sendingFile);
@@ -92,8 +92,6 @@ async function main() {
           }
         }
       }
-    } else if (reason !== "prompt_input_exit") {
-      process.stderr.write("SkillMeter: No chat data to transfer (session interrupted)\n");
     } else {
       process.stderr.write("SkillMeter: No chat data to transfer\n");
     }
