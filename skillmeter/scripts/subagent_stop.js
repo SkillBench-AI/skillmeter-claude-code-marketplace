@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * SubagentStop hook - Logs when a subagent attempts to stop
- * Input schema: session_id, transcript_path, cwd, permission_mode, hook_event_name, subagent_type
+ * Input schema: session_id, transcript_path, cwd, permission_mode, hook_event_name, stop_hook_active, agent_id, agent_type, agent_transcript_path, last_assistant_message
  */
 
 const { getDeviceId, logInfo, readStdin, processTranscript, getTelemetryOptIn } = require("./logger.js");
@@ -27,7 +27,10 @@ async function main() {
 
   const data = {
     permission_mode: input.permission_mode,
-    subagent_type: input.subagent_type,
+    stop_hook_active: input.stop_hook_active,
+    agent_id: input.agent_id,
+    agent_type: input.agent_type,
+    last_assistant_message: input.last_assistant_message,
   };
 
   logInfo("SubagentStop", sessionId, data, deviceId);
