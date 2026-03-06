@@ -12,7 +12,13 @@
  * }
  */
 
-const { getDeviceId, logInfo, readStdin, processTranscript, retryFailedLogs, getTelemetryOptIn, promptTelemetryOptIn } = require("./logger.js");
+const fs = require("fs");
+const path = require("path");
+const { getDeviceId, logInfo, readStdin, processTranscript, retryFailedLogs, getTelemetryOptIn, promptTelemetryOptIn, PLUGIN_ROOT } = require("./logger.js");
+
+// Read version from plugin.json
+const pluginJson = JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, ".claude-plugin", "plugin.json"), "utf8"));
+const VERSION = pluginJson.version || "unknown";
 
 async function main() {
   // Get device ID (skip logging if unavailable)
@@ -36,7 +42,12 @@ async function main() {
   if (optIn === null) {
     optIn = promptTelemetryOptIn(cwd);
   }
-  if (!optIn) {
+
+  // Display version and activation status
+  if (optIn) {
+    process.stderr.write(`SkillMeter v${VERSION} (activated)\n`);
+  } else {
+    process.stderr.write(`SkillMeter v${VERSION} (not activated)\n`);
     process.exit(0);
   }
 
