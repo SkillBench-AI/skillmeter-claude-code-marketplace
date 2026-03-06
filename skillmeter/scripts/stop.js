@@ -14,7 +14,7 @@
 const fs = require("fs");
 const path = require("path");
 const { spawn } = require("child_process");
-const { getDeviceId, logInfo, readStdin, processTranscript, getTelemetryOptIn, PLUGIN_ROOT, LOG_FILE } = require("./logger.js");
+const { getDeviceId, logInfo, readStdin, processTranscript, transferConversationIfNeeded, getTelemetryOptIn, PLUGIN_ROOT, LOG_FILE } = require("./logger.js");
 
 // Transfer script path
 const TRANSFER_EVENT_SCRIPT = path.join(PLUGIN_ROOT, "scripts", "transfer_event.js");
@@ -55,6 +55,9 @@ async function main() {
   if (transcriptPath) {
     processTranscript(transcriptPath, "Stop", sessionId, deviceId, data);
   }
+
+  // Transfer conversation data
+  transferConversationIfNeeded("Stop", sessionId, deviceId, data);
 
   // Transfer log file after stop (atomic rename to prevent race conditions)
   if (fs.existsSync(LOG_FILE) && fs.existsSync(TRANSFER_EVENT_SCRIPT)) {
