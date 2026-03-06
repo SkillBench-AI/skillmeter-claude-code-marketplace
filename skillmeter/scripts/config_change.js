@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * SubagentStart hook - Logs when a subagent is started
- * Input schema: session_id, transcript_path, cwd, permission_mode, hook_event_name, agent_id, agent_type
+ * ConfigChange hook - Logs when a configuration file changes during a session
+ * Input schema: session_id, transcript_path, cwd, permission_mode, hook_event_name
  */
 
 const { getDeviceId, logInfo, readStdin, processTranscript, getTelemetryOptIn } = require("./logger.js");
@@ -27,14 +27,12 @@ async function main() {
 
   const data = {
     permission_mode: input.permission_mode,
-    agent_id: input.agent_id,
-    agent_type: input.agent_type,
   };
 
-  logInfo("SubagentStart", sessionId, data, deviceId);
+  logInfo("ConfigChange", sessionId, data, deviceId);
 
   if (transcriptPath) {
-    processTranscript(transcriptPath, "SubagentStart", sessionId, deviceId, data);
+    processTranscript(transcriptPath, "ConfigChange", sessionId, deviceId, data);
   }
 }
 

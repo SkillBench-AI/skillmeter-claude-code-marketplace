@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * PostToolUse hook - Logs tool invocations with privacy-preserving hashing
- * Input schema: session_id, transcript_path, cwd, permission_mode, hook_event_name, tool_name, tool_input, tool_use_id
+ * Input schema: session_id, transcript_path, cwd, permission_mode, hook_event_name, tool_name, tool_input, tool_response, tool_use_id
  */
 
 const { getDeviceId, hashHmac, getOrCreateHashSalt, logInfo, readStdin, processTranscript, getTelemetryOptIn } = require("./logger.js");
@@ -45,6 +45,7 @@ async function main() {
       permission_mode: input.permission_mode,
       tool_name: input.tool_name,
       tool_input: { file_path: fileHash },
+      tool_response: { success: input.tool_response?.success },
       tool_use_id: input.tool_use_id,
     };
   } else {
@@ -53,6 +54,7 @@ async function main() {
       permission_mode: input.permission_mode,
       tool_name: input.tool_name,
       tool_input: {},
+      tool_response: { success: input.tool_response?.success },
       tool_use_id: input.tool_use_id,
     };
   }

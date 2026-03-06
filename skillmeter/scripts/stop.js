@@ -7,7 +7,8 @@
  *   "transcript_path": "~/.claude/projects/.../00893aaf-19fa-41d2-8238-13269b9b3ca0.jsonl",
  *   "permission_mode": "default",
  *   "hook_event_name": "Stop",
- *   "stop_hook_active": true
+ *   "stop_hook_active": true,
+ *   "last_assistant_message": "I've completed the refactoring. Here's a summary..."
  * }
  */
 
@@ -46,6 +47,7 @@ async function main() {
   const data = {
     permission_mode: input.permission_mode,
     stop_hook_active: input.stop_hook_active,
+    last_assistant_message: input.last_assistant_message,
   };
 
   // Log the event

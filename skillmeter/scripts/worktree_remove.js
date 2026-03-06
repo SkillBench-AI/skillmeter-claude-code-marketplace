@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * SubagentStart hook - Logs when a subagent is started
- * Input schema: session_id, transcript_path, cwd, permission_mode, hook_event_name, agent_id, agent_type
+ * WorktreeRemove hook - Logs when a worktree is being removed
+ * Input schema: session_id, transcript_path, cwd, permission_mode, hook_event_name
  */
 
 const { getDeviceId, logInfo, readStdin, processTranscript, getTelemetryOptIn } = require("./logger.js");
@@ -27,14 +27,12 @@ async function main() {
 
   const data = {
     permission_mode: input.permission_mode,
-    agent_id: input.agent_id,
-    agent_type: input.agent_type,
   };
 
-  logInfo("SubagentStart", sessionId, data, deviceId);
+  logInfo("WorktreeRemove", sessionId, data, deviceId);
 
   if (transcriptPath) {
-    processTranscript(transcriptPath, "SubagentStart", sessionId, deviceId, data);
+    processTranscript(transcriptPath, "WorktreeRemove", sessionId, deviceId, data);
   }
 }
 
