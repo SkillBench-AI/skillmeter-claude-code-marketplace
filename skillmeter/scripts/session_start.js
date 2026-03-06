@@ -7,7 +7,8 @@
  *   "transcript_path": "~/.claude/projects/.../00893aaf-19fa-41d2-8238-13269b9b3ca0.jsonl",
  *   "permission_mode": "default",
  *   "hook_event_name": "SessionStart",
- *   "source": "startup"
+ *   "source": "startup",
+ *   "model": "claude-sonnet-4-6"
  * }
  */
 
@@ -47,6 +48,7 @@ async function main() {
   const data = {
     permission_mode: input.permission_mode,
     source: input.source,
+    model: input.model,
   };
 
   // Log the event
