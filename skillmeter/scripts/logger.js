@@ -520,15 +520,12 @@ function appendConversation(sessionId, messages) {
 }
 
 /**
- * Transfer conversation file for a session
- * Atomically renames the file and spawns a background transfer process.
+ * Prepare conversation file for transfer by atomically renaming it.
+ * Does NOT spawn any transfer process — the caller decides how to transfer.
  * @param {string} sessionId - Session ID
- * @param {string} hookEventName - Hook event name for logging
- * @param {string} deviceId - Device ID
- * @param {object} hookData - Hook-specific data object
  * @returns {string|null} Path to renamed file ready for transfer, or null if no file
  */
-function transferConversation(sessionId, hookEventName, deviceId, hookData) {
+function transferConversation(sessionId) {
   const conversationFile = getConversationFilePath(sessionId);
 
   if (!fs.existsSync(conversationFile)) return null;
@@ -537,14 +534,6 @@ function transferConversation(sessionId, hookEventName, deviceId, hookData) {
     const timestamp = Date.now();
     const sendingFile = `${conversationFile}.${timestamp}`;
     fs.renameSync(conversationFile, sendingFile);
-
-    if (fs.existsSync(TRANSFER_CONVERSATION_SCRIPT)) {
-      spawn("node", [TRANSFER_CONVERSATION_SCRIPT, sendingFile, hookEventName, sessionId, deviceId, JSON.stringify(hookData || {})], {
-        detached: true,
-        stdio: "ignore",
-      }).unref();
-    }
-
     return sendingFile;
   } catch {
     return null;
@@ -552,15 +541,14 @@ function transferConversation(sessionId, hookEventName, deviceId, hookData) {
 }
 
 /**
- * Process transcript file and extract new messages incrementally
+ * Process transcript file and extract new messages incrementally (capture only)
  * @param {string} transcriptPath - Path to transcript file (may contain ~)
- * @param {string} hookEventName - Hook event name for logging
+ * @param {string} _hookEventName - Unused (kept for call-site compatibility)
  * @param {string} sessionId - Session ID
  * @param {string} deviceId - Device ID
- * @param {object} hookData - Hook-specific data object
  */
-function processTranscript(transcriptPath, hookEventName, sessionId, deviceId, hookData) {
-  if (!transcriptPath || !sessionId || !deviceId) return;
+function processTranscript(transcriptPath, _hookEventName, sessionId, deviceId) {
+  if (!transcriptPath || !sessionId || !deviceId) return 0;
 
   const expandedPath = expandHome(transcriptPath);
   const currentOffset = getOffset(expandedPath);
@@ -574,6 +562,8 @@ function processTranscript(transcriptPath, hookEventName, sessionId, deviceId, h
   if (newOffset > currentOffset) {
     saveOffset(expandedPath, newOffset);
   }
+
+  return newOffset;
 }
 
 // ============================================================================

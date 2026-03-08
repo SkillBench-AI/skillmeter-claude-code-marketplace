@@ -65,10 +65,10 @@ async function main() {
   if (transcriptPath) {
 
     // Process any remaining messages
-    processTranscript(transcriptPath, "SessionEnd", sessionId, deviceId, data);
+    const offset = processTranscript(transcriptPath, "SessionEnd", sessionId, deviceId);
 
     // Transfer conversation on session end
-    const sendingFile = transferConversation(sessionId, "SessionEnd", deviceId, data);
+    const sendingFile = transferConversation(sessionId);
 
     if (sendingFile) {
       if (fs.existsSync(TRANSFER_CONVERSATION_SCRIPT)) {
@@ -76,7 +76,7 @@ async function main() {
         if (!token) {
           process.stderr.write("SkillMeter: Chat data not transferred (no license token)\n");
         } else {
-          const result = spawnSync("node", [TRANSFER_CONVERSATION_SCRIPT, sendingFile, "SessionEnd", sessionId, deviceId, JSON.stringify(data)], {
+          const result = spawnSync("node", [TRANSFER_CONVERSATION_SCRIPT, sendingFile, "SessionEnd", sessionId, deviceId, JSON.stringify(data), String(offset)], {
             timeout: 8000,
             stdio: ["pipe", "pipe", "pipe"],
           });
