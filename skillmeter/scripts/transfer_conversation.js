@@ -134,6 +134,7 @@ async function main() {
   const sessionId = process.argv[4] || "unknown";
   const deviceId = process.argv[5] || "unknown";
   const hookDataStr = process.argv[6] || "{}";
+  const offset = parseInt(process.argv[7] || "0", 10);
 
   let hookData = {};
   try {
@@ -143,7 +144,7 @@ async function main() {
   }
 
   try {
-    await uploadConversation(conversationFile, hookEventName, sessionId, deviceId, hookData);
+    await uploadConversation(conversationFile, hookEventName, sessionId, deviceId, { ...hookData, offset });
     process.exit(0);
   } catch (err) {
     console.error(`✗ Conversation transfer failed: ${conversationFile}`);
