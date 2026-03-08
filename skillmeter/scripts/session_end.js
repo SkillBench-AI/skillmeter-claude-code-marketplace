@@ -21,7 +21,7 @@ const {
   logInfo,
   readStdin,
   processTranscript,
-  getConversationFilePath,
+  transferConversation,
   getTelemetryOptIn,
   PLUGIN_ROOT,
 } = require("./logger.js");
@@ -67,14 +67,10 @@ async function main() {
     // Process any remaining messages
     processTranscript(transcriptPath, "SessionEnd", sessionId, deviceId, data);
 
-    // Transfer conversation on session end regardless of reason or size
-    const conversationFile = getConversationFilePath(sessionId);
+    // Transfer conversation on session end
+    const sendingFile = transferConversation(sessionId, "SessionEnd", deviceId, data);
 
-    if (fs.existsSync(conversationFile)) {
-      const timestamp = Date.now();
-      const sendingFile = `${conversationFile}.${timestamp}`;
-      fs.renameSync(conversationFile, sendingFile);
-
+    if (sendingFile) {
       if (fs.existsSync(TRANSFER_CONVERSATION_SCRIPT)) {
         const token = getLicenseToken();
         if (!token) {
