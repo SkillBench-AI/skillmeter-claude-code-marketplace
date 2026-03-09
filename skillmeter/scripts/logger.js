@@ -278,6 +278,17 @@ function logStructured(level, event, sessionId, data, deviceId) {
   transferLogIfNeeded();
 }
 
+/**
+ * Extract the UUID filename from a transcript path
+ * e.g. "/Users/.../.claude/projects/.../00893aaf-19fa-41d2-8238-13269b9b3ca0.jsonl" -> "00893aaf-19fa-41d2-8238-13269b9b3ca0.jsonl"
+ * @param {string} transcriptPath - Full transcript path
+ * @returns {string} UUID filename or empty string
+ */
+function getTranscriptId(transcriptPath) {
+  if (!transcriptPath) return "";
+  return path.basename(transcriptPath);
+}
+
 // Convenience logging functions
 const logInfo = (event, sessionId, data, deviceId) => logStructured("info", event, sessionId, data, deviceId);
 const logError = (event, sessionId, data, deviceId) => logStructured("error", event, sessionId, data, deviceId);
@@ -405,6 +416,7 @@ module.exports = {
   logDebug,
   readLastLines,
   readStdin,
+  getTranscriptId,
   retryFailedLogs,
   getTelemetryOptIn,
   saveTelemetryOptIn,

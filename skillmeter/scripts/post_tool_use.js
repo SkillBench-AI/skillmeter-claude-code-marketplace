@@ -4,7 +4,7 @@
  * Input schema: session_id, transcript_path, cwd, permission_mode, hook_event_name, tool_name, tool_input, tool_response, tool_use_id
  */
 
-const { getDeviceId, getOrCreateHashSalt, logInfo, readStdin, sanitizeToolData, getTelemetryOptIn } = require("./logger.js");
+const { getDeviceId, getOrCreateHashSalt, getTranscriptId, hashHmac, logInfo, readStdin, sanitizeToolData, getTelemetryOptIn } = require("./logger.js");
 
 async function main() {
   const deviceId = getDeviceId();
@@ -26,6 +26,8 @@ async function main() {
   const hashSalt = getOrCreateHashSalt();
 
   const data = {
+    transcript_path: getTranscriptId(input.transcript_path),
+    cwd: hashHmac(cwd, hashSalt),
     permission_mode: input.permission_mode,
     tool_name: input.tool_name,
     tool_input: sanitizeToolData(input.tool_input, hashSalt),

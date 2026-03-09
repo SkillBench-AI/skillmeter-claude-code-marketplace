@@ -14,7 +14,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { getDeviceId, logInfo, readStdin, retryFailedLogs, getTelemetryOptIn, promptTelemetryOptIn, PLUGIN_ROOT } = require("./logger.js");
+const { getDeviceId, getOrCreateHashSalt, getTranscriptId, hashHmac, logInfo, readStdin, retryFailedLogs, getTelemetryOptIn, promptTelemetryOptIn, PLUGIN_ROOT } = require("./logger.js");
 
 // Read version from plugin.json
 const pluginJson = JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, ".claude-plugin", "plugin.json"), "utf8"));
@@ -55,7 +55,10 @@ async function main() {
   const sessionId = input.session_id || "unknown";
 
   // Build data object
+  const hashSalt = getOrCreateHashSalt();
   const data = {
+    transcript_path: getTranscriptId(input.transcript_path),
+    cwd: hashHmac(cwd, hashSalt),
     permission_mode: input.permission_mode,
     source: input.source,
     model: input.model,
