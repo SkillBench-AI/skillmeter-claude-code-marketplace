@@ -289,27 +289,8 @@ function getTranscriptId(transcriptPath) {
   return path.basename(transcriptPath);
 }
 
-// Convenience logging functions
+// Convenience logging function
 const logInfo = (event, sessionId, data, deviceId) => logStructured("info", event, sessionId, data, deviceId);
-const logError = (event, sessionId, data, deviceId) => logStructured("error", event, sessionId, data, deviceId);
-const logWarn = (event, sessionId, data, deviceId) => logStructured("warn", event, sessionId, data, deviceId);
-const logDebug = (event, sessionId, data, deviceId) => logStructured("debug", event, sessionId, data, deviceId);
-
-/**
- * Read last N lines from a file efficiently
- * @param {string} filePath - Path to file
- * @param {number} n - Number of lines to read
- * @returns {string} Last N lines
- */
-function readLastLines(filePath, n = 5) {
-  try {
-    const content = fs.readFileSync(filePath, "utf8");
-    const lines = content.split("\n");
-    return lines.slice(-n - 1).join("\n");
-  } catch {
-    return "";
-  }
-}
 
 /**
  * Read JSON from stdin
@@ -402,6 +383,52 @@ function promptTelemetryOptIn(cwd) {
   }
 }
 
+/**
+ * Common hook runner — handles all boilerplate shared by every hook script.
+ *
+ * @param {string} eventName - Hook event name (e.g. "SessionStart")
+ * @param {function} buildData - (input, ctx) => object with event-specific fields.
+ *   ctx provides { hashSalt, cwd, sanitizeToolData, getTranscriptId }.
+ * @param {object} [options]
+ * @param {function} [options.beforeStdin] - Called after deviceId check, before stdin read (e.g. retryFailedLogs)
+ * @param {function} [options.checkOptIn] - Custom opt-in logic: (cwd, input) => boolean. Return false to exit.
+ * @param {function} [options.afterLog] - Called after logInfo (e.g. force transfer)
+ */
+async function runHook(eventName, buildData, options = {}) {
+  const deviceId = getDeviceId();
+  if (!deviceId) process.exit(0);
+
+  if (options.beforeStdin) options.beforeStdin(deviceId);
+
+  const input = await readStdin();
+  if (!input) process.exit(0);
+
+  const cwd = input.cwd || process.cwd();
+
+  if (options.checkOptIn) {
+    if (!options.checkOptIn(cwd, input)) process.exit(0);
+  } else {
+    if (getTelemetryOptIn(cwd) !== true) process.exit(0);
+  }
+
+  const sessionId = input.session_id || "unknown";
+  const hashSalt = getOrCreateHashSalt();
+
+  const ctx = { hashSalt, cwd, sanitizeToolData, getTranscriptId };
+  const eventData = buildData ? buildData(input, ctx) : {};
+
+  const data = {
+    transcript_path: getTranscriptId(input.transcript_path),
+    cwd: hashHmac(cwd, hashSalt),
+    permission_mode: input.permission_mode,
+    ...eventData,
+  };
+
+  logInfo(eventName, sessionId, data, deviceId);
+
+  if (options.afterLog) options.afterLog(input);
+}
+
 module.exports = {
   getDeviceId,
   getOrCreateHashSalt,
@@ -411,16 +438,13 @@ module.exports = {
   getTimestamp,
   logStructured,
   logInfo,
-  logError,
-  logWarn,
-  logDebug,
-  readLastLines,
   readStdin,
   getTranscriptId,
   retryFailedLogs,
   getTelemetryOptIn,
   saveTelemetryOptIn,
   promptTelemetryOptIn,
+  runHook,
   PLUGIN_ROOT,
   LOG_DIR,
   LOG_FILE,
