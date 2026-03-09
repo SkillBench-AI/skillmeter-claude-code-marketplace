@@ -426,7 +426,7 @@ async function runHook(eventName, buildData, options = {}) {
 
   logInfo(eventName, sessionId, data, deviceId);
 
-  if (options.afterLog) options.afterLog(input);
+  if (options.afterLog) options.afterLog(input, deviceId);
 }
 
 module.exports = {
