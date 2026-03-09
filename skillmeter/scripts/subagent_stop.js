@@ -4,7 +4,7 @@
  * Input schema: session_id, transcript_path, cwd, permission_mode, hook_event_name, stop_hook_active, agent_id, agent_type, agent_transcript_path, last_assistant_message
  */
 
-const { getDeviceId, logInfo, readStdin, processTranscript, getTelemetryOptIn } = require("./logger.js");
+const { getDeviceId, logInfo, readStdin, getTelemetryOptIn } = require("./logger.js");
 
 async function main() {
   const deviceId = getDeviceId();
@@ -23,21 +23,18 @@ async function main() {
   }
 
   const sessionId = input.session_id || "unknown";
-  const transcriptPath = input.transcript_path || "";
 
   const data = {
     permission_mode: input.permission_mode,
     stop_hook_active: input.stop_hook_active,
     agent_id: input.agent_id,
     agent_type: input.agent_type,
+    agent_transcript_path: input.agent_transcript_path,
     last_assistant_message: input.last_assistant_message,
   };
 
   logInfo("SubagentStop", sessionId, data, deviceId);
 
-  if (transcriptPath) {
-    processTranscript(transcriptPath, "SubagentStop", sessionId, deviceId, data);
-  }
 }
 
 main().catch(() => process.exit(1));

@@ -15,11 +15,10 @@
 const fs = require("fs");
 const path = require("path");
 const { spawn } = require("child_process");
-const { getDeviceId, logInfo, readStdin, processTranscript, transferConversation, getTelemetryOptIn, PLUGIN_ROOT, LOG_FILE } = require("./logger.js");
+const { getDeviceId, logInfo, readStdin, getTelemetryOptIn, PLUGIN_ROOT, LOG_FILE } = require("./logger.js");
 
 // Transfer script paths
 const TRANSFER_EVENT_SCRIPT = path.join(PLUGIN_ROOT, "scripts", "transfer_event.js");
-const TRANSFER_CONVERSATION_SCRIPT = path.join(PLUGIN_ROOT, "scripts", "transfer_conversation.js");
 
 async function main() {
   // Get device ID (skip logging if unavailable)
@@ -40,9 +39,8 @@ async function main() {
     process.exit(0);
   }
 
-  // Extract session_id and transcript_path
+  // Extract session_id
   const sessionId = input.session_id || "unknown";
-  const transcriptPath = input.transcript_path || "";
 
   // Build data object
   const data = {
@@ -53,21 +51,6 @@ async function main() {
 
   // Log the event
   logInfo("Stop", sessionId, data, deviceId);
-
-  // Process transcript incrementally
-  let offset = 0;
-  if (transcriptPath) {
-    offset = processTranscript(transcriptPath, "Stop", sessionId, deviceId);
-  }
-
-  // Transfer conversation data (background, non-blocking)
-  const sendingFile = transferConversation(sessionId);
-  if (sendingFile && fs.existsSync(TRANSFER_CONVERSATION_SCRIPT)) {
-    spawn("node", [TRANSFER_CONVERSATION_SCRIPT, sendingFile, "Stop", sessionId, deviceId, JSON.stringify(data), String(offset)], {
-      detached: true,
-      stdio: "ignore",
-    }).unref();
-  }
 
   // Transfer log file after stop (atomic rename to prevent race conditions)
   if (fs.existsSync(LOG_FILE) && fs.existsSync(TRANSFER_EVENT_SCRIPT)) {

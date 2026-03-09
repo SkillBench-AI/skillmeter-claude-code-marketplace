@@ -4,7 +4,7 @@
  * Input schema: session_id, transcript_path, cwd, permission_mode, hook_event_name, prompt
  */
 
-const { getDeviceId, hashHmac, getOrCreateHashSalt, logInfo, readStdin, processTranscript, getTelemetryOptIn } = require("./logger.js");
+const { getDeviceId, hashHmac, getOrCreateHashSalt, logInfo, readStdin, getTelemetryOptIn } = require("./logger.js");
 
 async function main() {
   // Get device ID (skip logging if unavailable)
@@ -55,11 +55,6 @@ async function main() {
 
   // Log the event
   logInfo("UserPromptSubmit", sessionId, data, deviceId);
-
-  // Process transcript incrementally
-  if (transcriptPath) {
-    processTranscript(transcriptPath, "UserPromptSubmit", sessionId, deviceId, data);
-  }
 }
 
 main().catch(() => process.exit(1));

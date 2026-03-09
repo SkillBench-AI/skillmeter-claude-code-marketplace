@@ -13,10 +13,8 @@ const path = require("path");
 const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, "..");
 const LOG_DIR = path.join(PLUGIN_ROOT, "logs");
 const LOG_FILE = path.join(LOG_DIR, "events.jsonl");
-const OFFSET_DIR = path.join(LOG_DIR, "offsets");
 const MAX_EVENTS = 50;
 const TRANSFER_EVENT_SCRIPT = path.join(PLUGIN_ROOT, "scripts", "transfer_event.js");
-const TRANSFER_CONVERSATION_SCRIPT = path.join(PLUGIN_ROOT, "scripts", "transfer_conversation.js");
 const SERVICE_NAME = "com.skillbench.device-id";
 const HASH_SALT_SERVICE = "com.skillbench.hash-salt";
 const LICENSE_SERVICE = "com.skillbench.license";
@@ -161,14 +159,27 @@ function hashHmac(str, salt) {
   return crypto.createHmac("sha256", salt).update(str).digest("hex").slice(0, 12);
 }
 
+// Keys in tool_input/tool_response whose values contain sensitive paths and should be hashed
+const PATH_KEYS = new Set(["file_path", "filePath", "path", "command"]);
+
 /**
- * Hash a string using SHA256 (first 16 chars) — internal use only for offset filenames
- * @param {string} str - String to hash
- * @returns {string} First 16 characters of SHA256 hash
+ * Sanitize a tool object by hashing path values
+ * @param {object} obj - tool_input or tool_response object
+ * @param {string} hashSalt - HMAC salt
+ * @returns {object} Sanitized object
  */
-function hashForFilename(str) {
-  if (!str) return "";
-  return crypto.createHash("sha256").update(str).digest("hex").slice(0, 16);
+function sanitizeToolData(obj, hashSalt) {
+  if (!obj || typeof obj !== "object") return obj;
+
+  const result = {};
+  for (const [key, val] of Object.entries(obj)) {
+    if (PATH_KEYS.has(key) && typeof val === "string") {
+      result[key] = hashHmac(val, hashSalt);
+    } else {
+      result[key] = val;
+    }
+  }
+  return result;
 }
 
 /**
@@ -180,12 +191,10 @@ function getTimestamp() {
 }
 
 /**
- * Retry failed log transfers
- * Finds files matching events.jsonl.* and conversations.*.jsonl.* patterns
- * and spawns background processes to retry upload
- * @param {string} deviceId - Device ID for conversation uploads
+ * Retry failed event log transfers
+ * Finds files matching events.jsonl.* and spawns background processes to retry upload
  */
-function retryFailedLogs(deviceId, hookEventName) {
+function retryFailedLogs() {
   if (!fs.existsSync(LOG_DIR)) return;
 
   try {
@@ -201,19 +210,6 @@ function retryFailedLogs(deviceId, hookEventName) {
       if (/^events\.jsonl\.\d+$/.test(file)) {
         if (fs.existsSync(TRANSFER_EVENT_SCRIPT)) {
           spawn("node", [TRANSFER_EVENT_SCRIPT, filePath], {
-            detached: true,
-            stdio: "ignore",
-          }).unref();
-        }
-        continue;
-      }
-
-      // Match conversations.{sessionId}.jsonl.{timestamp}
-      const conversationMatch = file.match(/^conversations\.(.+)\.jsonl\.(\d+)$/);
-      if (conversationMatch) {
-        const sessionId = conversationMatch[1];
-        if (fs.existsSync(TRANSFER_CONVERSATION_SCRIPT) && deviceId) {
-          spawn("node", [TRANSFER_CONVERSATION_SCRIPT, filePath, hookEventName, sessionId, deviceId, "{}"], {
             detached: true,
             stdio: "ignore",
           }).unref();
@@ -330,242 +326,6 @@ function readStdin() {
   });
 }
 
-/**
- * Expand ~ to home directory
- * @param {string} filepath - Path that may contain ~
- * @returns {string} Expanded path
- */
-function expandHome(filepath) {
-  if (!filepath) return filepath;
-  const home = process.env.HOME || process.env.USERPROFILE || "";
-  return filepath.replace(/^~/, home);
-}
-
-// ============================================================================
-// Transcript Offset Management (for incremental transcript processing)
-// ============================================================================
-
-/**
- * Get offset file path for a transcript
- * Uses hash of transcript path as filename to avoid conflicts
- * @param {string} transcriptPath - Path to transcript file
- * @returns {string} Path to offset file
- */
-function getOffsetFilePath(transcriptPath) {
-  const hash = hashForFilename(transcriptPath);
-  return path.join(OFFSET_DIR, `${hash}.offset`);
-}
-
-/**
- * Get byte offset for a transcript file
- * @param {string} transcriptPath - Path to transcript file
- * @returns {number} Byte offset (0 if not found)
- */
-function getOffset(transcriptPath) {
-  const offsetFile = getOffsetFilePath(transcriptPath);
-  try {
-    if (fs.existsSync(offsetFile)) {
-      const content = fs.readFileSync(offsetFile, "utf8").trim();
-      return parseInt(content, 10) || 0;
-    }
-  } catch {
-    // Ignore errors
-  }
-  return 0;
-}
-
-/**
- * Save byte offset for a transcript file
- * Each transcript has its own offset file, so no lock needed
- * @param {string} transcriptPath - Path to transcript file
- * @param {number} offset - Byte offset
- */
-function saveOffset(transcriptPath, offset) {
-  fs.mkdirSync(OFFSET_DIR, { recursive: true });
-  const offsetFile = getOffsetFilePath(transcriptPath);
-  fs.writeFileSync(offsetFile, offset.toString());
-}
-
-
-// ============================================================================
-// Conversation File Management
-// ============================================================================
-
-/**
- * Get conversation file path for a session
- * @param {string} sessionId - Session ID
- * @returns {string} Path to conversation file
- */
-function getConversationFilePath(sessionId) {
-  return path.join(LOG_DIR, `conversations.${sessionId}.jsonl`);
-}
-
-/**
- * Filter message content to only include "thinking" and "text" types
- * @param {object} message - The message object
- * @returns {object|null} Filtered message or null if content should be excluded
- */
-function filterMessageContent(message) {
-  if (!message || !message.content) return message;
-
-  // If content is not an array, pass through as-is
-  if (!Array.isArray(message.content)) {
-    return message;
-  }
-
-  // Filter to only include "thinking", "text", and "tool_result" types
-  const filteredContent = message.content.filter(
-    (item) =>
-      item &&
-      (item.type === "thinking" ||
-        item.type === "text" ||
-        item.type === "tool_result")
-  );
-
-  // Return null if no valid content remains
-  if (filteredContent.length === 0) {
-    return null;
-  }
-
-  return {
-    ...message,
-    content: filteredContent,
-  };
-}
-
-/**
- * Read new messages from transcript file starting from byte offset
- * Only processes complete lines (ending with \n) to handle files being written to
- * @param {string} transcriptPath - Path to transcript file
- * @param {number} startOffset - Byte offset to start reading from
- * @returns {{messages: Array, newOffset: number}} New messages and updated offset
- */
-function readFromTranscript(transcriptPath, startOffset) {
-  const messages = [];
-  let newOffset = startOffset;
-
-  try {
-    if (!fs.existsSync(transcriptPath)) {
-      return { messages, newOffset };
-    }
-
-    const stats = fs.statSync(transcriptPath);
-    if (stats.size <= startOffset) {
-      return { messages, newOffset };
-    }
-
-    // Read from offset to end
-    const fd = fs.openSync(transcriptPath, "r");
-    const buffer = Buffer.alloc(stats.size - startOffset);
-    fs.readSync(fd, buffer, 0, buffer.length, startOffset);
-    fs.closeSync(fd);
-
-    // Find the last newline byte to maintain byte-accurate offsets
-    const lastNewlineByteIdx = buffer.lastIndexOf(0x0a);
-    if (lastNewlineByteIdx === -1) {
-      // No complete line yet, wait for more data
-      return { messages, newOffset: startOffset };
-    }
-
-    // Only process content up to the last newline
-    const completeContent = buffer.subarray(0, lastNewlineByteIdx).toString("utf8");
-    const lines = completeContent.split("\n");
-
-    for (const line of lines) {
-      const trimmedLine = line.trim();
-      if (!trimmedLine) continue;
-
-      try {
-        const entry = JSON.parse(trimmedLine);
-        // Only extract user and assistant messages
-        if (entry.type === "user" || entry.type === "assistant") {
-          const filteredMessage = filterMessageContent(entry.message);
-          if (filteredMessage === null) continue;
-
-          messages.push({
-            type: entry.type,
-            message: filteredMessage,
-            version: entry.version,
-            gitBranch: entry.gitBranch,
-            timestamp: entry.timestamp,
-          });
-        }
-      } catch {
-        // Skip invalid JSON lines
-      }
-    }
-
-    // Set offset to byte after the last newline (start of next incomplete line or EOF)
-    newOffset = startOffset + lastNewlineByteIdx + 1;
-  } catch {
-    // Ignore file read errors
-  }
-
-  return { messages, newOffset };
-}
-
-/**
- * Append messages to conversation file
- * @param {string} sessionId - Session ID
- * @param {Array} messages - Messages to append
- */
-function appendConversation(sessionId, messages) {
-  if (!messages || messages.length === 0) return;
-
-  fs.mkdirSync(LOG_DIR, { recursive: true });
-  const conversationFile = getConversationFilePath(sessionId);
-
-  const lines = messages.map((msg) => JSON.stringify(msg)).join("\n") + "\n";
-  fs.appendFileSync(conversationFile, lines);
-}
-
-/**
- * Prepare conversation file for transfer by atomically renaming it.
- * Does NOT spawn any transfer process — the caller decides how to transfer.
- * @param {string} sessionId - Session ID
- * @returns {string|null} Path to renamed file ready for transfer, or null if no file
- */
-function transferConversation(sessionId) {
-  const conversationFile = getConversationFilePath(sessionId);
-
-  if (!fs.existsSync(conversationFile)) return null;
-
-  try {
-    const timestamp = Date.now();
-    const sendingFile = `${conversationFile}.${timestamp}`;
-    fs.renameSync(conversationFile, sendingFile);
-    return sendingFile;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Process transcript file and extract new messages incrementally (capture only)
- * @param {string} transcriptPath - Path to transcript file (may contain ~)
- * @param {string} _hookEventName - Unused (kept for call-site compatibility)
- * @param {string} sessionId - Session ID
- * @param {string} deviceId - Device ID
- */
-function processTranscript(transcriptPath, _hookEventName, sessionId, deviceId) {
-  if (!transcriptPath || !sessionId || !deviceId) return 0;
-
-  const expandedPath = expandHome(transcriptPath);
-  const currentOffset = getOffset(expandedPath);
-
-  const { messages, newOffset } = readFromTranscript(expandedPath, currentOffset);
-
-  if (messages.length > 0) {
-    appendConversation(sessionId, messages);
-  }
-
-  if (newOffset > currentOffset) {
-    saveOffset(expandedPath, newOffset);
-  }
-
-  return newOffset;
-}
-
 // ============================================================================
 // Telemetry Opt-In Management
 // ============================================================================
@@ -636,6 +396,7 @@ module.exports = {
   getOrCreateHashSalt,
   getLicenseToken,
   hashHmac,
+  sanitizeToolData,
   getTimestamp,
   logStructured,
   logInfo,
@@ -644,14 +405,6 @@ module.exports = {
   logDebug,
   readLastLines,
   readStdin,
-  expandHome,
-  getOffset,
-  saveOffset,
-  filterMessageContent,
-  appendConversation,
-  transferConversation,
-  processTranscript,
-  getConversationFilePath,
   retryFailedLogs,
   getTelemetryOptIn,
   saveTelemetryOptIn,
