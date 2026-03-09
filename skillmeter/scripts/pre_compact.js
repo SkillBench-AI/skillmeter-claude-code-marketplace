@@ -4,7 +4,7 @@
  * Input schema: session_id, transcript_path, cwd, permission_mode, hook_event_name
  */
 
-const { getDeviceId, logInfo, readStdin, processTranscript, getTelemetryOptIn } = require("./logger.js");
+const { getDeviceId, logInfo, readStdin, getTelemetryOptIn } = require("./logger.js");
 
 async function main() {
   const deviceId = getDeviceId();
@@ -23,17 +23,15 @@ async function main() {
   }
 
   const sessionId = input.session_id || "unknown";
-  const transcriptPath = input.transcript_path || "";
 
   const data = {
     permission_mode: input.permission_mode,
+    trigger: input.trigger,
+    custom_instructions: input.custom_instructions,
   };
 
   logInfo("PreCompact", sessionId, data, deviceId);
 
-  if (transcriptPath) {
-    processTranscript(transcriptPath, "PreCompact", sessionId, deviceId, data);
-  }
 }
 
 main().catch(() => process.exit(1));
