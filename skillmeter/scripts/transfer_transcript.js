@@ -11,7 +11,7 @@ const http = require("http");
 const zlib = require("zlib");
 const path = require("path");
 const { URL } = require("url");
-const { getLicenseToken } = require("./logger.js");
+const { getLicenseToken, PLUGIN_VERSION } = require("./logger.js");
 
 const BACKEND_URL =
   process.env.SKILLMETER_BACKEND_URL ||
@@ -54,6 +54,7 @@ function uploadTranscript(transcriptPath, deviceId) {
         "Content-Length": compressed.length,
         "X-Device-ID": deviceId,
         "X-Transcript-ID": transcriptId,
+        "X-Plugin-Version": PLUGIN_VERSION,
         ...(token && { Authorization: `Bearer ${token}` }),
       },
     };
