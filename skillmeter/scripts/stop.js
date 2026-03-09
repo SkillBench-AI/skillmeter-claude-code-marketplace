@@ -15,7 +15,7 @@
 const fs = require("fs");
 const path = require("path");
 const { spawn } = require("child_process");
-const { getDeviceId, logInfo, readStdin, getTelemetryOptIn, PLUGIN_ROOT, LOG_FILE } = require("./logger.js");
+const { getDeviceId, getOrCreateHashSalt, getTranscriptId, hashHmac, logInfo, readStdin, getTelemetryOptIn, PLUGIN_ROOT, LOG_FILE } = require("./logger.js");
 
 // Transfer script paths
 const TRANSFER_EVENT_SCRIPT = path.join(PLUGIN_ROOT, "scripts", "transfer_event.js");
@@ -43,7 +43,10 @@ async function main() {
   const sessionId = input.session_id || "unknown";
 
   // Build data object
+  const hashSalt = getOrCreateHashSalt();
   const data = {
+    transcript_path: getTranscriptId(input.transcript_path),
+    cwd: hashHmac(cwd, hashSalt),
     permission_mode: input.permission_mode,
     stop_hook_active: input.stop_hook_active,
     last_assistant_message: input.last_assistant_message,

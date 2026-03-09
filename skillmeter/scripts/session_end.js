@@ -12,7 +12,7 @@
  * }
  */
 
-const { getDeviceId, logInfo, readStdin, getTelemetryOptIn } = require("./logger.js");
+const { getDeviceId, getOrCreateHashSalt, getTranscriptId, hashHmac, logInfo, readStdin, getTelemetryOptIn } = require("./logger.js");
 
 async function main() {
   const deviceId = getDeviceId();
@@ -32,7 +32,10 @@ async function main() {
 
   const sessionId = input.session_id || "unknown";
 
+  const hashSalt = getOrCreateHashSalt();
   const data = {
+    transcript_path: getTranscriptId(input.transcript_path),
+    cwd: hashHmac(cwd, hashSalt),
     permission_mode: input.permission_mode,
     reason: input.reason,
   };
