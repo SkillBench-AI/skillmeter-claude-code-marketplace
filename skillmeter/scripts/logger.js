@@ -18,6 +18,14 @@ const TRANSFER_EVENT_SCRIPT = path.join(PLUGIN_ROOT, "scripts", "transfer_event.
 const SERVICE_NAME = "com.skillbench.device-id";
 const HASH_SALT_SERVICE = "com.skillbench.hash-salt";
 const LICENSE_SERVICE = "com.skillbench.license";
+const PLUGIN_VERSION = (() => {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, ".claude-plugin", "plugin.json"), "utf8"));
+    return pkg.version || "unknown";
+  } catch {
+    return "unknown";
+  }
+})();
 
 /**
  * Get or create device UUID from macOS Keychain
@@ -446,6 +454,7 @@ module.exports = {
   promptTelemetryOptIn,
   runHook,
   PLUGIN_ROOT,
+  PLUGIN_VERSION,
   LOG_DIR,
   LOG_FILE,
 };
