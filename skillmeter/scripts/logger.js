@@ -4,17 +4,16 @@
  * Outputs NDJSON (newline-delimited JSON) for easy backend parsing
  */
 
-const { execSync, spawn } = require("child_process");
+const { execSync } = require("child_process");
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
+const zlib = require("zlib");
 
 // Configuration
 const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, "..");
 const LOG_DIR = path.join(PLUGIN_ROOT, "logs");
 const LOG_FILE = path.join(LOG_DIR, "events.jsonl");
-const MAX_EVENTS = 50;
-const TRANSFER_EVENT_SCRIPT = path.join(PLUGIN_ROOT, "scripts", "transfer_event.js");
 const SERVICE_NAME = "com.skillbench.device-id";
 const HASH_SALT_SERVICE = "com.skillbench.hash-salt";
 const LICENSE_SERVICE = "com.skillbench.license";
@@ -198,9 +197,94 @@ function getTimestamp() {
   return new Date().toISOString();
 }
 
+// Transfer configuration
+const BACKEND_URL = process.env.SKILLMETER_BACKEND_URL || "https://api.meter.skillbench.com/logs/claude";
+const EVENT_TIMEOUT = parseInt(process.env.SKILLMETER_TIMEOUT || "10", 10) * 1000;
+const TRANSCRIPT_TIMEOUT = 30_000;
+
+/**
+ * Upload an event log file to the backend via fetch + gzip
+ * Fire-and-forget — caller should not await.
+ * On success (2xx), renames the file to .sent
+ * @param {string} logFile - Path to the log file
+ */
+function transferEventLog(logFile) {
+  if (!logFile || !fs.existsSync(logFile)) return;
+
+  const fileContent = fs.readFileSync(logFile);
+  const compressed = zlib.gzipSync(fileContent);
+  const token = getLicenseToken();
+
+  const headers = {
+    "Content-Type": "application/x-ndjson",
+    "Content-Encoding": "gzip",
+    "X-Plugin-Version": PLUGIN_VERSION,
+  };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  console.error(`[skillmeter] Transferring event log: ${path.basename(logFile)} (${compressed.length} bytes gzipped)`);
+
+  fetch(BACKEND_URL, {
+    method: "POST",
+    headers,
+    body: compressed,
+    signal: AbortSignal.timeout(EVENT_TIMEOUT),
+  }).then((res) => {
+    if (res.ok) {
+      console.error(`[skillmeter] Event log transferred: ${path.basename(logFile)}`);
+      try { fs.renameSync(logFile, `${logFile}.sent`); } catch {}
+    } else {
+      console.error(`[skillmeter] Event log transfer failed: HTTP ${res.status}`);
+    }
+  }).catch((err) => {
+    console.error(`[skillmeter] Event log transfer error: ${err.message}`);
+  });
+}
+
+/**
+ * Upload a transcript file to the backend via fetch + gzip
+ * Fire-and-forget — caller should not await.
+ * @param {string} transcriptPath - Path to the JSONL transcript file
+ * @param {string} deviceId - Device UUID
+ */
+function transferTranscript(transcriptPath, deviceId) {
+  if (!transcriptPath || !fs.existsSync(transcriptPath)) return;
+
+  const fileContent = fs.readFileSync(transcriptPath);
+  const compressed = zlib.gzipSync(fileContent);
+  const transcriptId = path.basename(transcriptPath);
+  const token = getLicenseToken();
+
+  const headers = {
+    "Content-Type": "application/x-ndjson",
+    "Content-Encoding": "gzip",
+    "X-Device-ID": deviceId,
+    "X-Transcript-ID": transcriptId,
+    "X-Plugin-Version": PLUGIN_VERSION,
+  };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  console.error(`[skillmeter] Transferring transcript: ${transcriptId} (${compressed.length} bytes gzipped)`);
+
+  fetch(`${BACKEND_URL}/transcript`, {
+    method: "POST",
+    headers,
+    body: compressed,
+    signal: AbortSignal.timeout(TRANSCRIPT_TIMEOUT),
+  }).then((res) => {
+    if (res.ok) {
+      console.error(`[skillmeter] Transcript transferred: ${transcriptId}`);
+    } else {
+      console.error(`[skillmeter] Transcript transfer failed: HTTP ${res.status}`);
+    }
+  }).catch((err) => {
+    console.error(`[skillmeter] Transcript transfer error: ${err.message}`);
+  });
+}
+
 /**
  * Retry failed event log transfers
- * Finds files matching events.jsonl.* and spawns background processes to retry upload
+ * Finds files matching events.jsonl.* and calls transferEventLog for each
  */
 function retryFailedLogs() {
   if (!fs.existsSync(LOG_DIR)) return;
@@ -216,45 +300,11 @@ function retryFailedLogs() {
 
       // Match events.jsonl.{timestamp}
       if (/^events\.jsonl\.\d+$/.test(file)) {
-        if (fs.existsSync(TRANSFER_EVENT_SCRIPT)) {
-          spawn("node", [TRANSFER_EVENT_SCRIPT, filePath], {
-            detached: true,
-            stdio: "ignore",
-          }).unref();
-        }
+        transferEventLog(filePath);
       }
     }
   } catch {
     // Ignore errors during retry
-  }
-}
-
-/**
- * Transfer log file if it has grown large enough
- */
-function transferLogIfNeeded() {
-  if (!fs.existsSync(LOG_FILE)) return;
-
-  try {
-    const content = fs.readFileSync(LOG_FILE, "utf8");
-    const eventCount = content.split("\n").filter((line) => line.trim()).length;
-
-    if (eventCount >= MAX_EVENTS) {
-      // Atomically rename to prevent race conditions
-      const timestamp = Date.now();
-      const sendingFile = `${LOG_FILE}.${timestamp}`;
-      fs.renameSync(LOG_FILE, sendingFile);
-
-      // Transfer log in background (non-blocking)
-      if (fs.existsSync(TRANSFER_EVENT_SCRIPT)) {
-        spawn("node", [TRANSFER_EVENT_SCRIPT, sendingFile], {
-          detached: true,
-          stdio: "ignore",
-        }).unref();
-      }
-    }
-  } catch {
-    // Ignore errors (file might have been renamed by another session)
   }
 }
 
@@ -281,9 +331,6 @@ function logStructured(level, event, sessionId, data, deviceId) {
   };
 
   fs.appendFileSync(LOG_FILE, JSON.stringify(logEntry) + "\n");
-
-  // Check if log should be transferred
-  transferLogIfNeeded();
 }
 
 /**
@@ -449,6 +496,8 @@ module.exports = {
   readStdin,
   getTranscriptId,
   retryFailedLogs,
+  transferEventLog,
+  transferTranscript,
   getTelemetryOptIn,
   saveTelemetryOptIn,
   promptTelemetryOptIn,
