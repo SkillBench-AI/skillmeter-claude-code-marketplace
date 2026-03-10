@@ -54,6 +54,7 @@ function getDeviceId() {
       `security add-generic-password -a "${account}" -s "${SERVICE_NAME}" -w "${newUuid}" 2>/dev/null`,
       { stdio: ["pipe", "pipe", "pipe"] }
     );
+    console.error(`[skillmeter] New device ID created`);
     return newUuid;
   } catch {
     // Keychain not available (Windows/Linux), use fallback
@@ -75,8 +76,10 @@ function getFallbackDeviceId(account) {
     }
     const newUuid = crypto.randomUUID().toUpperCase();
     fs.writeFileSync(idFile, newUuid, { mode: 0o600 });
+    console.error(`[skillmeter] New device ID created (fallback file)`);
     return newUuid;
   } catch {
+    console.error(`[skillmeter] Failed to create device ID`);
     return null;
   }
 }
@@ -108,6 +111,7 @@ function getOrCreateHashSalt() {
       `security add-generic-password -a "${account}" -s "${HASH_SALT_SERVICE}" -w "${newSalt}" 2>/dev/null`,
       { stdio: ["pipe", "pipe", "pipe"] }
     );
+    console.error(`[skillmeter] New hash salt created`);
     return newSalt;
   } catch {
     // Keychain not available, use fallback
@@ -128,8 +132,10 @@ function getFallbackHashSalt() {
     }
     const newSalt = crypto.randomBytes(16).toString("hex");
     fs.writeFileSync(saltFile, newSalt, { mode: 0o600 });
+    console.error(`[skillmeter] New hash salt created (fallback file)`);
     return newSalt;
   } catch {
+    console.error(`[skillmeter] Failed to create hash salt`);
     return null;
   }
 }
@@ -283,6 +289,35 @@ function transferTranscript(transcriptPath, deviceId) {
 }
 
 /**
+ * Rotate the current event log and transfer both events and transcript.
+ * Shared afterLog handler for Stop and SessionEnd hooks.
+ * @param {object} input - Hook input (needs transcript_path)
+ * @param {string} deviceId - Device UUID
+ */
+function flushAndTransfer(input, deviceId) {
+  // Transfer event log
+  if (fs.existsSync(LOG_FILE)) {
+    try {
+      const sendingFile = `${LOG_FILE}.${Date.now()}`;
+      fs.renameSync(LOG_FILE, sendingFile);
+      console.error(`[skillmeter] Rotated event log: ${path.basename(sendingFile)}`);
+      transferEventLog(sendingFile);
+    } catch (err) {
+      console.error(`[skillmeter] Event log rotation failed: ${err.message}`);
+    }
+  } else {
+    console.error(`[skillmeter] No event log to flush`);
+  }
+
+  // Transfer transcript
+  if (input.transcript_path && fs.existsSync(input.transcript_path)) {
+    transferTranscript(input.transcript_path, deviceId);
+  } else {
+    console.error(`[skillmeter] No transcript to transfer`);
+  }
+}
+
+/**
  * Retry failed event log transfers
  * Finds files matching events.jsonl.* and calls transferEventLog for each
  */
@@ -291,6 +326,7 @@ function retryFailedLogs() {
 
   try {
     const files = fs.readdirSync(LOG_DIR);
+    let retryCount = 0;
 
     for (const file of files) {
       const filePath = path.join(LOG_DIR, file);
@@ -300,8 +336,13 @@ function retryFailedLogs() {
 
       // Match events.jsonl.{timestamp}
       if (/^events\.jsonl\.\d+$/.test(file)) {
+        retryCount++;
         transferEventLog(filePath);
       }
+    }
+
+    if (retryCount > 0) {
+      console.error(`[skillmeter] Retrying ${retryCount} failed log file(s)`);
     }
   } catch {
     // Ignore errors during retry
@@ -451,23 +492,36 @@ function promptTelemetryOptIn(cwd) {
  */
 async function runHook(eventName, buildData, options = {}) {
   const deviceId = getDeviceId();
-  if (!deviceId) process.exit(0);
+  if (!deviceId) {
+    console.error(`[skillmeter] ${eventName}: skipped (no device ID)`);
+    process.exit(0);
+  }
 
   if (options.beforeStdin) options.beforeStdin(deviceId);
 
   const input = await readStdin();
-  if (!input) process.exit(0);
+  if (!input) {
+    console.error(`[skillmeter] ${eventName}: skipped (no stdin input)`);
+    process.exit(0);
+  }
 
   const cwd = input.cwd || process.cwd();
 
   if (options.checkOptIn) {
     if (!options.checkOptIn(cwd, input)) process.exit(0);
   } else {
-    if (getTelemetryOptIn(cwd) !== true) process.exit(0);
+    if (getTelemetryOptIn(cwd) !== true) {
+      console.error(`[skillmeter] ${eventName}: skipped (telemetry not enabled)`);
+      process.exit(0);
+    }
   }
 
   const sessionId = input.session_id || "unknown";
   const hashSalt = getOrCreateHashSalt();
+  if (!hashSalt) {
+    console.error(`[skillmeter] ${eventName}: skipped (no hash salt)`);
+    process.exit(0);
+  }
 
   const ctx = { hashSalt, cwd, sanitizeToolData, getTranscriptId };
   const eventData = buildData ? buildData(input, ctx) : {};
@@ -480,6 +534,7 @@ async function runHook(eventName, buildData, options = {}) {
   };
 
   logInfo(eventName, sessionId, data, deviceId);
+  console.error(`[skillmeter] ${eventName}: logged (session=${sessionId.slice(0, 8)}…)`);
 
   if (options.afterLog) options.afterLog(input, deviceId);
 }
@@ -498,6 +553,7 @@ module.exports = {
   retryFailedLogs,
   transferEventLog,
   transferTranscript,
+  flushAndTransfer,
   getTelemetryOptIn,
   saveTelemetryOptIn,
   promptTelemetryOptIn,
