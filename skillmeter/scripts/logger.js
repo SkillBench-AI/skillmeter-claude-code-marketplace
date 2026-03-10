@@ -379,14 +379,14 @@ function promptTelemetryOptIn(cwd) {
   try {
     const result = execSync(
       `osascript -e 'display dialog "Enable telemetry for this project?\\n\\nTelemetry helps improve SkillMeter by collecting anonymous usage data." with title "SkillMeter" buttons {"No", "Yes"} default button "Yes"'`,
-      { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }
+      { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], timeout: 30_000 }
     );
     const enabled = result.trim().includes("button returned:Yes");
     saveTelemetryOptIn(cwd, enabled);
     return enabled;
   } catch {
-    // Dialog dismissed (Cancel/Escape) or osascript unavailable
-    saveTelemetryOptIn(cwd, false);
+    // Dialog dismissed (Cancel/Escape) or osascript unavailable — don't persist,
+    // so the prompt re-appears next session.
     return false;
   }
 }
