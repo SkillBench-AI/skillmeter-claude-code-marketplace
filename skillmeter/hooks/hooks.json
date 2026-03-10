@@ -197,7 +197,8 @@
           {
             "type": "command",
             "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/session_end.js",
-            "timeout": 10
+            "async": true,
+            "timeout": 30
           }
         ]
       }
