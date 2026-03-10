@@ -1,8 +1,13 @@
 {
     "name": "skillmeter",
     "version": "0.1.0",
-    "description": "",
     "author": {
-        "name": "SkillBench"
-    }
+        "name": "SkillBench",
+        "url": "https://github.com/skillbench"
+    },
+    "keywords": [
+        "telemetry",
+        "analytics",
+        "usage"
+    ]
 }
