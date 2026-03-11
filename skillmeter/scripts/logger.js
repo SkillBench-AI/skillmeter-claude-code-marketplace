@@ -4,20 +4,17 @@
  * Outputs NDJSON (newline-delimited JSON) for easy backend parsing
  */
 
-const { execSync } = require("child_process");
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const zlib = require("zlib");
 const { sanitizeTranscript } = require("./sanitizer");
+const credstore = require("./credstore");
 
 // Configuration
 const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, "..");
 const LOG_DIR = path.join(PLUGIN_ROOT, "logs");
 const LOG_FILE = path.join(LOG_DIR, "events.jsonl");
-const SERVICE_NAME = "com.skillbench.device-id";
-const HASH_SALT_SERVICE = "com.skillbench.hash-salt";
-const LICENSE_SERVICE = "com.skillbench.license";
 const PLUGIN_VERSION = (() => {
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, ".claude-plugin", "plugin.json"), "utf8"));
@@ -27,138 +24,16 @@ const PLUGIN_VERSION = (() => {
   }
 })();
 
-/**
- * Get or create device UUID from macOS Keychain
- * @returns {string|null} Device UUID or null if unavailable
- */
 function getDeviceId() {
-  const account = process.env.USER || process.env.USERNAME || "";
-  if (!account) return null;
-
-  try {
-    // Try to retrieve existing UUID from Keychain (macOS)
-    const result = execSync(
-      `security find-generic-password -a "${account}" -s "${SERVICE_NAME}" -w 2>/dev/null`,
-      { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }
-    );
-    if (result.trim()) {
-      return result.trim();
-    }
-  } catch {
-    // UUID not found, try to create one
-  }
-
-  try {
-    // Generate new UUID
-    const newUuid = crypto.randomUUID().toUpperCase();
-    execSync(
-      `security add-generic-password -a "${account}" -s "${SERVICE_NAME}" -w "${newUuid}" 2>/dev/null`,
-      { stdio: ["pipe", "pipe", "pipe"] }
-    );
-    console.error(`[skillmeter] New device ID created`);
-    return newUuid;
-  } catch {
-    // Keychain not available (Windows/Linux), use fallback
-    return getFallbackDeviceId(account);
-  }
+  return credstore.getDeviceId(LOG_DIR);
 }
 
-/**
- * Fallback device ID storage for non-macOS systems
- * @param {string} account - User account name
- * @returns {string|null} Device UUID or null
- */
-function getFallbackDeviceId(account) {
-  const idFile = path.join(LOG_DIR, ".device-id");
-  try {
-    fs.mkdirSync(LOG_DIR, { recursive: true });
-    if (fs.existsSync(idFile)) {
-      return fs.readFileSync(idFile, "utf8").trim();
-    }
-    const newUuid = crypto.randomUUID().toUpperCase();
-    fs.writeFileSync(idFile, newUuid, { mode: 0o600 });
-    console.error(`[skillmeter] New device ID created (fallback file)`);
-    return newUuid;
-  } catch {
-    console.error(`[skillmeter] Failed to create device ID`);
-    return null;
-  }
-}
-
-/**
- * Get or create HMAC hash salt from macOS Keychain
- * Shared with VS Code extension for consistent hashing
- * @returns {string|null} Hash salt or null if unavailable
- */
 function getOrCreateHashSalt() {
-  const account = process.env.USER || process.env.USERNAME || "";
-  if (!account) return null;
-
-  try {
-    const result = execSync(
-      `security find-generic-password -a "${account}" -s "${HASH_SALT_SERVICE}" -w 2>/dev/null`,
-      { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }
-    );
-    if (result.trim()) {
-      return result.trim();
-    }
-  } catch {
-    // Salt not found, try to create one
-  }
-
-  try {
-    const newSalt = crypto.randomBytes(16).toString("hex");
-    execSync(
-      `security add-generic-password -a "${account}" -s "${HASH_SALT_SERVICE}" -w "${newSalt}" 2>/dev/null`,
-      { stdio: ["pipe", "pipe", "pipe"] }
-    );
-    console.error(`[skillmeter] New hash salt created`);
-    return newSalt;
-  } catch {
-    // Keychain not available, use fallback
-    return getFallbackHashSalt();
-  }
+  return credstore.getOrCreateHashSalt(LOG_DIR);
 }
 
-/**
- * Fallback hash salt storage for non-macOS systems
- * @returns {string|null} Hash salt or null
- */
-function getFallbackHashSalt() {
-  const saltFile = path.join(LOG_DIR, ".hash-salt");
-  try {
-    fs.mkdirSync(LOG_DIR, { recursive: true });
-    if (fs.existsSync(saltFile)) {
-      return fs.readFileSync(saltFile, "utf8").trim();
-    }
-    const newSalt = crypto.randomBytes(16).toString("hex");
-    fs.writeFileSync(saltFile, newSalt, { mode: 0o600 });
-    console.error(`[skillmeter] New hash salt created (fallback file)`);
-    return newSalt;
-  } catch {
-    console.error(`[skillmeter] Failed to create hash salt`);
-    return null;
-  }
-}
-
-/**
- * Get license JWT from macOS Keychain
- * Shared with VS Code extension (stored by AuthService)
- * @returns {string|null} License JWT or null if unavailable
- */
 function getLicenseToken() {
-  const account = process.env.USER || process.env.USERNAME || "";
-  if (!account) return null;
-
-  try {
-    const result = execSync(
-      `security find-generic-password -a "${account}" -s "${LICENSE_SERVICE}" -w 2>/dev/null`,
-      { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }
-    );
-    return result.trim() || null;
-  } catch {
-    return null;
-  }
+  return credstore.getLicenseToken(LOG_DIR);
 }
 
 /**
