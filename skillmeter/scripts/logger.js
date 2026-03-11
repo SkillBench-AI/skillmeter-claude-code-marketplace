@@ -9,6 +9,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const zlib = require("zlib");
+const { sanitizeTranscript } = require("./sanitizer");
 
 // Configuration
 const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, "..");
@@ -256,7 +257,10 @@ function transferEventLog(logFile) {
 function transferTranscript(transcriptPath, deviceId) {
   if (!transcriptPath || !fs.existsSync(transcriptPath)) return;
 
-  const fileContent = fs.readFileSync(transcriptPath);
+  const hashSalt = getOrCreateHashSalt();
+  const fileContent = hashSalt
+    ? sanitizeTranscript(transcriptPath, hashSalt)
+    : fs.readFileSync(transcriptPath);
   const compressed = zlib.gzipSync(fileContent);
   const transcriptId = path.basename(transcriptPath);
   const token = getLicenseToken();
