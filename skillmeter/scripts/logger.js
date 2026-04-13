@@ -343,13 +343,9 @@ function transferTranscript(transcriptPath, deviceId) {
 }
 
 /**
- * Rotate the current event log and transfer both events and transcript.
- * Shared afterLog handler for Stop and SessionEnd hooks.
- * @param {object} input - Hook input (needs transcript_path)
- * @param {string} deviceId - Device UUID
+ * Rotate the current event log and transfer the shared event batch.
  */
-function flushAndTransfer(input, deviceId) {
-  // Transfer event log
+function flushEventLog() {
   if (fs.existsSync(LOG_FILE)) {
     try {
       const sendingFile = `${LOG_FILE}.${Date.now()}`;
@@ -362,6 +358,16 @@ function flushAndTransfer(input, deviceId) {
   } else {
     console.error(`[skillmeter] No event log to flush`);
   }
+}
+
+/**
+ * Rotate the current event log and transfer both events and transcript.
+ * Shared afterLog handler for Stop and SessionEnd hooks.
+ * @param {object} input - Hook input (needs transcript_path)
+ * @param {string} deviceId - Device UUID
+ */
+function flushAndTransfer(input, deviceId) {
+  flushEventLog();
 
   // Transfer transcript
   if (input.transcript_path && fs.existsSync(input.transcript_path)) {
@@ -541,6 +547,7 @@ function promptTelemetryOptIn(cwd) {
  * @param {object} [options]
  * @param {function} [options.beforeStdin] - Called after deviceId check, before stdin read (e.g. retryFailedLogs)
  * @param {function} [options.checkOptIn] - Custom opt-in logic: (cwd, input) => boolean. Return false to exit.
+ * @param {function} [options.afterSkip] - Called before exit when the event is skipped after stdin is read.
  * @param {function} [options.afterLog] - Called after logInfo (e.g. force transfer)
  */
 async function runHook(eventName, buildData, options = {}) {
@@ -581,6 +588,7 @@ async function runHook(eventName, buildData, options = {}) {
     console.error(
       `[skillmeter] ${eventName}: skipped (${repoScopeDecision.classification})`
     );
+    if (options.afterSkip) options.afterSkip(input, deviceId);
     process.exit(0);
   }
 
@@ -622,6 +630,7 @@ module.exports = {
   retryFailedLogs,
   transferEventLog,
   transferTranscript,
+  flushEventLog,
   flushAndTransfer,
   getTelemetryOptIn,
   saveTelemetryOptIn,
