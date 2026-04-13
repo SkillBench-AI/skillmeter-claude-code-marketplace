@@ -37,6 +37,36 @@ function getLicenseToken() {
   return credstore.getLicenseToken(LOG_DIR);
 }
 
+/**
+ * Decode the payload section of a JWT token (without signature verification)
+ * @param {string} token - JWT token string
+ * @returns {object|null} Decoded payload or null on failure
+ */
+function decodeJwtPayload(token) {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    return JSON.parse(Buffer.from(base64, "base64").toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
+const DEFAULT_ENDPOINT = "https://meter.skillbench.com";
+
+/**
+ * Extract the telemetry endpoint URL from the license JWT's telemetry_endpoint claim.
+ * Falls back to DEFAULT_ENDPOINT when the claim is missing or decode fails.
+ * @returns {string|null} Endpoint URL, or null if no license token exists
+ */
+function getEndpointFromToken() {
+  const token = getLicenseToken();
+  if (!token) return null;
+  const payload = decodeJwtPayload(token);
+  return payload?.telemetry_endpoint || DEFAULT_ENDPOINT;
+}
+
 function readSettingsFile(cwd) {
   try {
     const settingsPath = path.join(cwd, ".claude", "settings.local.json");
@@ -262,7 +292,6 @@ function getTimestamp() {
 }
 
 // Transfer configuration
-const BACKEND_URL = process.env.SKILLMETER_BACKEND_URL || "https://api.meter.skillbench.com/logs/claude";
 const EVENT_TIMEOUT = parseInt(process.env.SKILLMETER_TIMEOUT || "10", 10) * 1000;
 const TRANSCRIPT_TIMEOUT = 30_000;
 
@@ -276,20 +305,26 @@ const TRANSCRIPT_TIMEOUT = 30_000;
 function transferEventLog(logFile) {
   if (!logFile || !fs.existsSync(logFile)) return Promise.resolve();
 
+  const token = getLicenseToken();
+  const endpoint = getEndpointFromToken();
+  if (!token || !endpoint) {
+    console.error("[skillmeter] Event log transfer skipped (no license token or endpoint)");
+    return Promise.resolve();
+  }
+
   const fileContent = fs.readFileSync(logFile);
   const compressed = zlib.gzipSync(fileContent);
-  const token = getLicenseToken();
 
   const headers = {
     "Content-Type": "application/x-ndjson",
     "Content-Encoding": "gzip",
     "X-Plugin-Version": PLUGIN_VERSION,
+    "Authorization": `Bearer ${token}`,
   };
-  if (token) headers["Authorization"] = `Bearer ${token}`;
 
   console.error(`[skillmeter] Transferring event log: ${path.basename(logFile)} (${compressed.length} bytes gzipped)`);
 
-  return fetch(BACKEND_URL, {
+  return fetch(`${endpoint}/logs/claude`, {
     method: "POST",
     headers,
     body: compressed,
@@ -315,13 +350,19 @@ function transferEventLog(logFile) {
 function transferTranscript(transcriptPath, deviceId) {
   if (!transcriptPath || !fs.existsSync(transcriptPath)) return;
 
+  const token = getLicenseToken();
+  const endpoint = getEndpointFromToken();
+  if (!token || !endpoint) {
+    console.error("[skillmeter] Transcript transfer skipped (no license token or endpoint)");
+    return;
+  }
+
   const hashSalt = getOrCreateHashSalt();
   const fileContent = hashSalt
     ? sanitizeTranscript(transcriptPath, hashSalt)
     : fs.readFileSync(transcriptPath);
   const compressed = zlib.gzipSync(fileContent);
   const transcriptId = path.basename(transcriptPath);
-  const token = getLicenseToken();
 
   const headers = {
     "Content-Type": "application/x-ndjson",
@@ -329,12 +370,12 @@ function transferTranscript(transcriptPath, deviceId) {
     "X-Device-ID": deviceId,
     "X-Transcript-ID": transcriptId,
     "X-Plugin-Version": PLUGIN_VERSION,
+    "Authorization": `Bearer ${token}`,
   };
-  if (token) headers["Authorization"] = `Bearer ${token}`;
 
   console.error(`[skillmeter] Transferring transcript: ${transcriptId} (${compressed.length} bytes gzipped)`);
 
-  fetch(`${BACKEND_URL}/transcript`, {
+  fetch(`${endpoint}/logs/claude/transcript`, {
     method: "POST",
     headers,
     body: compressed,
@@ -572,6 +613,12 @@ async function runHook(eventName, buildData, options = {}) {
     process.exit(0);
   }
 
+  const licenseToken = getLicenseToken();
+  if (!licenseToken) {
+    console.error(`[skillmeter] WARNING: ${eventName}: skipped — no license token found. Plugin requires a valid license to operate.`);
+    process.exit(0);
+  }
+
   if (options.beforeStdin) options.beforeStdin(deviceId);
 
   const input = await readStdin();
@@ -640,6 +687,8 @@ module.exports = {
   getDeviceId,
   getOrCreateHashSalt,
   getLicenseToken,
+  decodeJwtPayload,
+  getEndpointFromToken,
   hashHmac,
   sanitizeToolData,
   getTimestamp,
