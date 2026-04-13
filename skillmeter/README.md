@@ -153,3 +153,48 @@ All uploads use gzip compression. Successfully uploaded files are deleted locall
 |---------------------------|--------------------------------------------------|--------------------------|
 | `SKILLMETER_BACKEND_URL`  | `https://api.meter.skillbench.com/logs/claude`   | Backend endpoint         |
 | `SKILLMETER_TIMEOUT`      | `10`                                             | Upload timeout (seconds) |
+
+## Repo-Scoped Filtering
+
+SkillMeter can restrict Claude Code telemetry to repositories owned by approved GitHub orgs.
+
+Configure this per project in `.claude/settings.local.json`:
+
+```json
+{
+  "skillmeter": {
+    "telemetry": true,
+    "repoScope": {
+      "enabled": true,
+      "allowedGitHubOrgs": ["andela"],
+      "includeUnapprovedRepos": false
+    }
+  }
+}
+```
+
+What it does:
+
+- `repoScope.enabled`: turn repo-scoped filtering on
+- `repoScope.allowedGitHubOrgs`: only collect telemetry when the current repo's Git remote belongs to one of these GitHub orgs
+- `repoScope.includeUnapprovedRepos`: if `true`, external repos are still collected and tagged as external; if `false`, they are skipped
+
+When repo-scoped filtering is enabled, Claude Code events are dropped by default for:
+
+- directories that are not inside a Git repository
+- repositories without a recognizable GitHub remote
+- repositories outside the approved org list, unless opt-in expansion is enabled
+
+### Using Claude Code And VS Code Together
+
+If you also use the SkillMeter VS Code extension, configure repo-scoped filtering there separately in `.vscode/settings.json`:
+
+```json
+{
+  "skillmeter.repoScope.enabled": true,
+  "skillmeter.repoScope.allowedGitHubOrgs": ["andela"],
+  "skillmeter.repoScope.includeUnapprovedRepos": false
+}
+```
+
+Claude Code continues to use `.claude/settings.local.json` for its own telemetry and repo-scope settings. The two clients do not automatically share configuration.
