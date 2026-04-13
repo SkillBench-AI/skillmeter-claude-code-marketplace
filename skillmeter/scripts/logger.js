@@ -5,6 +5,7 @@
  */
 
 const crypto = require("crypto");
+const { execSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const zlib = require("zlib");
@@ -36,6 +37,30 @@ function getLicenseToken() {
   return credstore.getLicenseToken(LOG_DIR);
 }
 
+function readSettingsFile(cwd) {
+  try {
+    const settingsPath = path.join(cwd, ".claude", "settings.local.json");
+    if (!fs.existsSync(settingsPath)) return null;
+    return JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function getRepoScopeSettings(cwd) {
+  const skillmeterSettings = readSettingsFile(cwd)?.skillmeter ?? {};
+  return {
+    enabled: skillmeterSettings.repoScope?.enabled === true,
+    allowedGitHubOrgs: Array.isArray(skillmeterSettings.repoScope?.allowedGitHubOrgs)
+      ? skillmeterSettings.repoScope.allowedGitHubOrgs
+          .map((org) => String(org).trim().toLowerCase())
+          .filter(Boolean)
+      : [],
+    includeUnapprovedRepos:
+      skillmeterSettings.repoScope?.includeUnapprovedRepos === true,
+  };
+}
+
 /**
  * Hash a string using HMAC-SHA256 with salt (first 12 chars)
  * Matches VS Code extension's HashingService.hash()
@@ -46,6 +71,156 @@ function getLicenseToken() {
 function hashHmac(str, salt) {
   if (!str || !salt) return "";
   return crypto.createHmac("sha256", salt).update(str).digest("hex").slice(0, 12);
+}
+
+function extractGitHubOrgFromRemote(remoteUrl) {
+  if (!remoteUrl || typeof remoteUrl !== "string") return "";
+
+  const trimmed = remoteUrl.trim();
+  const sshMatch = trimmed.match(/^git@github\.com:([^/]+)\/.+?(?:\.git)?$/i);
+  if (sshMatch) return sshMatch[1].toLowerCase();
+
+  const httpsMatch = trimmed.match(
+    /^(?:ssh:\/\/)?(?:git@)?github\.com[:/]([^/]+)\/.+?(?:\.git)?$/i
+  );
+  if (httpsMatch) return httpsMatch[1].toLowerCase();
+
+  try {
+    const normalized = trimmed.startsWith("http")
+      ? trimmed
+      : trimmed.replace(/^ssh:\/\//i, "https://");
+    const url = new URL(normalized);
+    if (url.hostname.toLowerCase() !== "github.com") return "";
+    return (url.pathname.split("/").filter(Boolean)[0] || "").toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function findGitRoot(startPath) {
+  if (!startPath || typeof startPath !== "string") return "";
+
+  let currentPath = path.resolve(startPath);
+  try {
+    if (!fs.statSync(currentPath).isDirectory()) {
+      currentPath = path.dirname(currentPath);
+    }
+  } catch {
+    currentPath = path.dirname(currentPath);
+  }
+
+  while (true) {
+    const gitPath = path.join(currentPath, ".git");
+    if (fs.existsSync(gitPath)) return currentPath;
+
+    const parent = path.dirname(currentPath);
+    if (parent === currentPath) return "";
+    currentPath = parent;
+  }
+}
+
+function resolveGitDir(repoRoot) {
+  if (!repoRoot) return "";
+
+  const gitPath = path.join(repoRoot, ".git");
+  try {
+    const stats = fs.statSync(gitPath);
+    if (stats.isDirectory()) return gitPath;
+    if (!stats.isFile()) return "";
+
+    const content = fs.readFileSync(gitPath, "utf8");
+    const match = content.match(/^gitdir:\s*(.+)\s*$/im);
+    return match ? path.resolve(repoRoot, match[1]) : "";
+  } catch {
+    return "";
+  }
+}
+
+function getRemoteUrlsForRepo(repoRoot) {
+  const gitDir = resolveGitDir(repoRoot);
+  if (!gitDir) return [];
+
+  try {
+    const configPath = path.join(gitDir, "config");
+    const configContent = fs.readFileSync(configPath, "utf8");
+    const urls = [];
+    let inRemoteSection = false;
+
+    for (const line of configContent.split(/\r?\n/)) {
+      if (/^\s*\[remote ".+"\]\s*$/.test(line)) {
+        inRemoteSection = true;
+        continue;
+      }
+      if (/^\s*\[.+\]\s*$/.test(line)) {
+        inRemoteSection = false;
+        continue;
+      }
+      if (!inRemoteSection) continue;
+
+      const urlMatch = line.match(/^\s*url\s*=\s*(.+?)\s*$/);
+      if (urlMatch) urls.push(urlMatch[1]);
+    }
+
+    return urls;
+  } catch {
+    return [];
+  }
+}
+
+function getRepoScopeDecision(cwd) {
+  const repoScope = getRepoScopeSettings(cwd);
+  if (!repoScope.enabled) {
+    return { allowed: true, scope: "unscoped", classification: "disabled" };
+  }
+
+  if (repoScope.allowedGitHubOrgs.length === 0) {
+    return {
+      allowed: false,
+      scope: "unknown",
+      classification: "no_allowed_orgs_configured",
+    };
+  }
+
+  const repoRoot = findGitRoot(cwd);
+  if (!repoRoot) {
+    return { allowed: false, scope: "unknown", classification: "no_repository" };
+  }
+
+  const remoteOrgs = getRemoteUrlsForRepo(repoRoot)
+    .map((remoteUrl) => extractGitHubOrgFromRemote(remoteUrl))
+    .filter(Boolean);
+
+  if (remoteOrgs.length === 0) {
+    return {
+      allowed: false,
+      scope: "unknown",
+      classification: "no_github_remote",
+      repoRoot,
+    };
+  }
+
+  const matchingOrg = remoteOrgs.find((org) =>
+    repoScope.allowedGitHubOrgs.includes(org)
+  );
+  if (matchingOrg) {
+    return {
+      allowed: true,
+      scope: "approved",
+      classification: "github_org_match",
+      repoRoot,
+      remoteOrg: matchingOrg,
+    };
+  }
+
+  return {
+    allowed: repoScope.includeUnapprovedRepos,
+    scope: "external",
+    classification: repoScope.includeUnapprovedRepos
+      ? "github_org_mismatch_opt_in"
+      : "github_org_mismatch",
+    repoRoot,
+    remoteOrg: remoteOrgs[0],
+  };
 }
 
 // Keys in tool_input/tool_response whose values contain sensitive paths and should be hashed
@@ -304,9 +479,8 @@ function readStdin() {
  */
 function getTelemetryOptIn(cwd) {
   try {
-    const settingsPath = path.join(cwd, ".claude", "settings.local.json");
-    if (!fs.existsSync(settingsPath)) return null;
-    const content = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+    const content = readSettingsFile(cwd);
+    if (!content) return null;
     if (!content.skillmeter || typeof content.skillmeter.telemetry !== "boolean") return null;
     return content.skillmeter.telemetry;
   } catch {
@@ -402,12 +576,28 @@ async function runHook(eventName, buildData, options = {}) {
     process.exit(0);
   }
 
+  const repoScopeDecision = getRepoScopeDecision(cwd);
+  if (!repoScopeDecision.allowed) {
+    console.error(
+      `[skillmeter] ${eventName}: skipped (${repoScopeDecision.classification})`
+    );
+    process.exit(0);
+  }
+
   const ctx = { hashSalt, cwd, sanitizeToolData, getTranscriptId };
   const eventData = buildData ? buildData(input, ctx) : {};
 
   const data = {
     transcript_path: getTranscriptId(input.transcript_path),
     cwd: hashHmac(cwd, hashSalt),
+    repo_scope: repoScopeDecision.scope,
+    repo_classification: repoScopeDecision.classification,
+    repo_root: repoScopeDecision.repoRoot
+      ? hashHmac(repoScopeDecision.repoRoot, hashSalt)
+      : undefined,
+    repo_remote_org: repoScopeDecision.remoteOrg
+      ? hashHmac(repoScopeDecision.remoteOrg, hashSalt)
+      : undefined,
     permission_mode: input.permission_mode,
     ...eventData,
   };
@@ -436,6 +626,8 @@ module.exports = {
   getTelemetryOptIn,
   saveTelemetryOptIn,
   promptTelemetryOptIn,
+  getRepoScopeSettings,
+  getRepoScopeDecision,
   runHook,
   PLUGIN_ROOT,
   PLUGIN_VERSION,

@@ -8,7 +8,11 @@
  *   node telemetry.js status
  */
 
-const { getTelemetryOptIn, saveTelemetryOptIn } = require("./logger.js");
+const {
+  getRepoScopeSettings,
+  getTelemetryOptIn,
+  saveTelemetryOptIn,
+} = require("./logger.js");
 
 const cwd = process.cwd();
 const action = process.argv[2];
@@ -24,12 +28,20 @@ switch (action) {
     break;
   case "status": {
     const optIn = getTelemetryOptIn(cwd);
+    const repoScope = getRepoScopeSettings(cwd);
     if (optIn === true) {
       process.stderr.write(`SkillMeter: Telemetry is enabled for ${cwd}\n`);
     } else if (optIn === false) {
       process.stderr.write(`SkillMeter: Telemetry is disabled for ${cwd}\n`);
     } else {
       process.stderr.write(`SkillMeter: Telemetry is not configured for ${cwd}\n`);
+    }
+    if (repoScope.enabled) {
+      process.stderr.write(
+        `SkillMeter: Repo scope filtering is enabled (allowed orgs: ${repoScope.allowedGitHubOrgs.join(", ") || "none"}; include unapproved repos: ${repoScope.includeUnapprovedRepos})\n`
+      );
+    } else {
+      process.stderr.write("SkillMeter: Repo scope filtering is disabled\n");
     }
     break;
   }
