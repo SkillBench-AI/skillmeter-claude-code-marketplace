@@ -174,6 +174,13 @@ function getRepoScopeDecision(cwd) {
   }
 
   if (repoScope.allowedGitHubOrgs.length === 0) {
+    if (repoScope.includeUnapprovedRepos) {
+      return {
+        allowed: true,
+        scope: "include_unapproved",
+        classification: "include_unapproved_repos",
+      };
+    }
     return {
       allowed: false,
       scope: "unknown",
@@ -261,12 +268,13 @@ const TRANSCRIPT_TIMEOUT = 30_000;
 
 /**
  * Upload an event log file to the backend via fetch + gzip
- * Fire-and-forget — caller should not await.
+ * Returns a Promise that resolves after the fetch completes.
  * On success (2xx), renames the file to .sent
  * @param {string} logFile - Path to the log file
+ * @returns {Promise<void>}
  */
 function transferEventLog(logFile) {
-  if (!logFile || !fs.existsSync(logFile)) return;
+  if (!logFile || !fs.existsSync(logFile)) return Promise.resolve();
 
   const fileContent = fs.readFileSync(logFile);
   const compressed = zlib.gzipSync(fileContent);
@@ -281,7 +289,7 @@ function transferEventLog(logFile) {
 
   console.error(`[skillmeter] Transferring event log: ${path.basename(logFile)} (${compressed.length} bytes gzipped)`);
 
-  fetch(BACKEND_URL, {
+  return fetch(BACKEND_URL, {
     method: "POST",
     headers,
     body: compressed,
@@ -344,6 +352,8 @@ function transferTranscript(transcriptPath, deviceId) {
 
 /**
  * Rotate the current event log and transfer the shared event batch.
+ * Returns a Promise that resolves after the transfer completes.
+ * @returns {Promise<void>}
  */
 function flushEventLog() {
   if (fs.existsSync(LOG_FILE)) {
@@ -351,12 +361,14 @@ function flushEventLog() {
       const sendingFile = `${LOG_FILE}.${Date.now()}`;
       fs.renameSync(LOG_FILE, sendingFile);
       console.error(`[skillmeter] Rotated event log: ${path.basename(sendingFile)}`);
-      transferEventLog(sendingFile);
+      return transferEventLog(sendingFile);
     } catch (err) {
       console.error(`[skillmeter] Event log rotation failed: ${err.message}`);
+      return Promise.resolve();
     }
   } else {
     console.error(`[skillmeter] No event log to flush`);
+    return Promise.resolve();
   }
 }
 
@@ -365,9 +377,10 @@ function flushEventLog() {
  * Shared afterLog handler for Stop and SessionEnd hooks.
  * @param {object} input - Hook input (needs transcript_path)
  * @param {string} deviceId - Device UUID
+ * @returns {Promise<void>}
  */
 function flushAndTransfer(input, deviceId) {
-  flushEventLog();
+  const eventLogPromise = flushEventLog();
 
   // Transfer transcript
   if (input.transcript_path && fs.existsSync(input.transcript_path)) {
@@ -375,6 +388,8 @@ function flushAndTransfer(input, deviceId) {
   } else {
     console.error(`[skillmeter] No transcript to transfer`);
   }
+
+  return eventLogPromise;
 }
 
 /**
@@ -588,7 +603,12 @@ async function runHook(eventName, buildData, options = {}) {
     console.error(
       `[skillmeter] ${eventName}: skipped (${repoScopeDecision.classification})`
     );
-    if (options.afterSkip) options.afterSkip(input, deviceId);
+    if (options.afterSkip) {
+      const result = options.afterSkip(input, deviceId);
+      if (result && typeof result.then === 'function') {
+        await result;
+      }
+    }
     process.exit(0);
   }
 
