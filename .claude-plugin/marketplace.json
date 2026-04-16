@@ -8,6 +8,11 @@
       "name": "skillmeter",
       "source": "./skillmeter",
       "description": ""
+    },
+    {
+      "name": "skillbench-brand",
+      "source": "./skillbench-brand",
+      "description": "SkillBench brand guidelines — color palette, typography, logos, PowerPoint templates."
     }
   ]
 }
