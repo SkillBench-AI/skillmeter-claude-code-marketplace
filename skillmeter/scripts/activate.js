@@ -103,9 +103,17 @@ async function exchangeForLicense(githubToken, deviceId) {
 }
 
 async function main() {
-  if (credstore.getLicenseToken(LOG_DIR)) {
+  const existingToken = credstore.getLicenseToken(LOG_DIR);
+  if (existingToken && !credstore.isLicenseTokenExpired(existingToken)) {
     log("SkillMeter is already activated.");
     return;
+  }
+  if (existingToken) {
+    log("License expired or near expiry — refreshing...");
+    // Do NOT pre-clear: if the refresh below fails, the stale token
+    // is strictly more useful than none (telemetry still flows via
+    // the auth-optional path). A successful silent/device flow will
+    // overwrite it via credstore.setLicenseToken.
   }
 
   const deviceId = credstore.getDeviceId(LOG_DIR);

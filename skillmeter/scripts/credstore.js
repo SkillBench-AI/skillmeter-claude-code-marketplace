@@ -159,6 +159,41 @@ function setLicenseToken(jwt) {
   _cache = store;
 }
 
+/**
+ * Decode the payload section of a JWT without verifying the signature.
+ * Only safe to use for local expiry hints; never trust the contents for
+ * authorization decisions. Kept internal to credstore so the storage
+ * layer can answer `isLicenseTokenExpired` without pulling a full JWT
+ * library dependency.
+ */
+function decodeJwtPayloadUnsafe(token) {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    return JSON.parse(Buffer.from(base64, "base64").toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
+// Matches the VS Code extension's TOKEN_EXPIRY_SKEW_MS (5 min). Refresh
+// fires proactively while the JWT is still technically valid so requests
+// in flight don't cross the expiry boundary.
+const LICENSE_EXPIRY_SKEW_SECONDS = 5 * 60;
+
+/**
+ * Return true when the given JWT is missing, malformed, or its `exp`
+ * claim lies within `skewSeconds` of now. Absent/malformed tokens are
+ * treated as expired so callers don't need to double-check.
+ */
+function isLicenseTokenExpired(token, skewSeconds = LICENSE_EXPIRY_SKEW_SECONDS) {
+  if (!token) return true;
+  const payload = decodeJwtPayloadUnsafe(token);
+  if (!payload || typeof payload.exp !== "number") return true;
+  return payload.exp <= Math.floor(Date.now() / 1000) + skewSeconds;
+}
+
 function getGhFallbackRetryAfter() {
   const store = readStore();
   return Number(store.gh_fallback_retry_after) || 0;
@@ -253,6 +288,8 @@ module.exports = {
   getOrCreateHashSalt,
   getLicenseToken,
   setLicenseToken,
+  isLicenseTokenExpired,
+  LICENSE_EXPIRY_SKEW_SECONDS,
   getGhFallbackRetryAfter,
   setGhFallbackRetryAfter,
   trySilentGhActivate,
