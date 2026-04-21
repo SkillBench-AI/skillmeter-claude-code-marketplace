@@ -459,6 +459,27 @@ function retryFailedLogs() {
 }
 
 /**
+ * Refresh the stored license JWT when missing or within expiry skew.
+ * Best-effort — uses the silent gh-auth path only (no device flow, which
+ * requires user interaction and can't run inside a hook). Returns the
+ * usable token, or null when no refresh was possible.
+ *
+ * Mirrors the VS Code extension's auto-refresh on service startup.
+ */
+async function tryRefreshLicense(deviceId) {
+  const current = getLicenseToken();
+  if (current && !credstore.isLicenseTokenExpired(current)) {
+    return current;
+  }
+  if (!deviceId) return null;
+  try {
+    return await credstore.trySilentGhActivate(deviceId);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Write structured JSON log entry
  * @param {string} level - Log level (info, error, warn, debug)
  * @param {string} event - Hook event name
@@ -684,6 +705,7 @@ module.exports = {
   readStdin,
   getTranscriptId,
   retryFailedLogs,
+  tryRefreshLicense,
   transferEventLog,
   transferTranscript,
   flushEventLog,
