@@ -159,10 +159,103 @@ function setLicenseToken(jwt) {
   _cache = store;
 }
 
+function getGhFallbackRetryAfter() {
+  const store = readStore();
+  return Number(store.gh_fallback_retry_after) || 0;
+}
+
+function setGhFallbackRetryAfter(unixSeconds) {
+  const store = readStore();
+  if (unixSeconds > 0) {
+    store.gh_fallback_retry_after = unixSeconds;
+  } else {
+    delete store.gh_fallback_retry_after;
+  }
+  writeStore(store);
+  _cache = store;
+}
+
+const ACTIVATE_URL = "https://api.meter.skillbench.com/activate";
+const FAILURE_COOLDOWN = 24 * 60 * 60;
+const TRANSIENT_COOLDOWN = 5 * 60;
+
+/**
+ * Attempt to activate silently using `gh auth token` if the user already
+ * has the GitHub CLI authenticated. Returns the license JWT on success,
+ * null otherwise. Failures are cached in the credstore so repeated hooks
+ * don't hammer GitHub/the activation endpoint.
+ */
+async function trySilentGhActivate(deviceId) {
+  const now = Math.floor(Date.now() / 1000);
+  if (getGhFallbackRetryAfter() > now) return null;
+
+  let ghToken;
+  try {
+    ghToken = execSync("gh auth token", {
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "ignore"],
+      timeout: 3000,
+    }).trim();
+  } catch {
+    setGhFallbackRetryAfter(now + FAILURE_COOLDOWN);
+    return null;
+  }
+  if (!ghToken) {
+    setGhFallbackRetryAfter(now + FAILURE_COOLDOWN);
+    return null;
+  }
+
+  let res;
+  try {
+    res = await fetch(ACTIVATE_URL, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${ghToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ device_id: deviceId }),
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch {
+    setGhFallbackRetryAfter(now + TRANSIENT_COOLDOWN);
+    return null;
+  }
+
+  if (res.status >= 500) {
+    setGhFallbackRetryAfter(now + TRANSIENT_COOLDOWN);
+    return null;
+  }
+  if (!res.ok) {
+    setGhFallbackRetryAfter(now + FAILURE_COOLDOWN);
+    return null;
+  }
+
+  let payload;
+  try {
+    payload = await res.json();
+  } catch {
+    setGhFallbackRetryAfter(now + TRANSIENT_COOLDOWN);
+    return null;
+  }
+  const jwt = payload?.token;
+  if (!jwt) {
+    setGhFallbackRetryAfter(now + FAILURE_COOLDOWN);
+    return null;
+  }
+
+  setLicenseToken(jwt);
+  setGhFallbackRetryAfter(0);
+  return jwt;
+}
+
 module.exports = {
   getDeviceId,
   getOrCreateHashSalt,
   getLicenseToken,
   setLicenseToken,
+  getGhFallbackRetryAfter,
+  setGhFallbackRetryAfter,
+  trySilentGhActivate,
+  ACTIVATE_URL,
   CRED_FILE,
 };
