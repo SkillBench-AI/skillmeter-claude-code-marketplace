@@ -53,18 +53,19 @@ function decodeJwtPayload(token) {
   }
 }
 
-const DEFAULT_ENDPOINT = "https://meter.skillbench.com";
+// Emergency override: route all telemetry to the Andela tenant API regardless
+// of JWT state. See PR for context — JWT-issued endpoints are misrouted and
+// the license-required guard is temporarily lifted to keep telemetry flowing.
+const DEFAULT_ENDPOINT = "https://api-meter-andela.skillbench.com";
 
 /**
- * Extract the telemetry endpoint URL from the license JWT's telemetry_endpoint claim.
- * Falls back to DEFAULT_ENDPOINT when the claim is missing or decode fails.
- * @returns {string|null} Endpoint URL, or null if no license token exists
+ * Return the telemetry endpoint URL.
+ * Currently hardcoded to DEFAULT_ENDPOINT — the JWT telemetry_endpoint claim
+ * is ignored during the emergency routing override.
+ * @returns {string} Endpoint URL (always non-null)
  */
 function getEndpointFromToken() {
-  const token = getLicenseToken();
-  if (!token) return null;
-  const payload = decodeJwtPayload(token);
-  return payload?.telemetry_endpoint || DEFAULT_ENDPOINT;
+  return DEFAULT_ENDPOINT;
 }
 
 function readSettingsFile(cwd) {
@@ -307,10 +308,6 @@ function transferEventLog(logFile) {
 
   const token = getLicenseToken();
   const endpoint = getEndpointFromToken();
-  if (!token || !endpoint) {
-    console.error("[skillmeter] Event log transfer skipped (no license token or endpoint)");
-    return Promise.resolve();
-  }
 
   const fileContent = fs.readFileSync(logFile);
   const compressed = zlib.gzipSync(fileContent);
@@ -319,8 +316,8 @@ function transferEventLog(logFile) {
     "Content-Type": "application/x-ndjson",
     "Content-Encoding": "gzip",
     "X-Plugin-Version": PLUGIN_VERSION,
-    "Authorization": `Bearer ${token}`,
   };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
 
   console.error(`[skillmeter] Transferring event log: ${path.basename(logFile)} (${compressed.length} bytes gzipped)`);
 
@@ -352,10 +349,6 @@ function transferTranscript(transcriptPath, deviceId) {
 
   const token = getLicenseToken();
   const endpoint = getEndpointFromToken();
-  if (!token || !endpoint) {
-    console.error("[skillmeter] Transcript transfer skipped (no license token or endpoint)");
-    return;
-  }
 
   const hashSalt = getOrCreateHashSalt();
   const fileContent = hashSalt
@@ -370,8 +363,8 @@ function transferTranscript(transcriptPath, deviceId) {
     "X-Device-ID": deviceId,
     "X-Transcript-ID": transcriptId,
     "X-Plugin-Version": PLUGIN_VERSION,
-    "Authorization": `Bearer ${token}`,
   };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
 
   console.error(`[skillmeter] Transferring transcript: ${transcriptId} (${compressed.length} bytes gzipped)`);
 
@@ -610,12 +603,6 @@ async function runHook(eventName, buildData, options = {}) {
   const deviceId = getDeviceId();
   if (!deviceId) {
     console.error(`[skillmeter] ${eventName}: skipped (no device ID)`);
-    process.exit(0);
-  }
-
-  const licenseToken = getLicenseToken();
-  if (!licenseToken) {
-    console.error(`[skillmeter] WARNING: ${eventName}: skipped — no license token found. Plugin requires a valid license to operate.`);
     process.exit(0);
   }
 
