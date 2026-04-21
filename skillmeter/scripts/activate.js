@@ -122,6 +122,13 @@ async function main() {
     process.exit(1);
   }
 
+  // Explicit user-initiated activation overrides any cached gh silent-
+  // failure cooldown. The cooldown exists to protect automated hooks
+  // from hammering the endpoints; /sk-activate is always deliberate,
+  // so a user who fixed their `gh auth` scopes shouldn't have to wait
+  // 24h before the silent path is attempted again.
+  credstore.setGhFallbackRetryAfter(0);
+
   const silentJwt = await credstore.trySilentGhActivate(deviceId);
   if (silentJwt) {
     log("Activated via gh CLI.");
