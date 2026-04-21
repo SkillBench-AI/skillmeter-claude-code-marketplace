@@ -53,6 +53,21 @@ function decodeJwtPayload(token) {
   }
 }
 
+// 30-second grace window tolerates minor clock skew between client and server.
+const JWT_EXPIRY_GRACE_SECONDS = 30;
+
+/**
+ * Return true when the token's `exp` claim is already past (with a small
+ * grace window). A missing/undecodable token is treated as NOT expired —
+ * callers already guard on token presence.
+ */
+function isJwtExpired(token) {
+  if (!token) return false;
+  const payload = decodeJwtPayload(token);
+  if (!payload || typeof payload.exp !== "number") return false;
+  return payload.exp < Math.floor(Date.now() / 1000) + JWT_EXPIRY_GRACE_SECONDS;
+}
+
 // Emergency override: route all telemetry to the Andela tenant API regardless
 // of JWT state. See PR for context — JWT-issued endpoints are misrouted and
 // the license-required guard is temporarily lifted to keep telemetry flowing.
@@ -306,36 +321,71 @@ const TRANSCRIPT_TIMEOUT = 30_000;
 function transferEventLog(logFile) {
   if (!logFile || !fs.existsSync(logFile)) return Promise.resolve();
 
-  const token = getLicenseToken();
   const endpoint = getEndpointFromToken();
+  const storedToken = getLicenseToken();
+  // Proactive: if the cached JWT is already past its exp, don't send it.
+  // PR #35 made Authorization optional server-side, so the request still
+  // succeeds without it.
+  const initialToken = storedToken && !isJwtExpired(storedToken) ? storedToken : null;
+  if (storedToken && !initialToken) {
+    console.error(`[skillmeter] Event log: dropping expired license JWT before send`);
+  }
 
   const fileContent = fs.readFileSync(logFile);
   const compressed = zlib.gzipSync(fileContent);
+  const baseName = path.basename(logFile);
 
-  const headers = {
-    "Content-Type": "application/x-ndjson",
-    "Content-Encoding": "gzip",
-    "X-Plugin-Version": PLUGIN_VERSION,
+  const buildHeaders = (token) => {
+    const h = {
+      "Content-Type": "application/x-ndjson",
+      "Content-Encoding": "gzip",
+      "X-Plugin-Version": PLUGIN_VERSION,
+    };
+    if (token) h["Authorization"] = `Bearer ${token}`;
+    return h;
   };
-  if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  console.error(`[skillmeter] Transferring event log: ${path.basename(logFile)} (${compressed.length} bytes gzipped)`);
+  const doPost = (token) =>
+    fetch(`${endpoint}/logs/claude`, {
+      method: "POST",
+      headers: buildHeaders(token),
+      body: compressed,
+      signal: AbortSignal.timeout(EVENT_TIMEOUT),
+    });
 
-  return fetch(`${endpoint}/logs/claude`, {
-    method: "POST",
-    headers,
-    body: compressed,
-    signal: AbortSignal.timeout(EVENT_TIMEOUT),
-  }).then((res) => {
-    if (res.ok) {
-      console.error(`[skillmeter] Event log transferred: ${path.basename(logFile)}`);
-      try { fs.renameSync(logFile, `${logFile}.sent`); } catch {}
-    } else {
+  const markSent = () => {
+    try { fs.renameSync(logFile, `${logFile}.sent`); } catch {}
+  };
+
+  console.error(`[skillmeter] Transferring event log: ${baseName} (${compressed.length} bytes gzipped)`);
+
+  return doPost(initialToken)
+    .then((res) => {
+      if (res.ok) {
+        console.error(`[skillmeter] Event log transferred: ${baseName}`);
+        markSent();
+        return;
+      }
+      // Reactive: server rejected our Authorization header — clear the bad
+      // token so subsequent requests don't reuse it, then retry once without
+      // auth.
+      if (initialToken && (res.status === 401 || res.status === 403)) {
+        console.error(`[skillmeter] Event log auth rejected (HTTP ${res.status}), clearing license and retrying without auth`);
+        try { credstore.setLicenseToken(""); } catch {}
+        return doPost(null).then((res2) => {
+          if (res2.ok) {
+            console.error(`[skillmeter] Event log transferred on retry: ${baseName}`);
+            markSent();
+          } else {
+            console.error(`[skillmeter] Event log retry failed: HTTP ${res2.status}`);
+          }
+        });
+      }
       console.error(`[skillmeter] Event log transfer failed: HTTP ${res.status}`);
-    }
-  }).catch((err) => {
-    console.error(`[skillmeter] Event log transfer error: ${err.message}`);
-  });
+    })
+    .catch((err) => {
+      console.error(`[skillmeter] Event log transfer error: ${err.message}`);
+    });
 }
 
 /**
@@ -347,8 +397,12 @@ function transferEventLog(logFile) {
 function transferTranscript(transcriptPath, deviceId) {
   if (!transcriptPath || !fs.existsSync(transcriptPath)) return;
 
-  const token = getLicenseToken();
   const endpoint = getEndpointFromToken();
+  const storedToken = getLicenseToken();
+  const initialToken = storedToken && !isJwtExpired(storedToken) ? storedToken : null;
+  if (storedToken && !initialToken) {
+    console.error(`[skillmeter] Transcript: dropping expired license JWT before send`);
+  }
 
   const hashSalt = getOrCreateHashSalt();
   const fileContent = hashSalt
@@ -357,28 +411,45 @@ function transferTranscript(transcriptPath, deviceId) {
   const compressed = zlib.gzipSync(fileContent);
   const transcriptId = path.basename(transcriptPath);
 
-  const headers = {
-    "Content-Type": "application/x-ndjson",
-    "Content-Encoding": "gzip",
-    "X-Device-ID": deviceId,
-    "X-Transcript-ID": transcriptId,
-    "X-Plugin-Version": PLUGIN_VERSION,
+  const buildHeaders = (token) => {
+    const h = {
+      "Content-Type": "application/x-ndjson",
+      "Content-Encoding": "gzip",
+      "X-Device-ID": deviceId,
+      "X-Transcript-ID": transcriptId,
+      "X-Plugin-Version": PLUGIN_VERSION,
+    };
+    if (token) h["Authorization"] = `Bearer ${token}`;
+    return h;
   };
-  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const doPost = (token) =>
+    fetch(`${endpoint}/logs/claude/transcript`, {
+      method: "POST",
+      headers: buildHeaders(token),
+      body: compressed,
+      signal: AbortSignal.timeout(TRANSCRIPT_TIMEOUT),
+    });
 
   console.error(`[skillmeter] Transferring transcript: ${transcriptId} (${compressed.length} bytes gzipped)`);
 
-  fetch(`${endpoint}/logs/claude/transcript`, {
-    method: "POST",
-    headers,
-    body: compressed,
-    signal: AbortSignal.timeout(TRANSCRIPT_TIMEOUT),
-  }).then((res) => {
+  doPost(initialToken).then((res) => {
     if (res.ok) {
       console.error(`[skillmeter] Transcript transferred: ${transcriptId}`);
-    } else {
-      console.error(`[skillmeter] Transcript transfer failed: HTTP ${res.status}`);
+      return;
     }
+    if (initialToken && (res.status === 401 || res.status === 403)) {
+      console.error(`[skillmeter] Transcript auth rejected (HTTP ${res.status}), clearing license and retrying without auth`);
+      try { credstore.setLicenseToken(""); } catch {}
+      return doPost(null).then((res2) => {
+        if (res2.ok) {
+          console.error(`[skillmeter] Transcript transferred on retry: ${transcriptId}`);
+        } else {
+          console.error(`[skillmeter] Transcript retry failed: HTTP ${res2.status}`);
+        }
+      });
+    }
+    console.error(`[skillmeter] Transcript transfer failed: HTTP ${res.status}`);
   }).catch((err) => {
     console.error(`[skillmeter] Transcript transfer error: ${err.message}`);
   });
