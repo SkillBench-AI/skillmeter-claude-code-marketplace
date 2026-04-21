@@ -27,7 +27,28 @@ function readStore() {
 function writeStore(data) {
   const dir = path.dirname(CRED_FILE);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(CRED_FILE, JSON.stringify(data, null, 2) + "\n", { mode: 0o600 });
+
+  // Atomic write: write payload to a sibling tempfile, fsync, then
+  // rename into place. POSIX rename within the same filesystem is
+  // atomic — readers see either the old file or the new file, never
+  // a partial write. Concurrent writers can still lose updates;
+  // eliminating that requires a file lock (separate follow-up).
+  const tempPath = `${CRED_FILE}.tmp.${process.pid}.${Date.now()}`;
+  let fd;
+  try {
+    fd = fs.openSync(tempPath, "w", 0o600);
+    fs.writeSync(fd, JSON.stringify(data, null, 2) + "\n");
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = undefined;
+    fs.renameSync(tempPath, CRED_FILE);
+  } catch (err) {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch {}
+    }
+    try { fs.unlinkSync(tempPath); } catch {}
+    throw err;
+  }
 }
 
 // ---------------------------------------------------------------------------
