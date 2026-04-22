@@ -656,28 +656,6 @@ function saveTelemetryOptIn(cwd, value) {
   fs.writeFileSync(settingsPath, JSON.stringify(content, null, 2) + "\n");
 }
 
-/**
- * Prompt the user for telemetry opt-in via a native macOS dialog.
- * Uses osascript to show a system dialog with Yes/No buttons.
- * Falls back to false on non-macOS or if the dialog is dismissed.
- * @param {string} cwd - Working directory
- * @returns {boolean} User's choice
- */
-function promptTelemetryOptIn(cwd) {
-  try {
-    const result = execSync(
-      `osascript -e 'display dialog "Enable telemetry for this project?\\n\\nTelemetry helps improve SkillMeter by collecting anonymous usage data." with title "SkillMeter" buttons {"No", "Yes"} default button "Yes"'`,
-      { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], timeout: 30_000 }
-    );
-    const enabled = result.trim().includes("button returned:Yes");
-    saveTelemetryOptIn(cwd, enabled);
-    return enabled;
-  } catch {
-    // Dialog dismissed (Cancel/Escape) or osascript unavailable — don't persist,
-    // so the prompt re-appears next session.
-    return false;
-  }
-}
 
 /**
  * Common hook runner — handles all boilerplate shared by every hook script.
@@ -783,7 +761,6 @@ module.exports = {
   flushAndTransfer,
   getTelemetryOptIn,
   saveTelemetryOptIn,
-  promptTelemetryOptIn,
   getRepoScopeSettings,
   getRepoScopeDecision,
   runHook,
