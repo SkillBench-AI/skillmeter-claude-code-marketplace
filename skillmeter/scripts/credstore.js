@@ -243,7 +243,12 @@ const TRANSIENT_COOLDOWN = 5 * 60;
  */
 async function trySilentGhActivate(deviceId) {
   const now = Math.floor(Date.now() / 1000);
-  if (getGhFallbackRetryAfter() > now) return null;
+  const retryAfter = getGhFallbackRetryAfter();
+  if (retryAfter > now) {
+    const secondsLeft = retryAfter - now;
+    console.error(`[skillmeter] gh activation skipped: in cooldown for another ${secondsLeft}s`);
+    return null;
+  }
 
   let ghToken;
   try {
@@ -253,13 +258,17 @@ async function trySilentGhActivate(deviceId) {
       timeout: 3000,
     }).trim();
   } catch {
+    console.error("[skillmeter] gh activation skipped: gh CLI not installed or not authenticated");
     setGhFallbackRetryAfter(now + FAILURE_COOLDOWN);
     return null;
   }
   if (!ghToken) {
+    console.error("[skillmeter] gh activation skipped: `gh auth token` returned empty");
     setGhFallbackRetryAfter(now + FAILURE_COOLDOWN);
     return null;
   }
+
+  console.error("[skillmeter] gh activation: exchanging token with activation endpoint");
 
   let res;
   try {
@@ -272,16 +281,21 @@ async function trySilentGhActivate(deviceId) {
       body: JSON.stringify({ device_id: deviceId }),
       signal: AbortSignal.timeout(5000),
     });
-  } catch {
+  } catch (err) {
+    console.error(`[skillmeter] gh activation failed: network error (${err.message})`);
     setGhFallbackRetryAfter(now + TRANSIENT_COOLDOWN);
     return null;
   }
 
   if (res.status >= 500) {
+    const body = await res.text().catch(() => "");
+    console.error(`[skillmeter] gh activation failed: activation endpoint returned ${res.status} (${body.slice(0, 200)})`);
     setGhFallbackRetryAfter(now + TRANSIENT_COOLDOWN);
     return null;
   }
   if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    console.error(`[skillmeter] gh activation rejected: HTTP ${res.status} (${body.slice(0, 200)})`);
     setGhFallbackRetryAfter(now + FAILURE_COOLDOWN);
     return null;
   }
@@ -290,17 +304,20 @@ async function trySilentGhActivate(deviceId) {
   try {
     payload = await res.json();
   } catch {
+    console.error("[skillmeter] gh activation failed: activation endpoint returned invalid JSON");
     setGhFallbackRetryAfter(now + TRANSIENT_COOLDOWN);
     return null;
   }
   const jwt = payload?.token;
   if (!jwt) {
+    console.error("[skillmeter] gh activation failed: response missing `token` field");
     setGhFallbackRetryAfter(now + FAILURE_COOLDOWN);
     return null;
   }
 
   setLicenseToken(jwt);
   setGhFallbackRetryAfter(0);
+  console.error("[skillmeter] gh activation succeeded");
   return jwt;
 }
 
