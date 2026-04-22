@@ -1,0 +1,80 @@
+#!/usr/bin/env node
+/**
+ * skillmeter-show-jwt — print the stored license JWT metadata in a
+ * human-readable form. Never prints the raw token body. Shows:
+ *   - org identifiers derived from the `org` claim
+ *   - GitHub user id from the `github_id` claim
+ *   - the telemetry_endpoint claim used at emission time
+ *   - iat / exp in ISO form, and whether the token is currently valid
+ *   - the device id stored alongside the JWT
+ *
+ * Usage:
+ *   skillmeter-show-jwt
+ */
+const path = require("path");
+
+const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, "..");
+const LOG_DIR = path.join(PLUGIN_ROOT, "logs");
+const credstore = require(path.join(PLUGIN_ROOT, "scripts", "credstore.js"));
+
+function decodeJwtPayload(token) {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    return JSON.parse(Buffer.from(b64, "base64").toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
+const token = credstore.getLicenseToken(LOG_DIR);
+const deviceId = credstore.getDeviceId(LOG_DIR) || "(none)";
+
+if (!token) {
+  process.stdout.write("SkillMeter: no license JWT stored.\n");
+  process.stdout.write(`Device ID: ${deviceId}\n`);
+  process.stdout.write("\nRun /skillmeter:sk-activate to authenticate.\n");
+  process.exit(0);
+}
+
+const payload = decodeJwtPayload(token);
+if (!payload) {
+  process.stdout.write("SkillMeter: license JWT is present but cannot be decoded.\n");
+  process.stdout.write(`Device ID: ${deviceId}\n`);
+  process.exit(1);
+}
+
+const now = Math.floor(Date.now() / 1000);
+const expired = credstore.isLicenseTokenExpired(token);
+const secsUntilExp = typeof payload.exp === "number" ? payload.exp - now : null;
+const statusLabel = expired
+  ? "EXPIRED (or within 5-minute refresh skew)"
+  : secsUntilExp !== null && secsUntilExp < 60
+    ? "expiring soon"
+    : "valid";
+
+function line(label, value) {
+  if (value === undefined || value === null || value === "") return;
+  process.stdout.write(`  ${label.padEnd(22)}${value}\n`);
+}
+
+process.stdout.write("SkillMeter license JWT\n");
+process.stdout.write("─".repeat(56) + "\n");
+line("Subject (sub)", payload.sub);
+line("Issuer (iss)", payload.iss);
+line("Org id", payload.org?.id);
+line("Org login", payload.org?.login);
+line("Org URL", payload.org?.url);
+line("GitHub user id", payload.github_id);
+line("Telemetry endpoint", payload.telemetry_endpoint);
+if (typeof payload.iat === "number") {
+  line("Issued at", new Date(payload.iat * 1000).toISOString());
+}
+if (typeof payload.exp === "number") {
+  line("Expires at", new Date(payload.exp * 1000).toISOString());
+  const relative = secsUntilExp >= 0 ? `+${secsUntilExp}s` : `${secsUntilExp}s`;
+  line("Status", `${statusLabel} (${relative})`);
+}
+process.stdout.write("─".repeat(56) + "\n");
+line("Device ID", deviceId);

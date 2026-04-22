@@ -1,0 +1,18 @@
+#!/usr/bin/env node
+/**
+ * skillmeter-telemetry — toggle telemetry opt-in for the current working
+ * directory without going through a Claude Code slash command (which
+ * incurs LLM latency).
+ *
+ * Usage:
+ *   skillmeter-telemetry enable
+ *   skillmeter-telemetry disable
+ *   skillmeter-telemetry status
+ *
+ * The heavy lifting lives in scripts/telemetry.js. This wrapper just
+ * forwards execution so we have a single source of truth. process.argv
+ * is inherited by the required module, so the subcommand reaches it
+ * unchanged.
+ */
+const path = require("path");
+require(path.resolve(__dirname, "..", "scripts", "telemetry.js"));
