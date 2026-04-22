@@ -1,5 +1,4 @@
 ---
-name: sk-activate
 description: Activate SkillMeter by signing in with GitHub
 disable-model-invocation: true
 allowed-tools: Bash(node *)

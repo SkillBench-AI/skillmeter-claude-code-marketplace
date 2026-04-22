@@ -1,5 +1,4 @@
 ---
-name: sk-telemetry
 description: Enable, disable, or check SkillMeter telemetry status for the current project
 argument-hint: <enable|disable|status>
 disable-model-invocation: true
