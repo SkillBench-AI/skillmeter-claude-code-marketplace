@@ -4,7 +4,6 @@ const {
   retryFailedLogs,
   tryRefreshLicense,
   getTelemetryOptIn,
-  promptTelemetryOptIn,
   PLUGIN_VERSION,
 } = require("./logger.js");
 
@@ -14,15 +13,25 @@ runHook("SessionStart", (input) => ({
   agent_type: input.agent_type,
 }), {
   checkOptIn: (cwd) => {
-    let optIn = getTelemetryOptIn(cwd);
-    if (optIn === null) optIn = promptTelemetryOptIn(cwd);
-    if (optIn) {
+    const optIn = getTelemetryOptIn(cwd);
+    if (optIn === true) {
       process.stderr.write(`SkillMeter v${PLUGIN_VERSION} (activated)\n`);
       retryFailedLogs();
-    } else {
-      process.stderr.write(`SkillMeter v${PLUGIN_VERSION} (not activated)\n`);
+      return true;
     }
-    return optIn;
+    if (optIn === false) {
+      process.stderr.write(`SkillMeter v${PLUGIN_VERSION} (telemetry disabled for this project)\n`);
+      return false;
+    }
+    // optIn === null — no per-project preference yet. Nudge the user to
+    // choose via the slash command. Telemetry is skipped this session until
+    // they pick one.
+    process.stderr.write(
+      `SkillMeter v${PLUGIN_VERSION} (telemetry not configured for this project)\n` +
+      `  Run /skillmeter:sk-telemetry enable   — send anonymized session data\n` +
+      `  Run /skillmeter:sk-telemetry disable  — opt out for this project\n`
+    );
+    return false;
   },
   // Mirror the VS Code extension's auto-refresh on service start: if
   // the stored license JWT is missing or within the expiry skew, try
