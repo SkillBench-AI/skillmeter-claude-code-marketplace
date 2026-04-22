@@ -13,6 +13,7 @@
 
 const credstore = require("./credstore.js");
 const path = require("path");
+const { spawnSync } = require("child_process");
 
 const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, "..");
 const LOG_DIR = path.join(PLUGIN_ROOT, "logs");
@@ -25,6 +26,31 @@ const SCOPE = "read:user read:org";
 
 function log(msg) {
   process.stderr.write(msg + "\n");
+}
+
+// copyToClipboard tries platform-native clipboard tools. Returns true on
+// success, false when no tool is available or the copy fails. Never throws.
+function copyToClipboard(text) {
+  const candidates = [];
+  if (process.platform === "darwin") {
+    candidates.push({ cmd: "pbcopy", args: [] });
+  } else if (process.platform === "win32") {
+    candidates.push({ cmd: "clip", args: [] });
+  } else {
+    // Linux / BSD / WSL: try Wayland first, then X11, then WSL's clip.exe.
+    candidates.push({ cmd: "wl-copy", args: [] });
+    candidates.push({ cmd: "xclip", args: ["-selection", "clipboard"] });
+    candidates.push({ cmd: "xsel", args: ["--clipboard", "--input"] });
+    candidates.push({ cmd: "clip.exe", args: [] });
+  }
+  for (const { cmd, args } of candidates) {
+    const result = spawnSync(cmd, args, {
+      input: text,
+      stdio: ["pipe", "ignore", "ignore"],
+    });
+    if (result.status === 0) return true;
+  }
+  return false;
 }
 
 async function postForm(url, params) {
@@ -129,12 +155,14 @@ async function main() {
   // 24h before the silent path is attempted again.
   credstore.setGhFallbackRetryAfter(0);
 
+  log("Trying gh CLI first...");
   const silentJwt = await credstore.trySilentGhActivate(deviceId);
   if (silentJwt) {
     log("Activated via gh CLI.");
     return;
   }
 
+  log("gh activation did not succeed; falling back to GitHub device flow.");
   log("Starting GitHub device flow...");
   const device = await requestDeviceCode();
 
@@ -142,6 +170,9 @@ async function main() {
   log(`Open ${device.verification_uri}`);
   log(`Enter code: ${device.user_code}`);
   log(`(code expires in ${Math.round(device.expires_in / 60)} minutes)`);
+  if (copyToClipboard(device.user_code)) {
+    log("(code copied to clipboard)");
+  }
   log("");
   log("Waiting for GitHub approval...");
 
