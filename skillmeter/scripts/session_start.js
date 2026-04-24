@@ -2,6 +2,7 @@
 const {
   runHook,
   retryFailedLogs,
+  retryFailedTranscripts,
   tryRefreshLicense,
   getTelemetryOptIn,
   PLUGIN_VERSION,
@@ -17,6 +18,7 @@ runHook("SessionStart", (input) => ({
     if (optIn === true) {
       process.stderr.write(`SkillMeter v${PLUGIN_VERSION} (activated)\n`);
       retryFailedLogs();
+      retryFailedTranscripts();
       return true;
     }
     if (optIn === false) {

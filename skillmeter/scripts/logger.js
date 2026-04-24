@@ -7,15 +7,24 @@
 const crypto = require("crypto");
 const { execSync } = require("child_process");
 const fs = require("fs");
+const fsp = require("fs").promises;
 const path = require("path");
 const zlib = require("zlib");
+const { promisify } = require("util");
 const { sanitizeTranscript } = require("./sanitizer");
 const credstore = require("./credstore");
+
+// Async gzip for transcript uploads — keeps the hook's event loop responsive
+// while compressing multi-MB transcripts. Sync variants are still used for
+// small event-log payloads where the latency is negligible.
+const gzipAsync = promisify(zlib.gzip);
 
 // Configuration
 const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, "..");
 const LOG_DIR = path.join(PLUGIN_ROOT, "logs");
 const LOG_FILE = path.join(LOG_DIR, "events.jsonl");
+// Transcripts that failed to upload get parked here for retry on next session.
+const TRANSCRIPTS_PENDING_DIR = path.join(LOG_DIR, "transcripts", "pending");
 const PLUGIN_VERSION = (() => {
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, ".claude-plugin", "plugin.json"), "utf8"));
@@ -389,13 +398,51 @@ function transferEventLog(logFile) {
 }
 
 /**
- * Upload a transcript file to the backend via fetch + gzip
- * Fire-and-forget — caller should not await.
- * @param {string} transcriptPath - Path to the JSONL transcript file
+ * Stage a transcript for upload: sanitize the JSONL content and write it to
+ * the pending directory. The staged file is the source of truth for both the
+ * initial upload attempt and any later retry — we no longer depend on the
+ * original transcript path existing.
+ *
+ * Returns the pending file path on success, or null when staging fails.
+ * @param {string} transcriptPath - Path to the original JSONL transcript
+ * @returns {string|null}
+ */
+function stageTranscriptForUpload(transcriptPath) {
+  try {
+    fs.mkdirSync(TRANSCRIPTS_PENDING_DIR, { recursive: true });
+  } catch (err) {
+    console.error(`[skillmeter] Transcript staging failed (mkdir): ${err.message}`);
+    return null;
+  }
+
+  const transcriptId = path.basename(transcriptPath);
+  const pendingPath = path.join(TRANSCRIPTS_PENDING_DIR, transcriptId);
+
+  try {
+    const hashSalt = getOrCreateHashSalt();
+    const sanitized = hashSalt
+      ? sanitizeTranscript(transcriptPath, hashSalt)
+      : fs.readFileSync(transcriptPath);
+    // Overwrite previous snapshots of the same transcript — a long session
+    // re-stages on every Stop and we always want the latest lines.
+    fs.writeFileSync(pendingPath, sanitized);
+    return pendingPath;
+  } catch (err) {
+    console.error(`[skillmeter] Transcript staging failed: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * Upload a staged pending transcript file. On 2xx, deletes the pending file.
+ * On failure, leaves it on disk for the next SessionStart retry. Fire-and-
+ * forget — caller does NOT await so the Stop hook doesn't block the user.
+ *
+ * @param {string} pendingPath - Absolute path under TRANSCRIPTS_PENDING_DIR
  * @param {string} deviceId - Device UUID
  */
-function transferTranscript(transcriptPath, deviceId) {
-  if (!transcriptPath || !fs.existsSync(transcriptPath)) return;
+async function uploadPendingTranscript(pendingPath, deviceId) {
+  if (!pendingPath || !fs.existsSync(pendingPath)) return;
 
   const endpoint = getEndpointFromToken();
   const storedToken = getLicenseToken();
@@ -404,12 +451,16 @@ function transferTranscript(transcriptPath, deviceId) {
     console.error(`[skillmeter] Transcript: dropping expired license JWT before send`);
   }
 
-  const hashSalt = getOrCreateHashSalt();
-  const fileContent = hashSalt
-    ? sanitizeTranscript(transcriptPath, hashSalt)
-    : fs.readFileSync(transcriptPath);
-  const compressed = zlib.gzipSync(fileContent);
-  const transcriptId = path.basename(transcriptPath);
+  const transcriptId = path.basename(pendingPath);
+
+  let compressed;
+  try {
+    const raw = await fsp.readFile(pendingPath);
+    compressed = await gzipAsync(raw);
+  } catch (err) {
+    console.error(`[skillmeter] Transcript gzip failed for ${transcriptId}: ${err.message}`);
+    return;
+  }
 
   const buildHeaders = (token) => {
     const h = {
@@ -431,11 +482,16 @@ function transferTranscript(transcriptPath, deviceId) {
       signal: AbortSignal.timeout(TRANSCRIPT_TIMEOUT),
     });
 
+  const removePending = () => {
+    try { fs.unlinkSync(pendingPath); } catch {}
+  };
+
   console.error(`[skillmeter] Transferring transcript: ${transcriptId} (${compressed.length} bytes gzipped)`);
 
   doPost(initialToken).then((res) => {
     if (res.ok) {
       console.error(`[skillmeter] Transcript transferred: ${transcriptId}`);
+      removePending();
       return;
     }
     if (initialToken && (res.status === 401 || res.status === 403)) {
@@ -444,15 +500,32 @@ function transferTranscript(transcriptPath, deviceId) {
       return doPost(null).then((res2) => {
         if (res2.ok) {
           console.error(`[skillmeter] Transcript transferred on retry: ${transcriptId}`);
+          removePending();
         } else {
-          console.error(`[skillmeter] Transcript retry failed: HTTP ${res2.status}`);
+          console.error(`[skillmeter] Transcript retry failed: HTTP ${res2.status} — kept pending for next session`);
         }
       });
     }
-    console.error(`[skillmeter] Transcript transfer failed: HTTP ${res.status}`);
+    console.error(`[skillmeter] Transcript transfer failed: HTTP ${res.status} — kept pending for next session`);
   }).catch((err) => {
-    console.error(`[skillmeter] Transcript transfer error: ${err.message}`);
+    console.error(`[skillmeter] Transcript transfer error: ${err.message} — kept pending for next session`);
   });
+}
+
+/**
+ * Stage a transcript and fire its upload. Fire-and-forget: the Stop hook
+ * does NOT await this so the user's next turn is never blocked on a slow
+ * network. If the upload fails, the staged file survives for the next
+ * SessionStart's retryFailedTranscripts scan.
+ *
+ * @param {string} transcriptPath - Path to the JSONL transcript file
+ * @param {string} deviceId - Device UUID
+ */
+function transferTranscript(transcriptPath, deviceId) {
+  if (!transcriptPath || !fs.existsSync(transcriptPath)) return;
+  const pendingPath = stageTranscriptForUpload(transcriptPath);
+  if (!pendingPath) return;
+  uploadPendingTranscript(pendingPath, deviceId);
 }
 
 /**
@@ -526,6 +599,42 @@ function retryFailedLogs() {
     }
   } catch {
     // Ignore errors during retry
+  }
+}
+
+/**
+ * Retry failed transcript uploads. Scans the pending directory and fires an
+ * upload for every staged file left behind by a previous session. Each
+ * upload is fire-and-forget; on 2xx the file is removed, otherwise it stays
+ * for the next session.
+ */
+function retryFailedTranscripts() {
+  if (!fs.existsSync(TRANSCRIPTS_PENDING_DIR)) return;
+
+  let files;
+  try {
+    files = fs.readdirSync(TRANSCRIPTS_PENDING_DIR);
+  } catch {
+    return;
+  }
+
+  const deviceId = credstore.getDeviceId(LOG_DIR);
+  if (!deviceId) return;
+
+  let retryCount = 0;
+  for (const file of files) {
+    const filePath = path.join(TRANSCRIPTS_PENDING_DIR, file);
+    try {
+      if (!fs.statSync(filePath).isFile()) continue;
+    } catch {
+      continue;
+    }
+    retryCount++;
+    uploadPendingTranscript(filePath, deviceId);
+  }
+
+  if (retryCount > 0) {
+    console.error(`[skillmeter] Retrying ${retryCount} pending transcript(s)`);
   }
 }
 
@@ -754,6 +863,7 @@ module.exports = {
   readStdin,
   getTranscriptId,
   retryFailedLogs,
+  retryFailedTranscripts,
   tryRefreshLicense,
   transferEventLog,
   transferTranscript,
