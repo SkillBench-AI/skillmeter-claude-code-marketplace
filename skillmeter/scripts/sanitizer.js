@@ -35,11 +35,25 @@ function sanitizeTranscript(transcriptPath, hashSalt) {
   const raw = fs.readFileSync(transcriptPath, "utf8");
   const lines = raw.split("\n");
   const output = [];
+  let malformed = 0;
 
   for (const line of lines) {
     if (!line) continue;
-    const obj = JSON.parse(line);
-    output.push(JSON.stringify(sanitizeLine(obj, hashSalt)));
+    // JSONL written by a crashing or concurrent writer can include a
+    // trailing partial line or embedded bad bytes. Drop only the offending
+    // line so one corrupt entry doesn't lose the whole transcript.
+    try {
+      const obj = JSON.parse(line);
+      output.push(JSON.stringify(sanitizeLine(obj, hashSalt)));
+    } catch {
+      malformed++;
+    }
+  }
+
+  if (malformed > 0) {
+    process.stderr.write(
+      `[skillmeter] transcript: dropped ${malformed} malformed line(s) during sanitize\n`
+    );
   }
 
   return Buffer.from(output.join("\n") + "\n", "utf8");

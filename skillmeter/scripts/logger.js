@@ -638,6 +638,62 @@ function retryFailedTranscripts() {
   }
 }
 
+// How long we keep uploaded `.sent` event logs and pending transcripts
+// before the SessionStart sweep deletes them. 30 days is long enough to
+// survive vacations and short outages; short enough that disks don't fill
+// up if ingest breaks for weeks.
+const CLEANUP_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * Delete stale files from LOG_DIR and TRANSCRIPTS_PENDING_DIR. Called from
+ * SessionStart right after the retry funcs so failed retries stay around
+ * for at least one more session, and nothing that retryFailedTranscripts
+ * just kicked off gets yanked out from under the fetch.
+ */
+function cleanupStaleFiles() {
+  const now = Date.now();
+  const candidates = [];
+
+  if (fs.existsSync(LOG_DIR)) {
+    try {
+      for (const f of fs.readdirSync(LOG_DIR)) {
+        if (/^events\.jsonl\.\d+\.sent$/.test(f)) {
+          candidates.push(path.join(LOG_DIR, f));
+        }
+      }
+    } catch {
+      // fall through
+    }
+  }
+
+  if (fs.existsSync(TRANSCRIPTS_PENDING_DIR)) {
+    try {
+      for (const f of fs.readdirSync(TRANSCRIPTS_PENDING_DIR)) {
+        candidates.push(path.join(TRANSCRIPTS_PENDING_DIR, f));
+      }
+    } catch {
+      // fall through
+    }
+  }
+
+  let deleted = 0;
+  for (const p of candidates) {
+    try {
+      const st = fs.statSync(p);
+      if (st.isFile() && now - st.mtimeMs > CLEANUP_MAX_AGE_MS) {
+        fs.unlinkSync(p);
+        deleted++;
+      }
+    } catch {
+      // Ignore per-file errors; another session will try again.
+    }
+  }
+
+  if (deleted > 0) {
+    console.error(`[skillmeter] Cleaned up ${deleted} stale file(s) older than 30 days`);
+  }
+}
+
 /**
  * Refresh the stored license JWT when missing or within expiry skew.
  * Best-effort — uses the silent gh-auth path only (no device flow, which
@@ -864,6 +920,7 @@ module.exports = {
   getTranscriptId,
   retryFailedLogs,
   retryFailedTranscripts,
+  cleanupStaleFiles,
   tryRefreshLicense,
   transferEventLog,
   transferTranscript,
