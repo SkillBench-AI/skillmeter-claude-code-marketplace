@@ -1,38 +1,63 @@
 #!/usr/bin/env node
 /**
- * Enhanced structured logging utility for skillmeter hooks
- * Outputs NDJSON (newline-delimited JSON) for easy backend parsing
+ * Hook orchestrator + re-export façade.
+ *
+ * The bulk of the plugin runtime is split into focused modules under
+ * `lib/`: sanitisation, JWT handling, project settings, repo-scope
+ * decisions, and the upload/retry/cleanup transport layer. This file
+ * keeps only:
+ *
+ *   - the `runHook` lifecycle that every hook script drives,
+ *   - the structured-log sink (`logInfo`, `logStructured`),
+ *   - small wrappers around credstore that pin `LOG_DIR`,
+ *   - a handful of re-exports so the public import surface stays
+ *     identical (every hook script imports via this file).
+ *
+ * If you're adding new transfer / sanitisation / JWT logic, put it in
+ * the relevant `lib/` module — don't grow this file back into a junk
+ * drawer.
  */
 
-const crypto = require("crypto");
-const { execSync } = require("child_process");
 const fs = require("fs");
-const fsp = require("fs").promises;
 const path = require("path");
-const zlib = require("zlib");
-const { promisify } = require("util");
-const { sanitizeTranscript } = require("./sanitizer");
+
 const credstore = require("./credstore");
 
-// Async gzip for transcript uploads — keeps the hook's event loop responsive
-// while compressing multi-MB transcripts. Sync variants are still used for
-// small event-log payloads where the latency is negligible.
-const gzipAsync = promisify(zlib.gzip);
+const paths = require("./lib/paths");
+const { PLUGIN_ROOT, LOG_DIR, LOG_FILE, TRANSCRIPTS_PENDING_DIR, PLUGIN_VERSION } = paths;
 
-// Configuration
-const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, "..");
-const LOG_DIR = path.join(PLUGIN_ROOT, "logs");
-const LOG_FILE = path.join(LOG_DIR, "events.jsonl");
-// Transcripts that failed to upload get parked here for retry on next session.
-const TRANSCRIPTS_PENDING_DIR = path.join(LOG_DIR, "transcripts", "pending");
-const PLUGIN_VERSION = (() => {
-  try {
-    const pkg = JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, ".claude-plugin", "plugin.json"), "utf8"));
-    return pkg.version || "unknown";
-  } catch {
-    return "unknown";
-  }
-})();
+const jwt = require("./lib/jwt");
+const { decodeJwtPayload, isJwtExpired, getEndpointFromToken } = jwt;
+
+const sanitize = require("./lib/sanitize");
+const { hashHmac, sanitizeToolData, sanitizeTranscript } = sanitize;
+
+const settings = require("./lib/settings");
+const {
+  readSettingsFile,
+  getTelemetryOptIn,
+  saveTelemetryOptIn,
+  getRepoScopeSettings,
+} = settings;
+
+const repoScope = require("./lib/repo-scope");
+const { getRepoScopeDecision } = repoScope;
+
+const transfer = require("./lib/transfer");
+const {
+  transferEventLog,
+  transferTranscript,
+  flushEventLog,
+  flushAndTransfer,
+  retryFailedLogs,
+  retryFailedTranscripts,
+  cleanupStaleFiles,
+} = transfer;
+
+// ---------------------------------------------------------------------------
+// Credstore wrappers — every caller in this file uses LOG_DIR as the migration
+// anchor, so pin it here rather than repeat it everywhere.
+// ---------------------------------------------------------------------------
 
 function getDeviceId() {
   return credstore.getDeviceId(LOG_DIR);
@@ -46,683 +71,20 @@ function getLicenseToken() {
   return credstore.getLicenseToken(LOG_DIR);
 }
 
-/**
- * Decode the payload section of a JWT token (without signature verification)
- * @param {string} token - JWT token string
- * @returns {object|null} Decoded payload or null on failure
- */
-function decodeJwtPayload(token) {
-  try {
-    const parts = token.split(".");
-    if (parts.length !== 3) return null;
-    const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
-    return JSON.parse(Buffer.from(base64, "base64").toString("utf8"));
-  } catch {
-    return null;
-  }
-}
+// ---------------------------------------------------------------------------
+// Structured event log — the per-event NDJSON written to events.jsonl. The
+// transport layer in lib/transfer.js handles uploading; this is just the sink.
+// ---------------------------------------------------------------------------
 
-// 30-second grace window tolerates minor clock skew between client and server.
-const JWT_EXPIRY_GRACE_SECONDS = 30;
-
-/**
- * Return true when the token's `exp` claim is already past (with a small
- * grace window). A missing/undecodable token is treated as NOT expired —
- * callers already guard on token presence.
- */
-function isJwtExpired(token) {
-  if (!token) return false;
-  const payload = decodeJwtPayload(token);
-  if (!payload || typeof payload.exp !== "number") return false;
-  return payload.exp < Math.floor(Date.now() / 1000) + JWT_EXPIRY_GRACE_SECONDS;
-}
-
-// Emergency override: route all telemetry to the Andela tenant API regardless
-// of JWT state. See PR for context — JWT-issued endpoints are misrouted and
-// the license-required guard is temporarily lifted to keep telemetry flowing.
-const DEFAULT_ENDPOINT = "https://api-meter-andela.skillbench.com";
-
-/**
- * Return the telemetry endpoint URL.
- * Currently hardcoded to DEFAULT_ENDPOINT — the JWT telemetry_endpoint claim
- * is ignored during the emergency routing override.
- * @returns {string} Endpoint URL (always non-null)
- */
-function getEndpointFromToken() {
-  return DEFAULT_ENDPOINT;
-}
-
-function readSettingsFile(cwd) {
-  try {
-    const settingsPath = path.join(cwd, ".claude", "settings.local.json");
-    if (!fs.existsSync(settingsPath)) return null;
-    return JSON.parse(fs.readFileSync(settingsPath, "utf8"));
-  } catch {
-    return null;
-  }
-}
-
-function getRepoScopeSettings(cwd) {
-  const skillmeterSettings = readSettingsFile(cwd)?.skillmeter ?? {};
-  return {
-    enabled: skillmeterSettings.repoScope?.enabled === true,
-    allowedGitHubOrgs: Array.isArray(skillmeterSettings.repoScope?.allowedGitHubOrgs)
-      ? skillmeterSettings.repoScope.allowedGitHubOrgs
-          .map((org) => String(org).trim().toLowerCase())
-          .filter(Boolean)
-      : [],
-    includeUnapprovedRepos:
-      skillmeterSettings.repoScope?.includeUnapprovedRepos === true,
-  };
-}
-
-/**
- * Hash a string using HMAC-SHA256 with salt (first 12 chars)
- * Matches VS Code extension's HashingService.hash()
- * @param {string} str - String to hash
- * @param {string} salt - HMAC salt
- * @returns {string} First 12 characters of HMAC-SHA256 hash
- */
-function hashHmac(str, salt) {
-  if (!str || !salt) return "";
-  return crypto.createHmac("sha256", salt).update(str).digest("hex").slice(0, 12);
-}
-
-function extractGitHubOrgFromRemote(remoteUrl) {
-  if (!remoteUrl || typeof remoteUrl !== "string") return "";
-
-  const trimmed = remoteUrl.trim();
-  const sshMatch = trimmed.match(/^git@github\.com:([^/]+)\/.+?(?:\.git)?$/i);
-  if (sshMatch) return sshMatch[1].toLowerCase();
-
-  const httpsMatch = trimmed.match(
-    /^(?:ssh:\/\/)?(?:git@)?github\.com[:/]([^/]+)\/.+?(?:\.git)?$/i
-  );
-  if (httpsMatch) return httpsMatch[1].toLowerCase();
-
-  try {
-    const normalized = trimmed.startsWith("http")
-      ? trimmed
-      : trimmed.replace(/^ssh:\/\//i, "https://");
-    const url = new URL(normalized);
-    if (url.hostname.toLowerCase() !== "github.com") return "";
-    return (url.pathname.split("/").filter(Boolean)[0] || "").toLowerCase();
-  } catch {
-    return "";
-  }
-}
-
-function findGitRoot(startPath) {
-  if (!startPath || typeof startPath !== "string") return "";
-
-  let currentPath = path.resolve(startPath);
-  try {
-    if (!fs.statSync(currentPath).isDirectory()) {
-      currentPath = path.dirname(currentPath);
-    }
-  } catch {
-    currentPath = path.dirname(currentPath);
-  }
-
-  while (true) {
-    const gitPath = path.join(currentPath, ".git");
-    if (fs.existsSync(gitPath)) return currentPath;
-
-    const parent = path.dirname(currentPath);
-    if (parent === currentPath) return "";
-    currentPath = parent;
-  }
-}
-
-function resolveGitDir(repoRoot) {
-  if (!repoRoot) return "";
-
-  const gitPath = path.join(repoRoot, ".git");
-  try {
-    const stats = fs.statSync(gitPath);
-    if (stats.isDirectory()) return gitPath;
-    if (!stats.isFile()) return "";
-
-    const content = fs.readFileSync(gitPath, "utf8");
-    const match = content.match(/^gitdir:\s*(.+)\s*$/im);
-    return match ? path.resolve(repoRoot, match[1]) : "";
-  } catch {
-    return "";
-  }
-}
-
-function getRemoteUrlsForRepo(repoRoot) {
-  const gitDir = resolveGitDir(repoRoot);
-  if (!gitDir) return [];
-
-  try {
-    const configPath = path.join(gitDir, "config");
-    const configContent = fs.readFileSync(configPath, "utf8");
-    const urls = [];
-    let inRemoteSection = false;
-
-    for (const line of configContent.split(/\r?\n/)) {
-      if (/^\s*\[remote ".+"\]\s*$/.test(line)) {
-        inRemoteSection = true;
-        continue;
-      }
-      if (/^\s*\[.+\]\s*$/.test(line)) {
-        inRemoteSection = false;
-        continue;
-      }
-      if (!inRemoteSection) continue;
-
-      const urlMatch = line.match(/^\s*url\s*=\s*(.+?)\s*$/);
-      if (urlMatch) urls.push(urlMatch[1]);
-    }
-
-    return urls;
-  } catch {
-    return [];
-  }
-}
-
-function getRepoScopeDecision(cwd) {
-  const repoScope = getRepoScopeSettings(cwd);
-  if (!repoScope.enabled) {
-    return { allowed: true, scope: "unscoped", classification: "disabled" };
-  }
-
-  if (repoScope.allowedGitHubOrgs.length === 0) {
-    if (repoScope.includeUnapprovedRepos) {
-      return {
-        allowed: true,
-        scope: "include_unapproved",
-        classification: "include_unapproved_repos",
-      };
-    }
-    return {
-      allowed: false,
-      scope: "unknown",
-      classification: "no_allowed_orgs_configured",
-    };
-  }
-
-  const repoRoot = findGitRoot(cwd);
-  if (!repoRoot) {
-    return { allowed: false, scope: "unknown", classification: "no_repository" };
-  }
-
-  const remoteOrgs = getRemoteUrlsForRepo(repoRoot)
-    .map((remoteUrl) => extractGitHubOrgFromRemote(remoteUrl))
-    .filter(Boolean);
-
-  if (remoteOrgs.length === 0) {
-    return {
-      allowed: false,
-      scope: "unknown",
-      classification: "no_github_remote",
-      repoRoot,
-    };
-  }
-
-  const matchingOrg = remoteOrgs.find((org) =>
-    repoScope.allowedGitHubOrgs.includes(org)
-  );
-  if (matchingOrg) {
-    return {
-      allowed: true,
-      scope: "approved",
-      classification: "github_org_match",
-      repoRoot,
-      remoteOrg: matchingOrg,
-    };
-  }
-
-  return {
-    allowed: repoScope.includeUnapprovedRepos,
-    scope: "external",
-    classification: repoScope.includeUnapprovedRepos
-      ? "github_org_mismatch_opt_in"
-      : "github_org_mismatch",
-    repoRoot,
-    remoteOrg: remoteOrgs[0],
-  };
-}
-
-// Keys in tool_input/tool_response whose values contain sensitive paths and should be hashed
-const PATH_KEYS = new Set(["file_path", "filePath", "path", "command"]);
-
-/**
- * Sanitize a tool object by hashing path values
- * @param {object} obj - tool_input or tool_response object
- * @param {string} hashSalt - HMAC salt
- * @returns {object} Sanitized object
- */
-function sanitizeToolData(obj, hashSalt) {
-  if (!obj || typeof obj !== "object") return obj;
-
-  const result = {};
-  for (const [key, val] of Object.entries(obj)) {
-    if (PATH_KEYS.has(key) && typeof val === "string") {
-      result[key] = hashHmac(val, hashSalt);
-    } else {
-      result[key] = val;
-    }
-  }
-  return result;
-}
-
-/**
- * Get ISO 8601 timestamp with milliseconds
- * @returns {string} Timestamp string
- */
 function getTimestamp() {
   return new Date().toISOString();
 }
 
-// Transfer configuration
-const EVENT_TIMEOUT = parseInt(process.env.SKILLMETER_TIMEOUT || "10", 10) * 1000;
-const TRANSCRIPT_TIMEOUT = 30_000;
-
-/**
- * Upload an event log file to the backend via fetch + gzip
- * Returns a Promise that resolves after the fetch completes.
- * On success (2xx), renames the file to .sent
- * @param {string} logFile - Path to the log file
- * @returns {Promise<void>}
- */
-function transferEventLog(logFile) {
-  if (!logFile || !fs.existsSync(logFile)) return Promise.resolve();
-
-  const endpoint = getEndpointFromToken();
-  const storedToken = getLicenseToken();
-  // Proactive: if the cached JWT is already past its exp, don't send it.
-  // PR #35 made Authorization optional server-side, so the request still
-  // succeeds without it.
-  const initialToken = storedToken && !isJwtExpired(storedToken) ? storedToken : null;
-  if (storedToken && !initialToken) {
-    console.error(`[skillmeter] Event log: dropping expired license JWT before send`);
-  }
-
-  const fileContent = fs.readFileSync(logFile);
-  const compressed = zlib.gzipSync(fileContent);
-  const baseName = path.basename(logFile);
-
-  const buildHeaders = (token) => {
-    const h = {
-      "Content-Type": "application/x-ndjson",
-      "Content-Encoding": "gzip",
-      "X-Plugin-Version": PLUGIN_VERSION,
-    };
-    if (token) h["Authorization"] = `Bearer ${token}`;
-    return h;
-  };
-
-  const doPost = (token) =>
-    fetch(`${endpoint}/logs/claude`, {
-      method: "POST",
-      headers: buildHeaders(token),
-      body: compressed,
-      signal: AbortSignal.timeout(EVENT_TIMEOUT),
-    });
-
-  const markSent = () => {
-    try { fs.renameSync(logFile, `${logFile}.sent`); } catch {}
-  };
-
-  console.error(`[skillmeter] Transferring event log: ${baseName} (${compressed.length} bytes gzipped)`);
-
-  return doPost(initialToken)
-    .then((res) => {
-      if (res.ok) {
-        console.error(`[skillmeter] Event log transferred: ${baseName}`);
-        markSent();
-        return;
-      }
-      // Reactive: server rejected our Authorization header — clear the bad
-      // token so subsequent requests don't reuse it, then retry once without
-      // auth.
-      if (initialToken && (res.status === 401 || res.status === 403)) {
-        console.error(`[skillmeter] Event log auth rejected (HTTP ${res.status}), clearing license and retrying without auth`);
-        try { credstore.setLicenseToken(""); } catch {}
-        return doPost(null).then((res2) => {
-          if (res2.ok) {
-            console.error(`[skillmeter] Event log transferred on retry: ${baseName}`);
-            markSent();
-          } else {
-            console.error(`[skillmeter] Event log retry failed: HTTP ${res2.status}`);
-          }
-        });
-      }
-      console.error(`[skillmeter] Event log transfer failed: HTTP ${res.status}`);
-    })
-    .catch((err) => {
-      console.error(`[skillmeter] Event log transfer error: ${err.message}`);
-    });
+function getTranscriptId(transcriptPath) {
+  if (!transcriptPath) return "";
+  return path.basename(transcriptPath);
 }
 
-/**
- * Stage a transcript for upload: sanitize the JSONL content and write it to
- * the pending directory. The staged file is the source of truth for both the
- * initial upload attempt and any later retry — we no longer depend on the
- * original transcript path existing.
- *
- * Returns the pending file path on success, or null when staging fails.
- * @param {string} transcriptPath - Path to the original JSONL transcript
- * @returns {string|null}
- */
-function stageTranscriptForUpload(transcriptPath) {
-  try {
-    fs.mkdirSync(TRANSCRIPTS_PENDING_DIR, { recursive: true });
-  } catch (err) {
-    console.error(`[skillmeter] Transcript staging failed (mkdir): ${err.message}`);
-    return null;
-  }
-
-  const transcriptId = path.basename(transcriptPath);
-  const pendingPath = path.join(TRANSCRIPTS_PENDING_DIR, transcriptId);
-
-  try {
-    const hashSalt = getOrCreateHashSalt();
-    const sanitized = hashSalt
-      ? sanitizeTranscript(transcriptPath, hashSalt)
-      : fs.readFileSync(transcriptPath);
-    // Overwrite previous snapshots of the same transcript — a long session
-    // re-stages on every Stop and we always want the latest lines.
-    fs.writeFileSync(pendingPath, sanitized);
-    return pendingPath;
-  } catch (err) {
-    console.error(`[skillmeter] Transcript staging failed: ${err.message}`);
-    return null;
-  }
-}
-
-/**
- * Upload a staged pending transcript file. On 2xx, deletes the pending file.
- * On failure, leaves it on disk for the next SessionStart retry. Fire-and-
- * forget — caller does NOT await so the Stop hook doesn't block the user.
- *
- * @param {string} pendingPath - Absolute path under TRANSCRIPTS_PENDING_DIR
- * @param {string} deviceId - Device UUID
- */
-async function uploadPendingTranscript(pendingPath, deviceId) {
-  if (!pendingPath || !fs.existsSync(pendingPath)) return;
-
-  const endpoint = getEndpointFromToken();
-  const storedToken = getLicenseToken();
-  const initialToken = storedToken && !isJwtExpired(storedToken) ? storedToken : null;
-  if (storedToken && !initialToken) {
-    console.error(`[skillmeter] Transcript: dropping expired license JWT before send`);
-  }
-
-  const transcriptId = path.basename(pendingPath);
-
-  let compressed;
-  try {
-    const raw = await fsp.readFile(pendingPath);
-    compressed = await gzipAsync(raw);
-  } catch (err) {
-    console.error(`[skillmeter] Transcript gzip failed for ${transcriptId}: ${err.message}`);
-    return;
-  }
-
-  const buildHeaders = (token) => {
-    const h = {
-      "Content-Type": "application/x-ndjson",
-      "Content-Encoding": "gzip",
-      "X-Device-ID": deviceId,
-      "X-Transcript-ID": transcriptId,
-      "X-Plugin-Version": PLUGIN_VERSION,
-    };
-    if (token) h["Authorization"] = `Bearer ${token}`;
-    return h;
-  };
-
-  const doPost = (token) =>
-    fetch(`${endpoint}/logs/claude/transcript`, {
-      method: "POST",
-      headers: buildHeaders(token),
-      body: compressed,
-      signal: AbortSignal.timeout(TRANSCRIPT_TIMEOUT),
-    });
-
-  const removePending = () => {
-    try { fs.unlinkSync(pendingPath); } catch {}
-  };
-
-  console.error(`[skillmeter] Transferring transcript: ${transcriptId} (${compressed.length} bytes gzipped)`);
-
-  doPost(initialToken).then((res) => {
-    if (res.ok) {
-      console.error(`[skillmeter] Transcript transferred: ${transcriptId}`);
-      removePending();
-      return;
-    }
-    if (initialToken && (res.status === 401 || res.status === 403)) {
-      console.error(`[skillmeter] Transcript auth rejected (HTTP ${res.status}), clearing license and retrying without auth`);
-      try { credstore.setLicenseToken(""); } catch {}
-      return doPost(null).then((res2) => {
-        if (res2.ok) {
-          console.error(`[skillmeter] Transcript transferred on retry: ${transcriptId}`);
-          removePending();
-        } else {
-          console.error(`[skillmeter] Transcript retry failed: HTTP ${res2.status} — kept pending for next session`);
-        }
-      });
-    }
-    console.error(`[skillmeter] Transcript transfer failed: HTTP ${res.status} — kept pending for next session`);
-  }).catch((err) => {
-    console.error(`[skillmeter] Transcript transfer error: ${err.message} — kept pending for next session`);
-  });
-}
-
-/**
- * Stage a transcript and fire its upload. Fire-and-forget: the Stop hook
- * does NOT await this so the user's next turn is never blocked on a slow
- * network. If the upload fails, the staged file survives for the next
- * SessionStart's retryFailedTranscripts scan.
- *
- * @param {string} transcriptPath - Path to the JSONL transcript file
- * @param {string} deviceId - Device UUID
- */
-function transferTranscript(transcriptPath, deviceId) {
-  if (!transcriptPath || !fs.existsSync(transcriptPath)) return;
-  const pendingPath = stageTranscriptForUpload(transcriptPath);
-  if (!pendingPath) return;
-  uploadPendingTranscript(pendingPath, deviceId);
-}
-
-/**
- * Rotate the current event log and transfer the shared event batch.
- * Returns a Promise that resolves after the transfer completes.
- * @returns {Promise<void>}
- */
-function flushEventLog() {
-  if (fs.existsSync(LOG_FILE)) {
-    try {
-      const sendingFile = `${LOG_FILE}.${Date.now()}`;
-      fs.renameSync(LOG_FILE, sendingFile);
-      console.error(`[skillmeter] Rotated event log: ${path.basename(sendingFile)}`);
-      return transferEventLog(sendingFile);
-    } catch (err) {
-      console.error(`[skillmeter] Event log rotation failed: ${err.message}`);
-      return Promise.resolve();
-    }
-  } else {
-    console.error(`[skillmeter] No event log to flush`);
-    return Promise.resolve();
-  }
-}
-
-/**
- * Rotate the current event log and transfer both events and transcript.
- * Shared afterLog handler for Stop and SessionEnd hooks.
- * @param {object} input - Hook input (needs transcript_path)
- * @param {string} deviceId - Device UUID
- * @returns {Promise<void>}
- */
-function flushAndTransfer(input, deviceId) {
-  const eventLogPromise = flushEventLog();
-
-  // Transfer transcript
-  if (input.transcript_path && fs.existsSync(input.transcript_path)) {
-    transferTranscript(input.transcript_path, deviceId);
-  } else {
-    console.error(`[skillmeter] No transcript to transfer`);
-  }
-
-  return eventLogPromise;
-}
-
-/**
- * Retry failed event log transfers
- * Finds files matching events.jsonl.* and calls transferEventLog for each
- */
-function retryFailedLogs() {
-  if (!fs.existsSync(LOG_DIR)) return;
-
-  try {
-    const files = fs.readdirSync(LOG_DIR);
-    let retryCount = 0;
-
-    for (const file of files) {
-      const filePath = path.join(LOG_DIR, file);
-
-      // Skip directories
-      if (!fs.statSync(filePath).isFile()) continue;
-
-      // Match events.jsonl.{timestamp}
-      if (/^events\.jsonl\.\d+$/.test(file)) {
-        retryCount++;
-        transferEventLog(filePath);
-      }
-    }
-
-    if (retryCount > 0) {
-      console.error(`[skillmeter] Retrying ${retryCount} failed log file(s)`);
-    }
-  } catch {
-    // Ignore errors during retry
-  }
-}
-
-/**
- * Retry failed transcript uploads. Scans the pending directory and fires an
- * upload for every staged file left behind by a previous session. Each
- * upload is fire-and-forget; on 2xx the file is removed, otherwise it stays
- * for the next session.
- */
-function retryFailedTranscripts() {
-  if (!fs.existsSync(TRANSCRIPTS_PENDING_DIR)) return;
-
-  let files;
-  try {
-    files = fs.readdirSync(TRANSCRIPTS_PENDING_DIR);
-  } catch {
-    return;
-  }
-
-  const deviceId = credstore.getDeviceId(LOG_DIR);
-  if (!deviceId) return;
-
-  let retryCount = 0;
-  for (const file of files) {
-    const filePath = path.join(TRANSCRIPTS_PENDING_DIR, file);
-    try {
-      if (!fs.statSync(filePath).isFile()) continue;
-    } catch {
-      continue;
-    }
-    retryCount++;
-    uploadPendingTranscript(filePath, deviceId);
-  }
-
-  if (retryCount > 0) {
-    console.error(`[skillmeter] Retrying ${retryCount} pending transcript(s)`);
-  }
-}
-
-// How long we keep uploaded `.sent` event logs and pending transcripts
-// before the SessionStart sweep deletes them. 30 days is long enough to
-// survive vacations and short outages; short enough that disks don't fill
-// up if ingest breaks for weeks.
-const CLEANUP_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
-
-/**
- * Delete stale files from LOG_DIR and TRANSCRIPTS_PENDING_DIR. Called from
- * SessionStart right after the retry funcs so failed retries stay around
- * for at least one more session, and nothing that retryFailedTranscripts
- * just kicked off gets yanked out from under the fetch.
- */
-function cleanupStaleFiles() {
-  const now = Date.now();
-  const candidates = [];
-
-  if (fs.existsSync(LOG_DIR)) {
-    try {
-      for (const f of fs.readdirSync(LOG_DIR)) {
-        if (/^events\.jsonl\.\d+\.sent$/.test(f)) {
-          candidates.push(path.join(LOG_DIR, f));
-        }
-      }
-    } catch {
-      // fall through
-    }
-  }
-
-  if (fs.existsSync(TRANSCRIPTS_PENDING_DIR)) {
-    try {
-      for (const f of fs.readdirSync(TRANSCRIPTS_PENDING_DIR)) {
-        candidates.push(path.join(TRANSCRIPTS_PENDING_DIR, f));
-      }
-    } catch {
-      // fall through
-    }
-  }
-
-  let deleted = 0;
-  for (const p of candidates) {
-    try {
-      const st = fs.statSync(p);
-      if (st.isFile() && now - st.mtimeMs > CLEANUP_MAX_AGE_MS) {
-        fs.unlinkSync(p);
-        deleted++;
-      }
-    } catch {
-      // Ignore per-file errors; another session will try again.
-    }
-  }
-
-  if (deleted > 0) {
-    console.error(`[skillmeter] Cleaned up ${deleted} stale file(s) older than 30 days`);
-  }
-}
-
-/**
- * Refresh the stored license JWT when missing or within expiry skew.
- * Best-effort — uses the silent gh-auth path only (no device flow, which
- * requires user interaction and can't run inside a hook). Returns the
- * usable token, or null when no refresh was possible.
- *
- * Mirrors the VS Code extension's auto-refresh on service startup.
- */
-async function tryRefreshLicense(deviceId) {
-  const current = getLicenseToken();
-  if (current && !credstore.isLicenseTokenExpired(current)) {
-    return current;
-  }
-  if (!deviceId) return null;
-  try {
-    return await credstore.trySilentGhActivate(deviceId);
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Write structured JSON log entry
- * @param {string} level - Log level (info, error, warn, debug)
- * @param {string} event - Hook event name
- * @param {string} sessionId - Session ID
- * @param {object} data - Event data
- * @param {string} deviceId - Device UUID
- */
 function logStructured(level, event, sessionId, data, deviceId) {
   if (!deviceId) return;
 
@@ -740,27 +102,15 @@ function logStructured(level, event, sessionId, data, deviceId) {
   fs.appendFileSync(LOG_FILE, JSON.stringify(logEntry) + "\n");
 }
 
-/**
- * Extract the UUID filename from a transcript path
- * e.g. "/Users/.../.claude/projects/.../00893aaf-19fa-41d2-8238-13269b9b3ca0.jsonl" -> "00893aaf-19fa-41d2-8238-13269b9b3ca0.jsonl"
- * @param {string} transcriptPath - Full transcript path
- * @returns {string} UUID filename or empty string
- */
-function getTranscriptId(transcriptPath) {
-  if (!transcriptPath) return "";
-  return path.basename(transcriptPath);
-}
+const logInfo = (event, sessionId, data, deviceId) =>
+  logStructured("info", event, sessionId, data, deviceId);
 
-// Convenience logging function
-const logInfo = (event, sessionId, data, deviceId) => logStructured("info", event, sessionId, data, deviceId);
+// ---------------------------------------------------------------------------
+// Hook I/O
+// ---------------------------------------------------------------------------
 
-/**
- * Read JSON from stdin
- * @returns {Promise<object>} Parsed JSON object
- */
 function readStdin() {
   return new Promise((resolve, reject) => {
-    // Check if stdin is a TTY (interactive terminal)
     if (process.stdin.isTTY) {
       resolve(null);
       return;
@@ -780,47 +130,27 @@ function readStdin() {
   });
 }
 
-// ============================================================================
-// Telemetry Opt-In Management
-// ============================================================================
+// ---------------------------------------------------------------------------
+// License refresh — best-effort gh-fallback call for hooks whose license
+// JWT is missing or within the expiry skew.
+// ---------------------------------------------------------------------------
 
-/**
- * Read the telemetry opt-in preference for a given working directory
- * @param {string} cwd - Working directory
- * @returns {boolean|null} true/false if set, null if not yet configured
- */
-function getTelemetryOptIn(cwd) {
+async function tryRefreshLicense(deviceId) {
+  const current = getLicenseToken();
+  if (current && !credstore.isLicenseTokenExpired(current)) {
+    return current;
+  }
+  if (!deviceId) return null;
   try {
-    const content = readSettingsFile(cwd);
-    if (!content) return null;
-    if (!content.skillmeter || typeof content.skillmeter.telemetry !== "boolean") return null;
-    return content.skillmeter.telemetry;
+    return await credstore.trySilentGhActivate(deviceId);
   } catch {
     return null;
   }
 }
 
-/**
- * Save the telemetry opt-in preference for a given working directory
- * Merges with existing settings file content
- * @param {string} cwd - Working directory
- * @param {boolean} value - Opt-in value
- */
-function saveTelemetryOptIn(cwd, value) {
-  const settingsPath = path.join(cwd, ".claude", "settings.local.json");
-  let content = {};
-  try {
-    if (fs.existsSync(settingsPath)) {
-      content = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
-    }
-  } catch {
-    content = {};
-  }
-  content.skillmeter = { ...content.skillmeter, telemetry: value };
-  fs.mkdirSync(path.join(cwd, ".claude"), { recursive: true });
-  fs.writeFileSync(settingsPath, JSON.stringify(content, null, 2) + "\n");
-}
-
+// ---------------------------------------------------------------------------
+// Hook lifecycle — called by every script under scripts/*.js
+// ---------------------------------------------------------------------------
 
 /**
  * Common hook runner — handles all boilerplate shared by every hook script.
@@ -853,11 +183,9 @@ async function runHook(eventName, buildData, options = {}) {
 
   if (options.checkOptIn) {
     if (!options.checkOptIn(cwd, input)) process.exit(0);
-  } else {
-    if (getTelemetryOptIn(cwd) !== true) {
-      console.error(`[skillmeter] ${eventName}: skipped (telemetry not enabled)`);
-      process.exit(0);
-    }
+  } else if (getTelemetryOptIn(cwd) !== true) {
+    console.error(`[skillmeter] ${eventName}: skipped (telemetry not enabled)`);
+    process.exit(0);
   }
 
   const sessionId = input.session_id || "unknown";
@@ -874,7 +202,7 @@ async function runHook(eventName, buildData, options = {}) {
     );
     if (options.afterSkip) {
       const result = options.afterSkip(input, deviceId);
-      if (result && typeof result.then === 'function') {
+      if (result && typeof result.then === "function") {
         await result;
       }
     }
@@ -905,34 +233,61 @@ async function runHook(eventName, buildData, options = {}) {
   if (options.afterLog) options.afterLog(input, deviceId);
 }
 
+// ---------------------------------------------------------------------------
+// Public API — re-exports preserve the historical import surface so hook
+// scripts and the telemetry.js CLI can keep destructuring from logger.js.
+// New callers should import directly from the relevant lib/* module.
+// ---------------------------------------------------------------------------
+
 module.exports = {
-  getDeviceId,
-  getOrCreateHashSalt,
-  getLicenseToken,
-  decodeJwtPayload,
-  getEndpointFromToken,
-  hashHmac,
-  sanitizeToolData,
+  // Core
+  runHook,
+  readStdin,
   getTimestamp,
   logStructured,
   logInfo,
-  readStdin,
   getTranscriptId,
-  retryFailedLogs,
-  retryFailedTranscripts,
-  cleanupStaleFiles,
-  tryRefreshLicense,
-  transferEventLog,
-  transferTranscript,
-  flushEventLog,
-  flushAndTransfer,
-  getTelemetryOptIn,
-  saveTelemetryOptIn,
-  getRepoScopeSettings,
-  getRepoScopeDecision,
-  runHook,
+
+  // Credstore wrappers
+  getDeviceId,
+  getOrCreateHashSalt,
+  getLicenseToken,
+
+  // Paths / metadata
   PLUGIN_ROOT,
   PLUGIN_VERSION,
   LOG_DIR,
   LOG_FILE,
+  TRANSCRIPTS_PENDING_DIR,
+
+  // License refresh
+  tryRefreshLicense,
+
+  // Re-exports from lib/jwt
+  decodeJwtPayload,
+  isJwtExpired,
+  getEndpointFromToken,
+
+  // Re-exports from lib/sanitize
+  hashHmac,
+  sanitizeToolData,
+  sanitizeTranscript,
+
+  // Re-exports from lib/settings
+  readSettingsFile,
+  getTelemetryOptIn,
+  saveTelemetryOptIn,
+  getRepoScopeSettings,
+
+  // Re-exports from lib/repo-scope
+  getRepoScopeDecision,
+
+  // Re-exports from lib/transfer
+  transferEventLog,
+  transferTranscript,
+  flushEventLog,
+  flushAndTransfer,
+  retryFailedLogs,
+  retryFailedTranscripts,
+  cleanupStaleFiles,
 };
