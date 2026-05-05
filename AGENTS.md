@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This repository contains the `skillmeter/` Claude Code plugin. Runtime hook handlers live in `skillmeter/scripts/*.js`; shared logic belongs in `skillmeter/scripts/lib/`. The plugin manifest is `skillmeter/.claude-plugin/plugin.json`, hook wiring is in `skillmeter/hooks/hooks.json`, monitor wiring is in `skillmeter/monitors/monitors.json`, and user-facing slash-command skills live under `skillmeter/skills/sk-*`. CLI entrypoints are in `skillmeter/bin/`. Local telemetry output is written under `skillmeter/logs/`; avoid committing generated log data.
+This repository contains the `skillmeter/` Claude Code plugin. Runtime hook handlers live in `skillmeter/scripts/*.js`; shared logic belongs in `skillmeter/scripts/lib/`. The plugin manifest is `skillmeter/.claude-plugin/plugin.json`, hook wiring is in `skillmeter/hooks/hooks.json`, monitor wiring is in `skillmeter/monitors/monitors.json`, and user-facing slash-command skills live under `skillmeter/skills/*`. CLI entrypoints are in `skillmeter/bin/`. Local telemetry output is written under `skillmeter/logs/`; avoid committing generated log data.
 
 ## Build, Test, and Development Commands
 
