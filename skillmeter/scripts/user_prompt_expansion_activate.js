@@ -13,6 +13,14 @@ const path = require("path");
 
 const ACTIVATE_COMMAND = path.join(__dirname, "..", "bin", "activate");
 
+// `!`-prefixed instruction the LLM relays to the user. Pasting this into the
+// next prompt makes Claude Code execute the binary in the user's own shell,
+// preserving the interactive TTY the GitHub device flow needs.
+const RUN_INSTRUCTION =
+  `Tell the user to paste the following into their NEXT prompt verbatim ` +
+  `(the leading \`!\` is required — it makes Claude Code run the command ` +
+  `in their shell):\n\n    ! ${ACTIVATE_COMMAND}`;
+
 function readStdin() {
   return new Promise((resolve, reject) => {
     let data = "";
@@ -58,7 +66,7 @@ async function main() {
 
   const deviceId = credstore.getDeviceId();
   if (!deviceId) {
-    addContext(`Activation failed: unable to determine device ID. Run \`${ACTIVATE_COMMAND}\` in your terminal.`);
+    addContext(`Activation failed: unable to determine device ID.\n${RUN_INSTRUCTION}`);
     return;
   }
 
@@ -69,9 +77,9 @@ async function main() {
     return;
   }
 
-  addContext(`Interactive GitHub login is required. Run \`${ACTIVATE_COMMAND}\` in your terminal.`);
+  addContext(`Interactive GitHub login is required.\n${RUN_INSTRUCTION}`);
 }
 
 main().catch((err) => {
-  addContext(`Activation failed: ${err.message}. Run \`${ACTIVATE_COMMAND}\` in your terminal.`);
+  addContext(`Activation failed: ${err.message}.\n${RUN_INSTRUCTION}`);
 });
