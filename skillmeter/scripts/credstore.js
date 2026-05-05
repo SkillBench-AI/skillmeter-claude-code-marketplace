@@ -144,6 +144,75 @@ function setGhFallbackRetryAfter(unixSeconds) {
   _cache = store;
 }
 
+/**
+ * GitHub identities (user login + org logins) the activated user is a member
+ * of. Used by repo-scope to gate telemetry to the user's own repos and the
+ * orgs they belong to. Empty array means "not activated" — gating treats
+ * this as a hard block, not an allow-all.
+ */
+function getAllowedGitHubOrgs() {
+  const store = loadStore();
+  const orgs = store.allowed_github_orgs;
+  if (!Array.isArray(orgs)) return [];
+  return orgs;
+}
+
+function setAllowedGitHubOrgs(orgs) {
+  const store = readStore();
+  const cleaned = Array.isArray(orgs)
+    ? Array.from(
+        new Set(
+          orgs
+            .filter((o) => typeof o === "string")
+            .map((o) => o.trim().toLowerCase())
+            .filter(Boolean)
+        )
+      )
+    : [];
+  store.allowed_github_orgs = cleaned;
+  writeStore(store);
+  _cache = store;
+}
+
+/**
+ * Fetch the activating user's GitHub login + every org they belong to.
+ * Returns an array of lowercase logins suitable for storing via
+ * setAllowedGitHubOrgs. Throws on any HTTP/network failure so the caller
+ * can decide whether to abort activation.
+ */
+async function fetchUserGitHubOrgs(githubToken) {
+  const headers = {
+    "Authorization": `Bearer ${githubToken}`,
+    "Accept": "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+    "User-Agent": "skillmeter-cli",
+  };
+
+  const userRes = await fetch("https://api.github.com/user", {
+    headers,
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!userRes.ok) {
+    throw new Error(`GET /user returned ${userRes.status}`);
+  }
+  const userBody = await userRes.json();
+  const userLogin = typeof userBody?.login === "string" ? userBody.login : "";
+
+  const orgsRes = await fetch("https://api.github.com/user/orgs?per_page=100", {
+    headers,
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!orgsRes.ok) {
+    throw new Error(`GET /user/orgs returned ${orgsRes.status}`);
+  }
+  const orgsBody = await orgsRes.json();
+  const orgLogins = Array.isArray(orgsBody)
+    ? orgsBody.map((org) => (typeof org?.login === "string" ? org.login : ""))
+    : [];
+
+  return [userLogin, ...orgLogins].filter(Boolean);
+}
+
 const ACTIVATE_URL = "https://api.meter.skillbench.com/activate";
 const FAILURE_COOLDOWN = 24 * 60 * 60;
 const TRANSIENT_COOLDOWN = 5 * 60;
@@ -228,9 +297,24 @@ async function trySilentGhActivate(deviceId) {
     return null;
   }
 
+  // Fetch the user's GitHub identities BEFORE persisting the license so
+  // license + orgs land atomically. If the gh CLI's token lacks the
+  // `read:org` scope the fetch fails — we treat that as silent-path
+  // failure and let the device-flow path run, which always requests the
+  // right scopes.
+  let orgs;
+  try {
+    orgs = await fetchUserGitHubOrgs(ghToken);
+  } catch (err) {
+    console.error(`[skillmeter] gh activation failed: cannot fetch GitHub orgs (${err.message})`);
+    setGhFallbackRetryAfter(now + FAILURE_COOLDOWN);
+    return null;
+  }
+
   setLicenseToken(jwt);
+  setAllowedGitHubOrgs(orgs);
   setGhFallbackRetryAfter(0);
-  console.error("[skillmeter] gh activation succeeded");
+  console.error(`[skillmeter] gh activation succeeded (allowed orgs: ${orgs.join(", ") || "none"})`);
   return jwt;
 }
 
@@ -243,6 +327,9 @@ module.exports = {
   LICENSE_EXPIRY_SKEW_SECONDS,
   getGhFallbackRetryAfter,
   setGhFallbackRetryAfter,
+  getAllowedGitHubOrgs,
+  setAllowedGitHubOrgs,
+  fetchUserGitHubOrgs,
   trySilentGhActivate,
   ACTIVATE_URL,
   CRED_FILE,

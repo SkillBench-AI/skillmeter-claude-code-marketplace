@@ -9,18 +9,32 @@
  */
 
 const {
-  getRepoScopeSettings,
   getTelemetryOptIn,
   saveTelemetryOptIn,
 } = require("./logger.js");
+const { getAllowedGitHubOrgs } = require("./credstore.js");
 
 const cwd = process.cwd();
 const action = process.argv[2];
+
+function printOrgState() {
+  const orgs = getAllowedGitHubOrgs();
+  if (orgs.length === 0) {
+    process.stderr.write(
+      "SkillMeter: not activated — telemetry will not fire until you run `/skillmeter:activate`.\n"
+    );
+  } else {
+    process.stderr.write(
+      `SkillMeter: telemetry is gated to repos under: ${orgs.join(", ")}\n`
+    );
+  }
+}
 
 switch (action) {
   case "enable":
     saveTelemetryOptIn(cwd, true);
     process.stderr.write(`SkillMeter: Telemetry enabled for ${cwd}\n`);
+    printOrgState();
     break;
   case "disable":
     saveTelemetryOptIn(cwd, false);
@@ -28,7 +42,6 @@ switch (action) {
     break;
   case "status": {
     const optIn = getTelemetryOptIn(cwd);
-    const repoScope = getRepoScopeSettings(cwd);
     if (optIn === true) {
       process.stderr.write(`SkillMeter: Telemetry is enabled for ${cwd}\n`);
     } else if (optIn === false) {
@@ -36,13 +49,7 @@ switch (action) {
     } else {
       process.stderr.write(`SkillMeter: Telemetry is not configured for ${cwd}\n`);
     }
-    if (repoScope.enabled) {
-      process.stderr.write(
-        `SkillMeter: Repo scope filtering is enabled (allowed orgs: ${repoScope.allowedGitHubOrgs.join(", ") || "none"}; include unapproved repos: ${repoScope.includeUnapprovedRepos})\n`
-      );
-    } else {
-      process.stderr.write("SkillMeter: Repo scope filtering is disabled\n");
-    }
+    printOrgState();
     break;
   }
   default:

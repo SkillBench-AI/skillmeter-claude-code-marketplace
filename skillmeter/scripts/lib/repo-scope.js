@@ -1,6 +1,8 @@
 /**
  * Decide whether an event originating in `cwd` should be captured, based on
- * the GitHub org of the repo's remote(s) and the project's repo-scope config.
+ * the GitHub org/user of the repo's remote(s) and the activated user's
+ * GitHub identities (their own login + org memberships, captured at
+ * `/skillmeter:activate` time).
  *
  * Nothing here shells out to `git`; the plugin walks `.git/config` directly
  * so hooks don't pay a fork-per-event cost.
@@ -8,7 +10,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { getRepoScopeSettings } = require("./settings");
+const { getAllowedGitHubOrgs } = require("../credstore");
 
 /**
  * Extract the GitHub org from a remote URL. Handles:
@@ -126,8 +128,11 @@ function getRemoteUrlsForRepo(repoRoot) {
 }
 
 /**
- * Combine repo-scope settings with the actual remote URLs to decide whether
- * an event from `cwd` is in-scope.
+ * Decide whether an event from `cwd` is in-scope. Telemetry fires only in
+ * repos whose GitHub remote belongs to the activated user's own login or
+ * one of their org memberships (captured at activation time and stored in
+ * credstore). Anything outside that set — including non-git directories
+ * and non-GitHub remotes — is blocked.
  *
  * Result always contains `allowed` (boolean) and `classification` (string);
  * other fields (`scope`, `repoRoot`, `remoteOrg`) are included when
@@ -135,24 +140,9 @@ function getRemoteUrlsForRepo(repoRoot) {
  * decisions after the fact.
  */
 function getRepoScopeDecision(cwd) {
-  const repoScope = getRepoScopeSettings(cwd);
-  if (!repoScope.enabled) {
-    return { allowed: true, scope: "unscoped", classification: "disabled" };
-  }
-
-  if (repoScope.allowedGitHubOrgs.length === 0) {
-    if (repoScope.includeUnapprovedRepos) {
-      return {
-        allowed: true,
-        scope: "include_unapproved",
-        classification: "include_unapproved_repos",
-      };
-    }
-    return {
-      allowed: false,
-      scope: "unknown",
-      classification: "no_allowed_orgs_configured",
-    };
+  const allowedOrgs = getAllowedGitHubOrgs();
+  if (allowedOrgs.length === 0) {
+    return { allowed: false, scope: "unknown", classification: "not_activated" };
   }
 
   const repoRoot = findGitRoot(cwd);
@@ -173,9 +163,7 @@ function getRepoScopeDecision(cwd) {
     };
   }
 
-  const matchingOrg = remoteOrgs.find((org) =>
-    repoScope.allowedGitHubOrgs.includes(org)
-  );
+  const matchingOrg = remoteOrgs.find((org) => allowedOrgs.includes(org));
   if (matchingOrg) {
     return {
       allowed: true,
@@ -187,11 +175,9 @@ function getRepoScopeDecision(cwd) {
   }
 
   return {
-    allowed: repoScope.includeUnapprovedRepos,
+    allowed: false,
     scope: "external",
-    classification: repoScope.includeUnapprovedRepos
-      ? "github_org_mismatch_opt_in"
-      : "github_org_mismatch",
+    classification: "github_org_mismatch",
     repoRoot,
     remoteOrg: remoteOrgs[0],
   };
