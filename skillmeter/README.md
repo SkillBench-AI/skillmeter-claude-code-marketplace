@@ -33,8 +33,8 @@ A Claude Code plugin that tracks session activity and tool usage, providing anon
   │                                                    │         │
   │  ┌──────────────┐  ┌───────────────────────────┐   │         │
   │  │ getDeviceId() │  │ Writes NDJSON log entry   │   │         │
-  │  │ (Keychain /   │  │ with: timestamp, level,   │   │         │
-  │  │  fallback)    │  │ event, session_id,        │   │         │
+  │  │ credentials   │  │ with: timestamp, level,   │   │         │
+  │  │ JSON store    │  │ event, session_id,        │   │         │
   │  └──────────────┘  │ device_id, data            │   │         │
   │                     └───────────────────────────┘   │         │
   └────────────────────────┬───────────────────────────┘         │
@@ -47,8 +47,8 @@ A Claude Code plugin that tracks session activity and tool usage, providing anon
                            │                                     │
             ┌──────────────┴──────────────┐                      │
             │                             │                      │
-     >= 50 events                  Stop hook fires               │
-     (auto-rotation)               (force transfer)              │
+     SessionStart /                Stop / SessionEnd             │
+     retry monitor                 seal durable queues           │
             │                             │                      │
             ▼                             ▼                      │
   ┌───────────────────────────────────────────┐                  │
@@ -58,14 +58,13 @@ A Claude Code plugin that tracks session activity and tool usage, providing anon
                        │                                         │
                        ▼                                         ▼
   ┌──────────────────────────────┐    ┌──────────────────────────────────┐
-  │   transfer_log.js            │    │   session_end.js (direct)        │
-  │   (background process)       │    │   (only on prompt_input_exit)    │
+  │   drain_once.js              │    │   retry_daemon.js / SessionStart │
+  │   (detached one-shot)        │    │   (fallback retry paths)         │
   │                              │    │                                  │
-  │  1. Read NDJSON file         │    │  1. Build log entry with         │
-  │  2. gzip compress            │    │     full conversation            │
-  │  3. POST to backend          │    │  2. gzip compress                │
-  │  4. Delete local file        │    │  3. POST to backend              │
-  │     on success               │    │                                  │
+  │  1. Read sealed queues       │    │  1. Scan sealed event logs       │
+  │  2. gzip compress            │    │  2. Scan pending transcripts     │
+  │  3. POST to backend          │    │  3. Retry uploads                │
+  │  4. Mark/delete on success   │    │  4. Keep failures on disk        │
   └──────────────┬───────────────┘    └────────────────┬─────────────────┘
                  │                                     │
                  └──────────────┬───────────────────────┘
@@ -91,15 +90,18 @@ skillmeter/
 │   └── hooks.json           # Hook event → script mappings
 ├── logs/
 │   ├── events.jsonl         # Active event log (NDJSON)
-│   └── .device-id           # Fallback device ID (non-macOS)
+│   ├── events.jsonl.*       # Sealed event batches awaiting upload
+│   └── transcripts/pending/ # Sanitized transcripts awaiting upload
 └── scripts/
     ├── logger.js            # Core logging library
     ├── session_start.js     # SessionStart hook handler
     ├── session_end.js       # SessionEnd hook handler + conversation extraction
     ├── user_prompt_submit.js# UserPromptSubmit hook handler
     ├── post_tool_use.js     # PostToolUse hook handler (Edit/Write/Read/WebSearch/WebFetch)
-    ├── stop.js              # Stop hook handler + force log transfer
-    └── transfer_log.js      # Background log uploader
+    ├── stop.js              # Stop hook handler + detached drain trigger
+    ├── drain_once.js        # One-shot queue uploader
+    └── monitors/
+        └── retry_daemon.js  # Long-running retry monitor
 ```
 
 ## Hook Events
@@ -135,17 +137,22 @@ Each line in `events.jsonl` is a self-contained JSON object:
 
 - **File paths** are SHA-256 hashed (truncated to 16 hex chars) before logging -- actual paths never leave the machine.
 - **Conversation content** is filtered to only include `text` and `thinking` blocks -- tool results, images, and other content types are stripped.
-- **Device ID** is a random UUID stored in the macOS Keychain (or a local fallback file), not derived from hardware.
+- **Device ID** is a random UUID stored in `~/.skillbench/credentials.json`, not derived from hardware.
 
 ## Log Transfer
 
-Logs are sent to the backend via two mechanisms:
+Logs are sent to the backend from durable filesystem queues:
 
-1. **Batch rotation** -- When `events.jsonl` reaches 50 entries, it is atomically renamed and uploaded in the background by `transfer_log.js`.
-2. **Stop hook** -- When the user interrupts Claude, any accumulated logs are immediately transferred.
-3. **Session end (direct)** -- When a session ends via `prompt_input_exit`, the full conversation is sent directly to the backend (bypassing the local log file).
+1. **Active event log** -- Hooks append NDJSON entries to `logs/events.jsonl`.
+2. **Queue sealing** -- `Stop` and `SessionEnd` atomically rename the active log to `events.jsonl.<timestamp>` and stage sanitized transcripts under `logs/transcripts/pending/`.
+3. **Immediate drain** -- `Stop` triggers a detached `drain_once.js` uploader. `SessionEnd` is synchronous and attempts a bounded 5-second drain before Claude exits.
+4. **Fallback retry** -- `SessionStart` and the plugin retry monitor drain any sealed event logs or pending transcripts left on disk.
 
-All uploads use gzip compression. Successfully uploaded files are deleted locally.
+All uploads use gzip compression. Successfully uploaded event batches are renamed with `.sent`; successfully uploaded pending transcripts are deleted. Failed uploads remain queued for retry.
+
+## Credential Store
+
+SkillMeter stores device identity, hash salt, activation JWT, and GitHub fallback cooldown metadata in `~/.skillbench/credentials.json`. Keychain and plugin-local credential fallback files are no longer supported or migrated; users with older credentials should run `/skillmeter:activate` again after upgrading.
 
 ## Configuration
 

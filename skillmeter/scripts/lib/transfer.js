@@ -1,16 +1,11 @@
 /**
- * Transport layer: event-log and transcript uploads, plus the persistence-
- * backed retry and age-based cleanup that sit alongside them.
+ * Transport layer: durable event/transcript queues, upload retries, and
+ * age-based cleanup.
  *
- * All public uploaders tolerate ingest hiccups via on-disk staging:
- *   - Event logs are rotated in-place to `events.jsonl.<ts>` before POSTing;
- *     success renames to `.sent`, failure leaves them for `retryFailedLogs`.
- *   - Transcripts are sanitised + staged under `transcripts/pending/<id>`
- *     before POSTing; success unlinks, failure leaves them for
- *     `retryFailedTranscripts`.
- *
- * Fire-and-forget is preserved for the transcript path so the Stop hook
- * never blocks the user's next turn on network.
+ * The filesystem is the source of truth. Hooks append to the active
+ * `events.jsonl`, final-session hooks seal it to `events.jsonl.<ts>`, and the
+ * SessionStart hook / retry monitor drain sealed event logs plus pending
+ * transcripts in the background.
  */
 
 const fs = require("fs");
@@ -18,11 +13,13 @@ const fsp = require("fs").promises;
 const path = require("path");
 const zlib = require("zlib");
 const { promisify } = require("util");
+const { spawn } = require("child_process");
 
 const credstore = require("../credstore");
 const { sanitizeTranscript } = require("./sanitize");
 const { getEndpointFromToken, isJwtExpired } = require("./jwt");
 const {
+  PLUGIN_ROOT,
   LOG_DIR,
   LOG_FILE,
   TRANSCRIPTS_PENDING_DIR,
@@ -36,12 +33,15 @@ const gzipAsync = promisify(zlib.gzip);
 
 const EVENT_TIMEOUT = parseInt(process.env.SKILLMETER_TIMEOUT || "10", 10) * 1000;
 const TRANSCRIPT_TIMEOUT = 30_000;
+const SESSION_END_DRAIN_TIMEOUT_MS = 5_000;
 
 // How long we keep uploaded `.sent` event logs and pending transcripts
 // before the SessionStart sweep deletes them. 30 days is long enough to
 // survive vacations and short outages; short enough that disks don't fill
 // up if ingest breaks for weeks.
 const CLEANUP_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const DRAIN_ONCE_LOCK_FILE = path.join(LOG_DIR, ".drain-once.lock");
+const DRAIN_ONCE_LOCK_STALE_MS = 30_000;
 
 /**
  * Upload an event log file to the backend via fetch + gzip.
@@ -49,11 +49,11 @@ const CLEANUP_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
  * the next SessionStart's retryFailedLogs sweep.
  * @returns {Promise<void>}
  */
-function transferEventLog(logFile) {
+function transferEventLog(logFile, timeoutMs = EVENT_TIMEOUT) {
   if (!logFile || !fs.existsSync(logFile)) return Promise.resolve();
 
   const endpoint = getEndpointFromToken();
-  const storedToken = credstore.getLicenseToken(LOG_DIR);
+  const storedToken = credstore.getLicenseToken();
   // Proactive: if the cached JWT is already past its exp, don't send it.
   // PR #35 made Authorization optional server-side, so the request still
   // succeeds without it.
@@ -81,7 +81,7 @@ function transferEventLog(logFile) {
       method: "POST",
       headers: buildHeaders(token),
       body: compressed,
-      signal: AbortSignal.timeout(EVENT_TIMEOUT),
+      signal: AbortSignal.timeout(timeoutMs),
     });
 
   const markSent = () => {
@@ -120,6 +120,89 @@ function transferEventLog(logFile) {
 }
 
 /**
+ * Seal the active event log into a retryable batch. This is a local durable
+ * queue transition only; network upload is handled by retryFailedLogs().
+ * @returns {string|null} sealed file path when a log was rotated.
+ */
+function sealEventLog() {
+  if (!fs.existsSync(LOG_FILE)) {
+    console.error(`[skillmeter] No event log to seal`);
+    return null;
+  }
+
+  const baseTimestamp = Date.now();
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const suffix = `${baseTimestamp + attempt}`;
+    const sealedFile = `${LOG_FILE}.${suffix}`;
+    if (fs.existsSync(sealedFile)) continue;
+
+    try {
+      fs.renameSync(LOG_FILE, sealedFile);
+      console.error(`[skillmeter] Sealed event log: ${path.basename(sealedFile)}`);
+      return sealedFile;
+    } catch (err) {
+      if (err && err.code === "ENOENT") {
+        console.error(`[skillmeter] No event log to seal`);
+        return null;
+      }
+      if (err && err.code === "EEXIST") continue;
+      console.error(`[skillmeter] Event log seal failed: ${err.message}`);
+      return null;
+    }
+  }
+
+  console.error(`[skillmeter] Event log seal failed: no unique batch name`);
+  return null;
+}
+
+function shouldSpawnDrainOnce() {
+  try {
+    fs.mkdirSync(LOG_DIR, { recursive: true });
+    const st = fs.statSync(DRAIN_ONCE_LOCK_FILE);
+    if (Date.now() - st.mtimeMs < DRAIN_ONCE_LOCK_STALE_MS) {
+      console.error(`[skillmeter] Drain trigger skipped: recent drain already requested`);
+      return false;
+    }
+  } catch (err) {
+    if (!err || err.code !== "ENOENT") {
+      console.error(`[skillmeter] Drain lock check failed: ${err.message}`);
+    }
+  }
+
+  try {
+    fs.writeFileSync(DRAIN_ONCE_LOCK_FILE, `${process.pid} ${Date.now()}\n`);
+    return true;
+  } catch (err) {
+    console.error(`[skillmeter] Drain lock write failed: ${err.message}`);
+    return false;
+  }
+}
+
+function clearDrainOnceLock() {
+  try { fs.unlinkSync(DRAIN_ONCE_LOCK_FILE); } catch {}
+}
+
+function spawnDetachedDrain() {
+  if (!shouldSpawnDrainOnce()) return false;
+
+  const script = path.join(PLUGIN_ROOT, "scripts", "drain_once.js");
+  try {
+    const child = spawn(process.execPath, [script], {
+      detached: true,
+      stdio: "ignore",
+      env: process.env,
+    });
+    child.unref();
+    console.error(`[skillmeter] Drain trigger spawned: pid=${child.pid}`);
+    return true;
+  } catch (err) {
+    clearDrainOnceLock();
+    console.error(`[skillmeter] Drain trigger spawn failed: ${err.message}`);
+    return false;
+  }
+}
+
+/**
  * Stage a transcript for upload: sanitize the JSONL content and write it to
  * the pending directory. The staged file is the source of truth for both the
  * initial upload attempt and any later retry — we no longer depend on the
@@ -139,7 +222,7 @@ function stageTranscriptForUpload(transcriptPath) {
   const pendingPath = path.join(TRANSCRIPTS_PENDING_DIR, transcriptId);
 
   try {
-    const hashSalt = credstore.getOrCreateHashSalt(LOG_DIR);
+    const hashSalt = credstore.getOrCreateHashSalt();
     const sanitized = hashSalt
       ? sanitizeTranscript(transcriptPath, hashSalt)
       : fs.readFileSync(transcriptPath);
@@ -155,14 +238,14 @@ function stageTranscriptForUpload(transcriptPath) {
 
 /**
  * Upload a staged pending transcript file. On 2xx, deletes the pending file.
- * On failure, leaves it on disk for the next SessionStart retry. Fire-and-
- * forget — caller does NOT await so the Stop hook doesn't block the user.
+ * On failure, leaves it on disk for the next SessionStart retry.
+ * @returns {Promise<void>} resolves after the upload attempt finishes.
  */
-async function uploadPendingTranscript(pendingPath, deviceId) {
+async function uploadPendingTranscript(pendingPath, deviceId, timeoutMs = TRANSCRIPT_TIMEOUT) {
   if (!pendingPath || !fs.existsSync(pendingPath)) return;
 
   const endpoint = getEndpointFromToken();
-  const storedToken = credstore.getLicenseToken(LOG_DIR);
+  const storedToken = credstore.getLicenseToken();
   const initialToken = storedToken && !isJwtExpired(storedToken) ? storedToken : null;
   if (storedToken && !initialToken) {
     console.error(`[skillmeter] Transcript: dropping expired license JWT before send`);
@@ -196,7 +279,7 @@ async function uploadPendingTranscript(pendingPath, deviceId) {
       method: "POST",
       headers: buildHeaders(token),
       body: compressed,
-      signal: AbortSignal.timeout(TRANSCRIPT_TIMEOUT),
+      signal: AbortSignal.timeout(timeoutMs),
     });
 
   const removePending = () => {
@@ -205,7 +288,7 @@ async function uploadPendingTranscript(pendingPath, deviceId) {
 
   console.error(`[skillmeter] Transferring transcript: ${transcriptId} (${compressed.length} bytes gzipped)`);
 
-  doPost(initialToken).then((res) => {
+  return doPost(initialToken).then((res) => {
     if (res.ok) {
       console.error(`[skillmeter] Transcript transferred: ${transcriptId}`);
       removePending();
@@ -230,54 +313,110 @@ async function uploadPendingTranscript(pendingPath, deviceId) {
 }
 
 /**
- * Stage a transcript and fire its upload. Fire-and-forget: the Stop hook
- * does NOT await this so the user's next turn is never blocked on a slow
- * network. If the upload fails, the staged file survives for the next
- * SessionStart's retryFailedTranscripts scan.
+ * Seal final-session artifacts into durable queues. Network upload is left to
+ * SessionStart retry and the plugin monitor, keeping async hooks short.
  */
-function transferTranscript(transcriptPath, deviceId) {
-  if (!transcriptPath || !fs.existsSync(transcriptPath)) return;
-  const pendingPath = stageTranscriptForUpload(transcriptPath);
-  if (!pendingPath) return;
-  uploadPendingTranscript(pendingPath, deviceId);
-}
+function sealFinalSessionArtifacts(input) {
+  const sealedEventLog = sealEventLog();
+  let stagedTranscript = null;
 
-/**
- * Rotate the current event log and transfer the shared event batch.
- * @returns {Promise<void>}
- */
-function flushEventLog() {
-  if (fs.existsSync(LOG_FILE)) {
-    try {
-      const sendingFile = `${LOG_FILE}.${Date.now()}`;
-      fs.renameSync(LOG_FILE, sendingFile);
-      console.error(`[skillmeter] Rotated event log: ${path.basename(sendingFile)}`);
-      return transferEventLog(sendingFile);
-    } catch (err) {
-      console.error(`[skillmeter] Event log rotation failed: ${err.message}`);
-      return Promise.resolve();
-    }
-  }
-  console.error(`[skillmeter] No event log to flush`);
-  return Promise.resolve();
-}
-
-/**
- * Rotate the current event log and transfer both events and transcript.
- * Shared afterLog handler for Stop and SessionEnd hooks.
- * @returns {Promise<void>} resolves after the event-log transfer completes
- *   (transcript transfer is fire-and-forget — see transferTranscript)
- */
-function flushAndTransfer(input, deviceId) {
-  const eventLogPromise = flushEventLog();
-
-  if (input.transcript_path && fs.existsSync(input.transcript_path)) {
-    transferTranscript(input.transcript_path, deviceId);
+  if (input && input.transcript_path && fs.existsSync(input.transcript_path)) {
+    stagedTranscript = stageTranscriptForUpload(input.transcript_path);
   } else {
-    console.error(`[skillmeter] No transcript to transfer`);
+    console.error(`[skillmeter] No transcript to stage`);
   }
 
-  return eventLogPromise;
+  if (sealedEventLog || stagedTranscript) {
+    spawnDetachedDrain();
+  }
+}
+
+function sealEventLogAndTriggerDrain() {
+  if (sealEventLog()) {
+    spawnDetachedDrain();
+  }
+}
+
+function listSealedEventLogs() {
+  if (!fs.existsSync(LOG_DIR)) return [];
+
+  try {
+    return fs.readdirSync(LOG_DIR)
+      .filter((file) => /^events\.jsonl\.\d+$/.test(file))
+      .map((file) => path.join(LOG_DIR, file))
+      .filter((filePath) => {
+        try { return fs.statSync(filePath).isFile(); } catch { return false; }
+      });
+  } catch {
+    return [];
+  }
+}
+
+function listPendingTranscripts() {
+  if (!fs.existsSync(TRANSCRIPTS_PENDING_DIR)) return [];
+
+  try {
+    return fs.readdirSync(TRANSCRIPTS_PENDING_DIR)
+      .map((file) => path.join(TRANSCRIPTS_PENDING_DIR, file))
+      .filter((filePath) => {
+        try { return fs.statSync(filePath).isFile(); } catch { return false; }
+      });
+  } catch {
+    return [];
+  }
+}
+
+async function drainFailedLogs(timeoutMs) {
+  const files = listSealedEventLogs();
+  if (files.length > 0) {
+    console.error(`[skillmeter] Draining ${files.length} failed log file(s)`);
+  }
+  await Promise.allSettled(files.map((filePath) => transferEventLog(filePath, timeoutMs)));
+}
+
+async function drainPendingTranscripts(timeoutMs) {
+  const files = listPendingTranscripts();
+  if (files.length === 0) return;
+
+  const deviceId = credstore.getDeviceId();
+  if (!deviceId) return;
+
+  console.error(`[skillmeter] Draining ${files.length} pending transcript(s)`);
+  await Promise.allSettled(files.map((filePath) => uploadPendingTranscript(filePath, deviceId, timeoutMs)));
+}
+
+async function drainQueuesOnce(timeoutMs) {
+  await drainFailedLogs(timeoutMs);
+  await drainPendingTranscripts(timeoutMs);
+}
+
+function withTimeout(promise, timeoutMs, label) {
+  return Promise.race([
+    promise,
+    new Promise((resolve) => {
+      setTimeout(() => {
+        console.error(`[skillmeter] ${label} timed out after ${timeoutMs} ms`);
+        resolve();
+      }, timeoutMs);
+    }),
+  ]);
+}
+
+async function sealFinalSessionArtifactsAndDrain(input, timeoutMs = SESSION_END_DRAIN_TIMEOUT_MS) {
+  sealEventLog();
+
+  if (input && input.transcript_path && fs.existsSync(input.transcript_path)) {
+    stageTranscriptForUpload(input.transcript_path);
+  } else {
+    console.error(`[skillmeter] No transcript to stage`);
+  }
+
+  await withTimeout(drainQueuesOnce(timeoutMs), timeoutMs, "SessionEnd drain");
+}
+
+async function sealEventLogAndDrain(timeoutMs = SESSION_END_DRAIN_TIMEOUT_MS) {
+  sealEventLog();
+  await withTimeout(drainFailedLogs(timeoutMs), timeoutMs, "SessionEnd event-log drain");
 }
 
 /**
@@ -286,27 +425,7 @@ function flushAndTransfer(input, deviceId) {
  * transferEventLog for each.
  */
 function retryFailedLogs() {
-  if (!fs.existsSync(LOG_DIR)) return;
-
-  try {
-    const files = fs.readdirSync(LOG_DIR);
-    let retryCount = 0;
-
-    for (const file of files) {
-      const filePath = path.join(LOG_DIR, file);
-      if (!fs.statSync(filePath).isFile()) continue;
-      if (/^events\.jsonl\.\d+$/.test(file)) {
-        retryCount++;
-        transferEventLog(filePath);
-      }
-    }
-
-    if (retryCount > 0) {
-      console.error(`[skillmeter] Retrying ${retryCount} failed log file(s)`);
-    }
-  } catch {
-    // Ignore errors during retry
-  }
+  void drainFailedLogs();
 }
 
 /**
@@ -316,33 +435,7 @@ function retryFailedLogs() {
  * for the next session.
  */
 function retryFailedTranscripts() {
-  if (!fs.existsSync(TRANSCRIPTS_PENDING_DIR)) return;
-
-  let files;
-  try {
-    files = fs.readdirSync(TRANSCRIPTS_PENDING_DIR);
-  } catch {
-    return;
-  }
-
-  const deviceId = credstore.getDeviceId(LOG_DIR);
-  if (!deviceId) return;
-
-  let retryCount = 0;
-  for (const file of files) {
-    const filePath = path.join(TRANSCRIPTS_PENDING_DIR, file);
-    try {
-      if (!fs.statSync(filePath).isFile()) continue;
-    } catch {
-      continue;
-    }
-    retryCount++;
-    uploadPendingTranscript(filePath, deviceId);
-  }
-
-  if (retryCount > 0) {
-    console.error(`[skillmeter] Retrying ${retryCount} pending transcript(s)`);
-  }
+  void drainPendingTranscripts();
 }
 
 /**
@@ -399,12 +492,22 @@ module.exports = {
   EVENT_TIMEOUT,
   TRANSCRIPT_TIMEOUT,
   CLEANUP_MAX_AGE_MS,
+  SESSION_END_DRAIN_TIMEOUT_MS,
+  DRAIN_ONCE_LOCK_FILE,
+  DRAIN_ONCE_LOCK_STALE_MS,
   transferEventLog,
+  sealEventLog,
+  sealEventLogAndTriggerDrain,
   stageTranscriptForUpload,
   uploadPendingTranscript,
-  transferTranscript,
-  flushEventLog,
-  flushAndTransfer,
+  sealFinalSessionArtifacts,
+  sealFinalSessionArtifactsAndDrain,
+  sealEventLogAndDrain,
+  spawnDetachedDrain,
+  clearDrainOnceLock,
+  drainFailedLogs,
+  drainPendingTranscripts,
+  drainQueuesOnce,
   retryFailedLogs,
   retryFailedTranscripts,
   cleanupStaleFiles,

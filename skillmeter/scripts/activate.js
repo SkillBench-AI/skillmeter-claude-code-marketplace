@@ -12,11 +12,7 @@
  */
 
 const credstore = require("./credstore.js");
-const path = require("path");
 const { spawnSync } = require("child_process");
-
-const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, "..");
-const LOG_DIR = path.join(PLUGIN_ROOT, "logs");
 
 // GitHub OAuth App client_id — same SkillMeter app the VS Code extension uses.
 const CLIENT_ID = process.env.SKILLMETER_GITHUB_CLIENT_ID || "Ov23ct86rS80kpl7o2Xg";
@@ -95,7 +91,7 @@ async function pollForToken(deviceCode, initialInterval) {
         interval += 5;
         continue;
       case "expired_token":
-        throw new Error("The device code expired. Run /sk-activate again.");
+        throw new Error("The device code expired. Run /activate again.");
       case "access_denied":
         throw new Error("Access was denied on GitHub. Aborting.");
       default:
@@ -129,7 +125,7 @@ async function exchangeForLicense(githubToken, deviceId) {
 }
 
 async function main() {
-  const existingToken = credstore.getLicenseToken(LOG_DIR);
+  const existingToken = credstore.getLicenseToken();
   if (existingToken && !credstore.isLicenseTokenExpired(existingToken)) {
     log("SkillMeter is already activated.");
     return;
@@ -142,7 +138,7 @@ async function main() {
     // overwrite it via credstore.setLicenseToken.
   }
 
-  const deviceId = credstore.getDeviceId(LOG_DIR);
+  const deviceId = credstore.getDeviceId();
   if (!deviceId) {
     log("Activation failed: unable to determine device ID.");
     process.exit(1);
@@ -150,7 +146,7 @@ async function main() {
 
   // Explicit user-initiated activation overrides any cached gh silent-
   // failure cooldown. The cooldown exists to protect automated hooks
-  // from hammering the endpoints; /sk-activate is always deliberate,
+  // from hammering the endpoints; /activate is always deliberate,
   // so a user who fixed their `gh auth` scopes shouldn't have to wait
   // 24h before the silent path is attempted again.
   credstore.setGhFallbackRetryAfter(0);
