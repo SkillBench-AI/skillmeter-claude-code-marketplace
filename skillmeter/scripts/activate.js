@@ -14,6 +14,20 @@
 const credstore = require("./credstore.js");
 const { spawnSync } = require("child_process");
 
+// On POSIX, stdout/stderr writes to a pipe (e.g. when Claude Code's `!`
+// runner captures us) are asynchronous and block-buffered, so a `say()`
+// call followed by `spawnSync('open', …)` can launch the browser before
+// the device code reaches the parent. Forcing the streams to blocking
+// mode makes writes synchronous, so the code box is always visible
+// before any child process is spawned.
+for (const stream of [process.stdout, process.stderr]) {
+  try {
+    if (stream._handle && typeof stream._handle.setBlocking === "function") {
+      stream._handle.setBlocking(true);
+    }
+  } catch {}
+}
+
 // GitHub OAuth App client_id — same SkillMeter app the VS Code extension uses.
 const CLIENT_ID = process.env.SKILLMETER_GITHUB_CLIENT_ID || "Ov23ct86rS80kpl7o2Xg";
 const DEVICE_CODE_URL = "https://github.com/login/device/code";
@@ -218,9 +232,8 @@ async function main() {
   if (copyToClipboard(device.user_code)) {
     say("Code copied to your clipboard.");
   }
-  if (openBrowser(device.verification_uri)) {
-    say("Opened the verification page in your default browser.");
-  } else {
+  say("Opening the verification page in your default browser...");
+  if (!openBrowser(device.verification_uri)) {
     say("Could not open a browser automatically — open the URL above manually.");
   }
   say("");
