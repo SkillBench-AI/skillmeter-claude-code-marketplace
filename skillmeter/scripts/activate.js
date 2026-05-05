@@ -24,6 +24,13 @@ function log(msg) {
   process.stderr.write(msg + "\n");
 }
 
+// say() writes to stdout so the message survives any stderr buffering done
+// by the host that invoked us (e.g. Claude Code's `!`-prefix runner).
+// User-facing prompts that the operator must read mid-run go through say().
+function say(msg) {
+  process.stdout.write(msg + "\n");
+}
+
 // copyToClipboard tries platform-native clipboard tools. Returns true on
 // success, false when no tool is available or the copy fails. Never throws.
 function copyToClipboard(text) {
@@ -45,6 +52,33 @@ function copyToClipboard(text) {
       stdio: ["pipe", "ignore", "ignore"],
     });
     if (result.status === 0) return true;
+  }
+  return false;
+}
+
+// openBrowser launches the system default browser at `url`. Returns true on
+// success, false when no opener is available. Never throws and never blocks
+// on the spawned process — the browser is fire-and-forget.
+function openBrowser(url) {
+  const candidates = [];
+  if (process.platform === "darwin") {
+    candidates.push({ cmd: "open", args: [url] });
+  } else if (process.platform === "win32") {
+    // `start` treats the first quoted arg as a window title, so pass an empty
+    // title before the URL.
+    candidates.push({ cmd: "cmd", args: ["/c", "start", "", url] });
+  } else {
+    candidates.push({ cmd: "xdg-open", args: [url] });
+    candidates.push({ cmd: "wslview", args: [url] });
+  }
+  for (const { cmd, args } of candidates) {
+    try {
+      const result = spawnSync(cmd, args, {
+        stdio: "ignore",
+        timeout: 5000,
+      });
+      if (result && result.status === 0) return true;
+    } catch {}
   }
   return false;
 }
@@ -162,26 +196,40 @@ async function main() {
   log("Starting GitHub device flow...");
   const device = await requestDeviceCode();
 
-  log("");
-  log(`Open ${device.verification_uri}`);
-  log(`Enter code: ${device.user_code}`);
-  log(`(code expires in ${Math.round(device.expires_in / 60)} minutes)`);
+  // User-facing details go to stdout so they remain visible even when the
+  // host buffers stderr. The whole block is printed before any blocking
+  // poll so the operator can act on it immediately.
+  const expiresMin = Math.round(device.expires_in / 60);
+  say("");
+  say("============================================================");
+  say(" GitHub device login required");
+  say("============================================================");
+  say(`  1. Open: ${device.verification_uri}`);
+  say(`  2. Enter code: ${device.user_code}`);
+  say(`  (code expires in ${expiresMin} minutes)`);
+  say("============================================================");
+  say("");
   if (copyToClipboard(device.user_code)) {
-    log("(code copied to clipboard)");
+    say("Code copied to your clipboard.");
   }
-  log("");
-  log("Waiting for GitHub approval...");
+  if (openBrowser(device.verification_uri)) {
+    say("Opened the verification page in your default browser.");
+  } else {
+    say("Could not open a browser automatically — open the URL above manually.");
+  }
+  say("");
+  say("Waiting for GitHub approval... (this command will return once you approve)");
 
   const githubToken = await pollForToken(device.device_code, device.interval || 5);
-  log("GitHub approval received. Exchanging for SkillMeter license...");
+  say("GitHub approval received. Exchanging for SkillMeter license...");
 
   const licenseJwt = await exchangeForLicense(githubToken, deviceId);
   credstore.setLicenseToken(licenseJwt);
   credstore.setGhFallbackRetryAfter(0);
-  log("SkillMeter activated.");
+  say("SkillMeter activated.");
 }
 
 main().catch((err) => {
-  log(`Activation failed: ${err.message}`);
+  say(`Activation failed: ${err.message}`);
   process.exit(1);
 });
