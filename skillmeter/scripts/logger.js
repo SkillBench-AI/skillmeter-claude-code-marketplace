@@ -32,7 +32,6 @@ const settings = require("./lib/settings");
 const {
   getTelemetryOptIn,
   saveTelemetryOptIn,
-  getRepoScopeSettings,
 } = settings;
 
 const repoScope = require("./lib/repo-scope");
@@ -267,7 +266,6 @@ module.exports = {
   // Re-exports from lib/settings
   getTelemetryOptIn,
   saveTelemetryOptIn,
-  getRepoScopeSettings,
 
   // Re-exports from lib/repo-scope
   getRepoScopeDecision,

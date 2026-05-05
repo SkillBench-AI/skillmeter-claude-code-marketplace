@@ -1,7 +1,8 @@
 /**
- * Per-project settings I/O. Single owner of `.claude/settings.local.json` —
- * both the telemetry opt-in and the repo-scope config live there, so this
- * module centralises the read/write path to keep them in sync.
+ * Per-project settings I/O. Owns the telemetry opt-in stored under
+ * `<cwd>/.claude/settings.local.json`. Repo-scope no longer lives here —
+ * it's derived from the activated user's GitHub identities and stored in
+ * credstore (see `lib/repo-scope.js`).
  */
 
 const fs = require("fs");
@@ -22,25 +23,6 @@ function readSettingsFile(cwd) {
   } catch {
     return null;
   }
-}
-
-/**
- * Read the repo-scope config block. Returns a shape that's always safe to
- * consume (never throws on missing keys; arrays always iterable; org names
- * always trimmed + lowercased for case-insensitive match).
- */
-function getRepoScopeSettings(cwd) {
-  const skillmeterSettings = readSettingsFile(cwd)?.skillmeter ?? {};
-  return {
-    enabled: skillmeterSettings.repoScope?.enabled === true,
-    allowedGitHubOrgs: Array.isArray(skillmeterSettings.repoScope?.allowedGitHubOrgs)
-      ? skillmeterSettings.repoScope.allowedGitHubOrgs
-          .map((org) => String(org).trim().toLowerCase())
-          .filter(Boolean)
-      : [],
-    includeUnapprovedRepos:
-      skillmeterSettings.repoScope?.includeUnapprovedRepos === true,
-  };
 }
 
 /**
@@ -79,7 +61,6 @@ function saveTelemetryOptIn(cwd, value) {
 
 module.exports = {
   readSettingsFile,
-  getRepoScopeSettings,
   getTelemetryOptIn,
   saveTelemetryOptIn,
 };

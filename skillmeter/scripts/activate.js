@@ -160,12 +160,18 @@ async function exchangeForLicense(githubToken, deviceId) {
 
 async function main() {
   const existingToken = credstore.getLicenseToken();
-  if (existingToken && !credstore.isLicenseTokenExpired(existingToken)) {
-    log("SkillMeter is already activated.");
+  const existingOrgs = credstore.getAllowedGitHubOrgs();
+  if (
+    existingToken &&
+    !credstore.isLicenseTokenExpired(existingToken) &&
+    existingOrgs.length > 0
+  ) {
+    say("SkillMeter is already activated.");
+    say(`Allowed GitHub identities: ${existingOrgs.join(", ")}`);
     return;
   }
   if (existingToken) {
-    log("License expired or near expiry — refreshing...");
+    log("License expired or orgs missing — refreshing...");
     // Do NOT pre-clear: if the refresh below fails, the stale token
     // is strictly more useful than none (telemetry still flows via
     // the auth-optional path). A successful silent/device flow will
@@ -224,9 +230,18 @@ async function main() {
   say("GitHub approval received. Exchanging for SkillMeter license...");
 
   const licenseJwt = await exchangeForLicense(githubToken, deviceId);
+
+  // Fetch user + org logins from GitHub. Telemetry only fires in repos
+  // under one of these identities, so a fetch failure here is fatal —
+  // we'd rather block activation than silently leave the user without
+  // any allowed orgs.
+  const orgs = await credstore.fetchUserGitHubOrgs(githubToken);
+
   credstore.setLicenseToken(licenseJwt);
+  credstore.setAllowedGitHubOrgs(orgs);
   credstore.setGhFallbackRetryAfter(0);
   say("SkillMeter activated.");
+  say(`Allowed GitHub identities: ${orgs.join(", ") || "(none — activation will not collect telemetry until you join an org)"}`);
 }
 
 main().catch((err) => {

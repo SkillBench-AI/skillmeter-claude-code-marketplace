@@ -163,45 +163,12 @@ SkillMeter stores device identity, hash salt, activation JWT, and GitHub fallbac
 
 ## Repo-Scoped Filtering
 
-SkillMeter can restrict Claude Code telemetry to repositories owned by approved GitHub orgs.
+Telemetry is gated to repositories owned by GitHub identities the activated user controls — their own login plus every org returned by `GET /user/orgs`. The list is captured at `/skillmeter:activate` time (using the same OAuth token that exchanges for the SkillMeter license) and stored in `~/.skillbench/credentials.json` next to the device ID and license JWT. There is no per-project repo-scope config.
 
-Configure this per project in `.claude/settings.local.json`:
-
-```json
-{
-  "skillmeter": {
-    "telemetry": true,
-    "repoScope": {
-      "enabled": true,
-      "allowedGitHubOrgs": ["andela"],
-      "includeUnapprovedRepos": false
-    }
-  }
-}
-```
-
-What it does:
-
-- `repoScope.enabled`: turn repo-scoped filtering on
-- `repoScope.allowedGitHubOrgs`: only collect telemetry when the current repo's Git remote belongs to one of these GitHub orgs
-- `repoScope.includeUnapprovedRepos`: if `true`, external repos are still collected and tagged as external; if `false`, they are skipped
-
-When repo-scoped filtering is enabled, Claude Code events are dropped by default for:
+Events are dropped — even in workdirs where the user ran `/skillmeter:telemetry enable` — for:
 
 - directories that are not inside a Git repository
 - repositories without a recognizable GitHub remote
-- repositories outside the approved org list, unless opt-in expansion is enabled
+- repositories whose remote belongs to an org the user is not a member of
 
-### Using Claude Code And VS Code Together
-
-If you also use the SkillMeter VS Code extension, configure repo-scoped filtering there separately in `.vscode/settings.json`:
-
-```json
-{
-  "skillmeter.repoScope.enabled": true,
-  "skillmeter.repoScope.allowedGitHubOrgs": ["andela"],
-  "skillmeter.repoScope.includeUnapprovedRepos": false
-}
-```
-
-Claude Code continues to use `.claude/settings.local.json` for its own telemetry and repo-scope settings. The two clients do not automatically share configuration.
+To refresh the allowed identity list (e.g. after joining a new org), run `/skillmeter:activate` again.
