@@ -1,11 +1,17 @@
 #!/usr/bin/env node
 /**
- * Intercept direct `/skillmeter:activate` invocation before it expands into
+ * Observe direct `/skillmeter:activate` invocation before it expands into
  * a Claude prompt. Only silent gh-based activation runs here; interactive
  * GitHub device flow belongs in the `activate` shell command.
+ *
+ * UserPromptExpansion can only block expansion or add context. Blocking makes
+ * Claude Code render "operation blocked by hook", so this hook never blocks.
  */
 
 const credstore = require("./credstore.js");
+const path = require("path");
+
+const ACTIVATE_COMMAND = path.join(__dirname, "..", "bin", "activate");
 
 function readStdin() {
   return new Promise((resolve, reject) => {
@@ -23,8 +29,16 @@ function readStdin() {
   });
 }
 
-function block(reason) {
-  process.stdout.write(JSON.stringify({ decision: "block", reason }) + "\n");
+function addContext(message) {
+  process.stdout.write(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "UserPromptExpansion",
+      additionalContext: [
+        "SkillMeter activation status:",
+        message,
+      ].join("\n"),
+    },
+  }) + "\n");
 }
 
 function isActivateCommand(input) {
@@ -38,26 +52,26 @@ async function main() {
 
   const existingToken = credstore.getLicenseToken();
   if (existingToken && !credstore.isLicenseTokenExpired(existingToken)) {
-    block("SkillMeter is already activated.");
+    addContext("SkillMeter is already activated.");
     return;
   }
 
   const deviceId = credstore.getDeviceId();
   if (!deviceId) {
-    block("SkillMeter activation failed: unable to determine device ID. Run `activate` in your terminal.");
+    addContext(`Activation failed: unable to determine device ID. Run \`${ACTIVATE_COMMAND}\` in your terminal.`);
     return;
   }
 
   credstore.setGhFallbackRetryAfter(0);
   const jwt = await credstore.trySilentGhActivate(deviceId);
   if (jwt) {
-    block("SkillMeter activated via GitHub CLI.");
+    addContext("SkillMeter activated via GitHub CLI.");
     return;
   }
 
-  block("Interactive GitHub login is required. Run `activate` in your terminal.");
+  addContext(`Interactive GitHub login is required. Run \`${ACTIVATE_COMMAND}\` in your terminal.`);
 }
 
 main().catch((err) => {
-  block(`SkillMeter activation failed: ${err.message}. Run \`activate\` in your terminal.`);
+  addContext(`Activation failed: ${err.message}. Run \`${ACTIVATE_COMMAND}\` in your terminal.`);
 });
