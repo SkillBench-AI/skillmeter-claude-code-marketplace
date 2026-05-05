@@ -2,24 +2,31 @@
 /**
  * Interactive activation flow for the SkillMeter plugin.
  *
- * Mirrors the VS Code extension's AuthService:
  *   1. Try silent activation using `gh auth token` when the GitHub CLI is
  *      already logged in.
- *   2. Otherwise fall back to the GitHub OAuth device flow — print a URL
- *      and a user code, poll the token endpoint until the user approves.
- *   3. POST the resulting GitHub access token + device_id to the SkillMeter
- *      activation endpoint; store the returned license JWT in credstore.
+ *   2. Otherwise start the GitHub OAuth device flow: print the verification
+ *      URL and user code to stdout, then hand off polling to a detached
+ *      child process. The foreground exits immediately so the user sees
+ *      the code right away — Claude Code's `!`-prefix runner displays
+ *      captured output once the command returns, so we cannot block on
+ *      polling in the foreground.
+ *   3. The background child polls for the GitHub access token, POSTs it +
+ *      device_id to the SkillMeter activation endpoint, fetches the user's
+ *      GitHub identities, and stores the license JWT + orgs in credstore.
+ *      The user re-runs `/skillmeter:activate` (or any telemetry-emitting
+ *      flow) to observe the result.
  */
 
 const credstore = require("./credstore.js");
-const { spawnSync } = require("child_process");
+const { spawnSync, spawn } = require("child_process");
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
 
 // On POSIX, stdout/stderr writes to a pipe (e.g. when Claude Code's `!`
-// runner captures us) are asynchronous and block-buffered, so a `say()`
-// call followed by `spawnSync('open', …)` can launch the browser before
-// the device code reaches the parent. Forcing the streams to blocking
-// mode makes writes synchronous, so the code box is always visible
-// before any child process is spawned.
+// runner captures us) are async and block-buffered. Forcing the streams
+// to blocking mode keeps the device-code box on screen consistent with
+// what the foreground actually wrote before exiting.
 for (const stream of [process.stdout, process.stderr]) {
   try {
     if (stream._handle && typeof stream._handle.setBlocking === "function") {
@@ -34,13 +41,12 @@ const DEVICE_CODE_URL = "https://github.com/login/device/code";
 const TOKEN_URL = "https://github.com/login/oauth/access_token";
 const SCOPE = "read:user read:org";
 
+const BACKGROUND_LOG = path.join(os.homedir(), ".skillbench", "activate-poll.log");
+
 function log(msg) {
   process.stderr.write(msg + "\n");
 }
 
-// say() writes to stdout so the message survives any stderr buffering done
-// by the host that invoked us (e.g. Claude Code's `!`-prefix runner).
-// User-facing prompts that the operator must read mid-run go through say().
 function say(msg) {
   process.stdout.write(msg + "\n");
 }
@@ -54,7 +60,6 @@ function copyToClipboard(text) {
   } else if (process.platform === "win32") {
     candidates.push({ cmd: "clip", args: [] });
   } else {
-    // Linux / BSD / WSL: try Wayland first, then X11, then WSL's clip.exe.
     candidates.push({ cmd: "wl-copy", args: [] });
     candidates.push({ cmd: "xclip", args: ["-selection", "clipboard"] });
     candidates.push({ cmd: "xsel", args: ["--clipboard", "--input"] });
@@ -66,33 +71,6 @@ function copyToClipboard(text) {
       stdio: ["pipe", "ignore", "ignore"],
     });
     if (result.status === 0) return true;
-  }
-  return false;
-}
-
-// openBrowser launches the system default browser at `url`. Returns true on
-// success, false when no opener is available. Never throws and never blocks
-// on the spawned process — the browser is fire-and-forget.
-function openBrowser(url) {
-  const candidates = [];
-  if (process.platform === "darwin") {
-    candidates.push({ cmd: "open", args: [url] });
-  } else if (process.platform === "win32") {
-    // `start` treats the first quoted arg as a window title, so pass an empty
-    // title before the URL.
-    candidates.push({ cmd: "cmd", args: ["/c", "start", "", url] });
-  } else {
-    candidates.push({ cmd: "xdg-open", args: [url] });
-    candidates.push({ cmd: "wslview", args: [url] });
-  }
-  for (const { cmd, args } of candidates) {
-    try {
-      const result = spawnSync(cmd, args, {
-        stdio: "ignore",
-        timeout: 5000,
-      });
-      if (result && result.status === 0) return true;
-    } catch {}
   }
   return false;
 }
@@ -139,7 +117,7 @@ async function pollForToken(deviceCode, initialInterval) {
         interval += 5;
         continue;
       case "expired_token":
-        throw new Error("The device code expired. Run /activate again.");
+        throw new Error("The device code expired. Run /skillmeter:activate again.");
       case "access_denied":
         throw new Error("Access was denied on GitHub. Aborting.");
       default:
@@ -172,6 +150,50 @@ async function exchangeForLicense(githubToken, deviceId) {
   return payload.token;
 }
 
+// Background phase: invoked when the script is re-spawned with
+// `--background-poll`. Polls GitHub for the access token, exchanges it for
+// a license, fetches the user's GitHub identities, and persists everything
+// in credstore. Output goes to BACKGROUND_LOG (already redirected by the
+// parent's spawn() stdio config) so it can be inspected if activation
+// silently fails.
+async function runBackgroundPoll(deviceId, deviceCode, interval) {
+  log(`[${new Date().toISOString()}] background poll started (device_id=${deviceId})`);
+  try {
+    const githubToken = await pollForToken(deviceCode, interval);
+    log(`[${new Date().toISOString()}] github approval received`);
+
+    const licenseJwt = await exchangeForLicense(githubToken, deviceId);
+    log(`[${new Date().toISOString()}] license issued`);
+
+    const orgs = await credstore.fetchUserGitHubOrgs(githubToken);
+    log(`[${new Date().toISOString()}] orgs fetched: ${orgs.join(", ") || "(none)"}`);
+
+    credstore.setLicenseToken(licenseJwt);
+    credstore.setAllowedGitHubOrgs(orgs);
+    credstore.setGhFallbackRetryAfter(0);
+    log(`[${new Date().toISOString()}] activation complete`);
+    process.exit(0);
+  } catch (err) {
+    log(`[${new Date().toISOString()}] background poll failed: ${err.message}`);
+    process.exit(1);
+  }
+}
+
+function spawnBackgroundPoll(deviceId, deviceCode, interval) {
+  fs.mkdirSync(path.dirname(BACKGROUND_LOG), { recursive: true, mode: 0o700 });
+  const logFd = fs.openSync(BACKGROUND_LOG, "a");
+  const child = spawn(
+    process.execPath,
+    [__filename, "--background-poll", deviceId, deviceCode, String(interval)],
+    {
+      detached: true,
+      stdio: ["ignore", logFd, logFd],
+    }
+  );
+  child.unref();
+  fs.closeSync(logFd);
+}
+
 async function main() {
   const existingToken = credstore.getLicenseToken();
   const existingOrgs = credstore.getAllowedGitHubOrgs();
@@ -186,10 +208,6 @@ async function main() {
   }
   if (existingToken) {
     log("License expired or orgs missing — refreshing...");
-    // Do NOT pre-clear: if the refresh below fails, the stale token
-    // is strictly more useful than none (telemetry still flows via
-    // the auth-optional path). A successful silent/device flow will
-    // overwrite it via credstore.setLicenseToken.
   }
 
   const deviceId = credstore.getDeviceId();
@@ -199,65 +217,59 @@ async function main() {
   }
 
   // Explicit user-initiated activation overrides any cached gh silent-
-  // failure cooldown. The cooldown exists to protect automated hooks
-  // from hammering the endpoints; /activate is always deliberate,
-  // so a user who fixed their `gh auth` scopes shouldn't have to wait
-  // 24h before the silent path is attempted again.
+  // failure cooldown so a user who fixed their `gh auth` scopes doesn't
+  // have to wait the cooldown out.
   credstore.setGhFallbackRetryAfter(0);
 
   log("Trying gh CLI first...");
   const silentJwt = await credstore.trySilentGhActivate(deviceId);
   if (silentJwt) {
-    log("Activated via gh CLI.");
+    say("SkillMeter activated via gh CLI.");
+    const orgs = credstore.getAllowedGitHubOrgs();
+    say(`Allowed GitHub identities: ${orgs.join(", ") || "(none)"}`);
     return;
   }
 
-  log("gh activation did not succeed; falling back to GitHub device flow.");
-  log("Starting GitHub device flow...");
+  log("gh activation did not succeed; starting GitHub device flow.");
   const device = await requestDeviceCode();
 
-  // User-facing details go to stdout so they remain visible even when the
-  // host buffers stderr. The whole block is printed before any blocking
-  // poll so the operator can act on it immediately.
   const expiresMin = Math.round(device.expires_in / 60);
+  const clipboardCopied = copyToClipboard(device.user_code);
+
   say("");
   say("============================================================");
   say(" GitHub device login required");
   say("============================================================");
-  say(`  1. Open: ${device.verification_uri}`);
-  say(`  2. Enter code: ${device.user_code}`);
-  say(`  (code expires in ${expiresMin} minutes)`);
+  say("");
+  say(`  1. Open in your browser:`);
+  say(`       ${device.verification_uri}`);
+  say("");
+  say(`  2. Enter this code:`);
+  say(`       ${device.user_code}`);
+  say("");
+  if (clipboardCopied) {
+    say("  (the code has been copied to your clipboard)");
+    say("");
+  }
+  say(`  Code expires in ${expiresMin} minutes.`);
   say("============================================================");
   say("");
-  if (copyToClipboard(device.user_code)) {
-    say("Code copied to your clipboard.");
-  }
-  say("Opening the verification page in your default browser...");
-  if (!openBrowser(device.verification_uri)) {
-    say("Could not open a browser automatically — open the URL above manually.");
-  }
-  say("");
-  say("Waiting for GitHub approval... (this command will return once you approve)");
 
-  const githubToken = await pollForToken(device.device_code, device.interval || 5);
-  say("GitHub approval received. Exchanging for SkillMeter license...");
+  spawnBackgroundPoll(deviceId, device.device_code, device.interval || 5);
 
-  const licenseJwt = await exchangeForLicense(githubToken, deviceId);
-
-  // Fetch user + org logins from GitHub. Telemetry only fires in repos
-  // under one of these identities, so a fetch failure here is fatal —
-  // we'd rather block activation than silently leave the user without
-  // any allowed orgs.
-  const orgs = await credstore.fetchUserGitHubOrgs(githubToken);
-
-  credstore.setLicenseToken(licenseJwt);
-  credstore.setAllowedGitHubOrgs(orgs);
-  credstore.setGhFallbackRetryAfter(0);
-  say("SkillMeter activated.");
-  say(`Allowed GitHub identities: ${orgs.join(", ") || "(none — activation will not collect telemetry until you join an org)"}`);
+  say("Polling for approval in the background.");
+  say("After approving on GitHub, run /skillmeter:activate again to confirm.");
+  say(`(background log: ${BACKGROUND_LOG})`);
 }
 
-main().catch((err) => {
-  say(`Activation failed: ${err.message}`);
-  process.exit(1);
-});
+if (process.argv[2] === "--background-poll") {
+  const deviceId = process.argv[3];
+  const deviceCode = process.argv[4];
+  const interval = Number(process.argv[5]) || 5;
+  runBackgroundPoll(deviceId, deviceCode, interval);
+} else {
+  main().catch((err) => {
+    say(`Activation failed: ${err.message}`);
+    process.exit(1);
+  });
+}
