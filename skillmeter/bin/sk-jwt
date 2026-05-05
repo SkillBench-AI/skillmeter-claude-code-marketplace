@@ -14,7 +14,6 @@
 const path = require("path");
 
 const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, "..");
-const LOG_DIR = path.join(PLUGIN_ROOT, "logs");
 const credstore = require(path.join(PLUGIN_ROOT, "scripts", "credstore.js"));
 
 function decodeJwtPayload(token) {
@@ -28,13 +27,13 @@ function decodeJwtPayload(token) {
   }
 }
 
-const token = credstore.getLicenseToken(LOG_DIR);
-const deviceId = credstore.getDeviceId(LOG_DIR) || "(none)";
+const token = credstore.getLicenseToken();
+const deviceId = credstore.getDeviceId() || "(none)";
 
 if (!token) {
   process.stdout.write("SkillMeter: no license JWT stored.\n");
   process.stdout.write(`Device ID: ${deviceId}\n`);
-  process.stdout.write("\nRun /skillmeter:sk-activate to authenticate.\n");
+  process.stdout.write("\nRun /skillmeter:activate to authenticate.\n");
   process.exit(0);
 }
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Hook orchestrator + re-export façade.
+ * Hook orchestrator + narrow entrypoint façade.
  *
  * The bulk of the plugin runtime is split into focused modules under
  * `lib/`: sanitisation, JWT handling, project settings, repo-scope
@@ -9,9 +9,7 @@
  *
  *   - the `runHook` lifecycle that every hook script drives,
  *   - the structured-log sink (`logInfo`, `logStructured`),
- *   - small wrappers around credstore that pin `LOG_DIR`,
- *   - a handful of re-exports so the public import surface stays
- *     identical (every hook script imports via this file).
+ *   - a small set of helpers used by hook entrypoints and CLI commands.
  *
  * If you're adding new transfer / sanitisation / JWT logic, put it in
  * the relevant `lib/` module — don't grow this file back into a junk
@@ -22,19 +20,16 @@ const fs = require("fs");
 const path = require("path");
 
 const credstore = require("./credstore");
+const { getDeviceId, getOrCreateHashSalt, getLicenseToken } = credstore;
 
 const paths = require("./lib/paths");
-const { PLUGIN_ROOT, LOG_DIR, LOG_FILE, TRANSCRIPTS_PENDING_DIR, PLUGIN_VERSION } = paths;
-
-const jwt = require("./lib/jwt");
-const { decodeJwtPayload, isJwtExpired, getEndpointFromToken } = jwt;
+const { LOG_DIR, LOG_FILE, PLUGIN_VERSION } = paths;
 
 const sanitize = require("./lib/sanitize");
-const { hashHmac, sanitizeToolData, sanitizeTranscript } = sanitize;
+const { hashHmac, sanitizeToolData } = sanitize;
 
 const settings = require("./lib/settings");
 const {
-  readSettingsFile,
   getTelemetryOptIn,
   saveTelemetryOptIn,
   getRepoScopeSettings,
@@ -45,31 +40,14 @@ const { getRepoScopeDecision } = repoScope;
 
 const transfer = require("./lib/transfer");
 const {
-  transferEventLog,
-  transferTranscript,
-  flushEventLog,
-  flushAndTransfer,
+  sealEventLogAndTriggerDrain,
+  sealFinalSessionArtifacts,
+  sealFinalSessionArtifactsAndDrain,
+  sealEventLogAndDrain,
   retryFailedLogs,
   retryFailedTranscripts,
   cleanupStaleFiles,
 } = transfer;
-
-// ---------------------------------------------------------------------------
-// Credstore wrappers — every caller in this file uses LOG_DIR as the migration
-// anchor, so pin it here rather than repeat it everywhere.
-// ---------------------------------------------------------------------------
-
-function getDeviceId() {
-  return credstore.getDeviceId(LOG_DIR);
-}
-
-function getOrCreateHashSalt() {
-  return credstore.getOrCreateHashSalt(LOG_DIR);
-}
-
-function getLicenseToken() {
-  return credstore.getLicenseToken(LOG_DIR);
-}
 
 // ---------------------------------------------------------------------------
 // Structured event log — the per-event NDJSON written to events.jsonl. The
@@ -162,7 +140,9 @@ async function tryRefreshLicense(deviceId) {
  * @param {function} [options.beforeStdin] - Called after deviceId check, before stdin read (e.g. retryFailedLogs)
  * @param {function} [options.checkOptIn] - Custom opt-in logic: (cwd, input) => boolean. Return false to exit.
  * @param {function} [options.afterSkip] - Called before exit when the event is skipped after stdin is read.
- * @param {function} [options.afterLog] - Called after logInfo (e.g. force transfer)
+ * @param {function} [options.afterLog] - Called after logInfo for hook-local follow-up work.
+ * @param {boolean} [options.awaitAfterSkip=false] - Await afterSkip when it returns a Promise.
+ * @param {boolean} [options.awaitAfterLog=false] - Await afterLog when it returns a Promise.
  */
 async function runHook(eventName, buildData, options = {}) {
   const deviceId = getDeviceId();
@@ -201,9 +181,17 @@ async function runHook(eventName, buildData, options = {}) {
       `[skillmeter] ${eventName}: skipped (${repoScopeDecision.classification})`
     );
     if (options.afterSkip) {
-      const result = options.afterSkip(input, deviceId);
-      if (result && typeof result.then === "function") {
-        await result;
+      try {
+        const result = options.afterSkip(input, deviceId);
+        if (options.awaitAfterSkip && result && typeof result.then === "function") {
+          await result;
+        } else if (result && typeof result.catch === "function") {
+          result.catch((err) => {
+            console.error(`[skillmeter] ${eventName}: afterSkip failed (${err.message})`);
+          });
+        }
+      } catch (err) {
+        console.error(`[skillmeter] ${eventName}: afterSkip failed (${err.message})`);
       }
     }
     process.exit(0);
@@ -230,13 +218,24 @@ async function runHook(eventName, buildData, options = {}) {
   logInfo(eventName, sessionId, data, deviceId);
   console.error(`[skillmeter] ${eventName}: logged (session=${sessionId.slice(0, 8)}…)`);
 
-  if (options.afterLog) options.afterLog(input, deviceId);
+  if (options.afterLog) {
+    try {
+      const result = options.afterLog(input, deviceId);
+      if (options.awaitAfterLog && result && typeof result.then === "function") {
+        await result;
+      } else if (result && typeof result.catch === "function") {
+        result.catch((err) => {
+          console.error(`[skillmeter] ${eventName}: afterLog failed (${err.message})`);
+        });
+      }
+    } catch (err) {
+      console.error(`[skillmeter] ${eventName}: afterLog failed (${err.message})`);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
-// Public API — re-exports preserve the historical import surface so hook
-// scripts and the telemetry.js CLI can keep destructuring from logger.js.
-// New callers should import directly from the relevant lib/* module.
+// Public API for hook entrypoints and simple CLI wrappers.
 // ---------------------------------------------------------------------------
 
 module.exports = {
@@ -254,27 +253,18 @@ module.exports = {
   getLicenseToken,
 
   // Paths / metadata
-  PLUGIN_ROOT,
   PLUGIN_VERSION,
   LOG_DIR,
   LOG_FILE,
-  TRANSCRIPTS_PENDING_DIR,
 
   // License refresh
   tryRefreshLicense,
 
-  // Re-exports from lib/jwt
-  decodeJwtPayload,
-  isJwtExpired,
-  getEndpointFromToken,
-
   // Re-exports from lib/sanitize
   hashHmac,
   sanitizeToolData,
-  sanitizeTranscript,
 
   // Re-exports from lib/settings
-  readSettingsFile,
   getTelemetryOptIn,
   saveTelemetryOptIn,
   getRepoScopeSettings,
@@ -283,10 +273,10 @@ module.exports = {
   getRepoScopeDecision,
 
   // Re-exports from lib/transfer
-  transferEventLog,
-  transferTranscript,
-  flushEventLog,
-  flushAndTransfer,
+  sealEventLogAndTriggerDrain,
+  sealFinalSessionArtifacts,
+  sealFinalSessionArtifactsAndDrain,
+  sealEventLogAndDrain,
   retryFailedLogs,
   retryFailedTranscripts,
   cleanupStaleFiles,

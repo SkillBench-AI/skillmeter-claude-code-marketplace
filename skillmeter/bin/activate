@@ -1,0 +1,11 @@
+#!/usr/bin/env node
+/**
+ * Run the SkillMeter activation flow directly from a shell.
+ */
+
+const path = require("path");
+
+const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, "..");
+process.env.CLAUDE_PLUGIN_ROOT = PLUGIN_ROOT;
+
+require(path.join(PLUGIN_ROOT, "scripts", "activate.js"));

@@ -23,6 +23,18 @@
         ]
       }
     ],
+    "UserPromptExpansion": [
+      {
+        "matcher": "activate|skillmeter:activate",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/user_prompt_expansion_activate.js",
+            "timeout": 12
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "hooks": [
@@ -197,8 +209,7 @@
           {
             "type": "command",
             "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/session_end.js",
-            "async": true,
-            "timeout": 30
+            "timeout": 5
           }
         ]
       }
