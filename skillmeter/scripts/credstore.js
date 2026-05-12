@@ -4,6 +4,8 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 
+const { getSkillmeterStringSetting } = require("./lib/settings");
+
 const CRED_FILE = path.join(os.homedir(), ".skillbench", "credentials.json");
 
 // ---------------------------------------------------------------------------
@@ -276,7 +278,18 @@ async function fetchUserGitHubOrgs(githubToken) {
   return [userLogin, ...orgLogins].filter(Boolean);
 }
 
-const ACTIVATE_URL = "https://api.meter.skillbench.com/activate";
+// Default points at prod. Devs/agents override via SKILLMETER_ACTIVATE_URL
+// (e.g. https://api.dev.skillbench.com/activate) or a `skillmeter.activate_url`
+// entry in the project's .claude/settings.local.json.
+const DEFAULT_ACTIVATE_URL = "https://api.skillbench.com/activate";
+
+function getActivateUrl() {
+  if (process.env.SKILLMETER_ACTIVATE_URL) return process.env.SKILLMETER_ACTIVATE_URL;
+  const fromSettings = getSkillmeterStringSetting(process.cwd(), "activate_url");
+  if (fromSettings) return fromSettings;
+  return DEFAULT_ACTIVATE_URL;
+}
+
 const FAILURE_COOLDOWN = 24 * 60 * 60;
 const TRANSIENT_COOLDOWN = 5 * 60;
 
@@ -322,7 +335,7 @@ async function trySilentGhActivate(deviceId) {
 
   let res;
   try {
-    res = await fetch(ACTIVATE_URL, {
+    res = await fetch(getActivateUrl(), {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${ghToken}`,
@@ -406,6 +419,7 @@ module.exports = {
   getSignedOut,
   getTelemetryDisabled,
   setTelemetryDisabled,
-  ACTIVATE_URL,
+  getActivateUrl,
+  DEFAULT_ACTIVATE_URL,
   CRED_FILE,
 };

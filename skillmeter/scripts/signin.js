@@ -20,6 +20,7 @@
 const credstore = require("./credstore.js");
 const { welcomeBanner } = require("./lib/banner.js");
 const { startSpinner } = require("./lib/spinner.js");
+const { getSkillmeterStringSetting } = require("./lib/settings");
 const { spawnSync, spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
@@ -37,8 +38,18 @@ for (const stream of [process.stdout, process.stderr]) {
   } catch {}
 }
 
-// GitHub OAuth App client_id — same SkillMeter app the VS Code extension uses.
-const CLIENT_ID = process.env.SKILLMETER_GITHUB_CLIENT_ID || "Ov23ct86rS80kpl7o2Xg";
+// Default points at the prod SkillMeter GitHub OAuth App (registered under
+// the SkillBench-AI org). Devs/agents override via SKILLMETER_GITHUB_CLIENT_ID
+// (e.g. the dev OAuth App's client_id) or a `skillmeter.github_client_id`
+// entry in the project's .claude/settings.local.json.
+const DEFAULT_GITHUB_CLIENT_ID = "Ov23ct86rS80kpl7o2Xg";
+
+function getGitHubClientId() {
+  if (process.env.SKILLMETER_GITHUB_CLIENT_ID) return process.env.SKILLMETER_GITHUB_CLIENT_ID;
+  const fromSettings = getSkillmeterStringSetting(process.cwd(), "github_client_id");
+  if (fromSettings) return fromSettings;
+  return DEFAULT_GITHUB_CLIENT_ID;
+}
 const DEVICE_CODE_URL = "https://github.com/login/device/code";
 const TOKEN_URL = "https://github.com/login/oauth/access_token";
 const SCOPE = "read:user read:org";
@@ -96,7 +107,7 @@ async function postForm(url, params) {
 }
 
 async function requestDeviceCode() {
-  return postForm(DEVICE_CODE_URL, { client_id: CLIENT_ID, scope: SCOPE });
+  return postForm(DEVICE_CODE_URL, { client_id: getGitHubClientId(), scope: SCOPE });
 }
 
 async function pollForToken(deviceCode, initialInterval) {
@@ -105,7 +116,7 @@ async function pollForToken(deviceCode, initialInterval) {
     await new Promise((r) => setTimeout(r, interval * 1000));
 
     const payload = await postForm(TOKEN_URL, {
-      client_id: CLIENT_ID,
+      client_id: getGitHubClientId(),
       device_code: deviceCode,
       grant_type: "urn:ietf:params:oauth:grant-type:device_code",
     });
@@ -129,7 +140,7 @@ async function pollForToken(deviceCode, initialInterval) {
 }
 
 async function exchangeForLicense(githubToken, deviceId) {
-  const res = await fetch(credstore.ACTIVATE_URL, {
+  const res = await fetch(credstore.getActivateUrl(), {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${githubToken}`,
@@ -289,14 +300,23 @@ async function runForegroundPoll(deviceId, device) {
   }
 }
 
-if (process.argv[2] === "--background-poll") {
-  const deviceId = process.argv[3];
-  const deviceCode = process.argv[4];
-  const interval = Number(process.argv[5]) || 5;
-  runBackgroundPoll(deviceId, deviceCode, interval);
-} else {
-  main().catch((err) => {
-    say(`Activation failed: ${err.message}`);
-    process.exit(1);
-  });
+module.exports = {
+  getGitHubClientId,
+  DEFAULT_GITHUB_CLIENT_ID,
+  main,
+  runBackgroundPoll,
+};
+
+if (require.main === module) {
+  if (process.argv[2] === "--background-poll") {
+    const deviceId = process.argv[3];
+    const deviceCode = process.argv[4];
+    const interval = Number(process.argv[5]) || 5;
+    runBackgroundPoll(deviceId, deviceCode, interval);
+  } else {
+    main().catch((err) => {
+      say(`Activation failed: ${err.message}`);
+      process.exit(1);
+    });
+  }
 }

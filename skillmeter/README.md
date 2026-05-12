@@ -173,12 +173,29 @@ SkillMeter stores device identity, hash salt, license JWT, allowed GitHub identi
 
 ## Configuration
 
-| Environment Variable       | Default                                                                       | Description                                                                                                                                  |
-|---------------------------|-------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
-| `SKILLMETER_BACKEND_URL`  | unset — endpoint resolved from the license JWT's `telemetry_endpoint` claim   | Base-URL override for local development / integration tests (e.g. `http://localhost:8080`). Bypasses the JWT check; callers append `/logs/claude` and `/logs/claude/transcript`. |
-| `SKILLMETER_TIMEOUT`      | `10`                                                                          | Upload timeout (seconds)                                                                                                                     |
+| Environment Variable           | Default                                                                       | Description                                                                                                                                  |
+|--------------------------------|-------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
+| `SKILLMETER_BACKEND_URL`       | unset — endpoint resolved from the license JWT's `telemetry_endpoint` claim   | Base-URL override for local development / integration tests (e.g. `http://localhost:8080`). Bypasses the JWT check; callers append `/logs/claude` and `/logs/claude/transcript`. |
+| `SKILLMETER_ACTIVATE_URL`      | `https://api.skillbench.com/activate`                                         | Activation endpoint that exchanges a GitHub OAuth token for a SkillMeter license JWT. Point at `https://api.dev.skillbench.com/activate` to run against dev. |
+| `SKILLMETER_GITHUB_CLIENT_ID`  | prod SkillMeter GitHub OAuth App                                              | Override the GitHub OAuth App used for the device-code login. Set to the dev App's `client_id` when activating against dev.                  |
+| `SKILLMETER_TIMEOUT`           | `10`                                                                          | Upload timeout (seconds)                                                                                                                     |
 
 In production the telemetry hostname is per-tenant and looks like `https://<slug>.meter[.<env>].skillbench.com`. The activation Lambda mints it into the license JWT against the tenant slug at issuance, and the plugin reads it back at upload time.
+
+### Pointing at a non-default environment
+
+`SKILLMETER_ACTIVATE_URL` and `SKILLMETER_GITHUB_CLIENT_ID` both also accept persistent per-project values via `.claude/settings.local.json`:
+
+```json
+{
+  "skillmeter": {
+    "activate_url": "https://api.dev.skillbench.com/activate",
+    "github_client_id": "<dev OAuth App client_id>"
+  }
+}
+```
+
+Resolution order is env var → settings file → built-in default. Typically you set the env vars together when running activation against dev; once the JWT is cached, telemetry routing is read straight from its `telemetry_endpoint` claim and doesn't need `SKILLMETER_BACKEND_URL`.
 
 ## Repo-Scoped Filtering
 
