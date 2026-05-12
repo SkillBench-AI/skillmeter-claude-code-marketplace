@@ -300,23 +300,14 @@ async function runForegroundPoll(deviceId, device) {
   }
 }
 
-module.exports = {
-  getGitHubClientId,
-  DEFAULT_GITHUB_CLIENT_ID,
-  main,
-  runBackgroundPoll,
-};
-
-if (require.main === module) {
-  if (process.argv[2] === "--background-poll") {
-    const deviceId = process.argv[3];
-    const deviceCode = process.argv[4];
-    const interval = Number(process.argv[5]) || 5;
-    runBackgroundPoll(deviceId, deviceCode, interval);
-  } else {
-    main().catch((err) => {
-      say(`Activation failed: ${err.message}`);
-      process.exit(1);
-    });
-  }
+if (process.argv[2] === "--background-poll") {
+  const deviceId = process.argv[3];
+  const deviceCode = process.argv[4];
+  const interval = Number(process.argv[5]) || 5;
+  runBackgroundPoll(deviceId, deviceCode, interval);
+} else {
+  main().catch((err) => {
+    say(`Activation failed: ${err.message}`);
+    process.exit(1);
+  });
 }

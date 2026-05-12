@@ -32,8 +32,7 @@ if (existing) {
 // again immediately. Matches the behavior of /activate itself.
 credstore.setGhFallbackRetryAfter(0);
 
-const activate = require(path.join(PLUGIN_ROOT, "scripts", "activate.js"));
-activate.main().catch((err) => {
-  process.stderr.write(`Activation failed: ${err.message}\n`);
-  process.exit(1);
-});
+// Requiring activate.js runs its top-level `main()` immediately. With the
+// license cleared above it falls through to the silent-gh / device-flow
+// pipeline.
+require(path.join(PLUGIN_ROOT, "scripts", "activate.js"));
