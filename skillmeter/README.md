@@ -69,15 +69,20 @@ A Claude Code plugin that tracks session activity and tool usage, providing anon
                  │                                     │
                  └──────────────┬───────────────────────┘
                                 ▼
-                 ┌──────────────────────────────┐
-                 │  SkillBench Backend          │
-                 │  api.meter.skillbench.com    │
-                 │  POST /logs/claude           │
-                 │                              │
-                 │  Headers:                    │
-                 │    Content-Encoding: gzip    │
-                 │    Authorization: Bearer ... │
-                 └──────────────────────────────┘
+                 ┌────────────────────────────────────────┐
+                 │  SkillBench Backend (per-tenant)       │
+                 │  <slug>.meter[.<env>].skillbench.com   │
+                 │  POST /logs/claude                     │
+                 │                                        │
+                 │  Hostname is read from the JWT's       │
+                 │  `telemetry_endpoint` claim, minted    │
+                 │  by the activation Lambda against the  │
+                 │  tenant slug at issuance time.         │
+                 │                                        │
+                 │  Headers:                              │
+                 │    Content-Encoding: gzip              │
+                 │    Authorization: Bearer ...           │
+                 └────────────────────────────────────────┘
 ```
 
 ## Project Structure
@@ -168,10 +173,12 @@ SkillMeter stores device identity, hash salt, license JWT, allowed GitHub identi
 
 ## Configuration
 
-| Environment Variable       | Default                                          | Description              |
-|---------------------------|--------------------------------------------------|--------------------------|
-| `SKILLMETER_BACKEND_URL`  | `https://api.meter.skillbench.com/logs/claude`   | Backend endpoint         |
-| `SKILLMETER_TIMEOUT`      | `10`                                             | Upload timeout (seconds) |
+| Environment Variable       | Default                                                                       | Description                                                                                                                                  |
+|---------------------------|-------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
+| `SKILLMETER_BACKEND_URL`  | unset — endpoint resolved from the license JWT's `telemetry_endpoint` claim   | Base-URL override for local development / integration tests (e.g. `http://localhost:8080`). Bypasses the JWT check; callers append `/logs/claude` and `/logs/claude/transcript`. |
+| `SKILLMETER_TIMEOUT`      | `10`                                                                          | Upload timeout (seconds)                                                                                                                     |
+
+In production the telemetry hostname is per-tenant and looks like `https://<slug>.meter[.<env>].skillbench.com`. The activation Lambda mints it into the license JWT against the tenant slug at issuance, and the plugin reads it back at upload time.
 
 ## Repo-Scoped Filtering
 
