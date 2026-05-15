@@ -18,6 +18,7 @@
  */
 
 const credstore = require("./credstore.js");
+const { welcomeBanner } = require("./lib/banner.js");
 const { spawnSync, spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
@@ -209,8 +210,7 @@ async function main() {
     !credstore.isLicenseTokenExpired(existingToken) &&
     existingOrgs.length > 0
   ) {
-    say("SkillMeter is already activated.");
-    say(`Allowed GitHub identities: ${existingOrgs.join(", ")}`);
+    say(welcomeBanner(existingOrgs));
     return;
   }
   if (existingToken) {
@@ -226,9 +226,7 @@ async function main() {
   log("Trying gh CLI first...");
   const silentJwt = await credstore.trySilentGhActivate(deviceId);
   if (silentJwt) {
-    say("SkillMeter activated via gh CLI.");
-    const orgs = credstore.getAllowedGitHubOrgs();
-    say(`Allowed GitHub identities: ${orgs.join(", ") || "(none)"}`);
+    say(welcomeBanner(credstore.getAllowedGitHubOrgs()));
     return;
   }
 
