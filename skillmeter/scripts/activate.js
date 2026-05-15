@@ -241,16 +241,15 @@ async function main() {
   say(" GitHub device login required");
   say("============================================================");
   say("");
-  say(`  1. Open in your browser:`);
+  say(`  1. Copy this code:`);
+  say(`       ${device.user_code}`);
+  if (clipboardCopied) {
+    say("       (already copied to your clipboard)");
+  }
+  say("");
+  say(`  2. Open in your browser and paste it:`);
   say(`       ${device.verification_uri}`);
   say("");
-  say(`  2. Enter this code:`);
-  say(`       ${device.user_code}`);
-  say("");
-  if (clipboardCopied) {
-    say("  (the code has been copied to your clipboard)");
-    say("");
-  }
   say(`  Code expires in ${expiresMin} minutes.`);
   say("============================================================");
   say("");
