@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * Observe direct `/skillmeter:activate` invocation before it expands into
- * a Claude prompt. Only silent gh-based activation runs here; interactive
- * GitHub device flow belongs in the `activate` shell command.
+ * Observe direct `/skillmeter:signin` invocation before it expands into a
+ * Claude prompt. Only silent gh-based sign-in runs here; the interactive
+ * GitHub device flow belongs in the `signin` shell command.
  *
  * UserPromptExpansion can only block expansion or add context. Blocking makes
  * Claude Code render "operation blocked by hook", so this hook never blocks.
@@ -11,7 +11,7 @@
 const credstore = require("./credstore.js");
 const path = require("path");
 
-const ACTIVATE_COMMAND = path.join(__dirname, "..", "bin", "activate");
+const SIGNIN_COMMAND = path.join(__dirname, "..", "bin", "signin");
 
 // `!`-prefixed instruction the LLM relays to the user. Pasting this into the
 // next prompt makes Claude Code execute the binary in the user's own shell,
@@ -19,7 +19,7 @@ const ACTIVATE_COMMAND = path.join(__dirname, "..", "bin", "activate");
 const RUN_INSTRUCTION =
   `Tell the user to paste the following into their NEXT prompt verbatim ` +
   `(the leading \`!\` is required — it makes Claude Code run the command ` +
-  `in their shell):\n\n    ! ${ACTIVATE_COMMAND}`;
+  `in their shell):\n\n    ! ${SIGNIN_COMMAND}`;
 
 function readStdin() {
   return new Promise((resolve, reject) => {
@@ -42,38 +42,41 @@ function addContext(message) {
     hookSpecificOutput: {
       hookEventName: "UserPromptExpansion",
       additionalContext: [
-        "SkillMeter activation status:",
+        "SkillMeter sign-in status:",
         message,
       ].join("\n"),
     },
   }) + "\n");
 }
 
-function isActivateCommand(input) {
-  if (input.command_name === "skillmeter:activate") return true;
-  return input.command_name === "activate" && input.command_source === "plugin";
+function isSigninCommand(input) {
+  if (input.command_name === "skillmeter:signin") return true;
+  return input.command_name === "signin" && input.command_source === "plugin";
 }
 
 async function main() {
   const input = await readStdin();
-  if (!isActivateCommand(input)) return;
+  if (!isSigninCommand(input)) return;
+
+  // Re-running signin re-arms the gh fallback and clears any signed-out
+  // sentinel left by /skillmeter:signout — one atomic write.
+  credstore.markEngaged();
 
   const existingToken = credstore.getLicenseToken();
   if (existingToken && !credstore.isLicenseTokenExpired(existingToken)) {
-    addContext("SkillMeter is already activated.");
+    addContext("SkillMeter is already signed in.");
     return;
   }
 
   const deviceId = credstore.getDeviceId();
   if (!deviceId) {
-    addContext(`Activation failed: unable to determine device ID.\n${RUN_INSTRUCTION}`);
+    addContext(`Sign-in failed: unable to determine device ID.\n${RUN_INSTRUCTION}`);
     return;
   }
 
-  credstore.setGhFallbackRetryAfter(0);
   const jwt = await credstore.trySilentGhActivate(deviceId);
   if (jwt) {
-    addContext("SkillMeter activated via GitHub CLI.");
+    addContext("SkillMeter signed in via GitHub CLI.");
     return;
   }
 
@@ -81,5 +84,5 @@ async function main() {
 }
 
 main().catch((err) => {
-  addContext(`Activation failed: ${err.message}.\n${RUN_INSTRUCTION}`);
+  addContext(`Sign-in failed: ${err.message}.\n${RUN_INSTRUCTION}`);
 });

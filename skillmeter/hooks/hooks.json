@@ -25,11 +25,11 @@
     ],
     "UserPromptExpansion": [
       {
-        "matcher": "activate|skillmeter:activate",
+        "matcher": "signin|skillmeter:signin",
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/user_prompt_expansion_activate.js",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/user_prompt_expansion_signin.js",
             "timeout": 12
           }
         ]
