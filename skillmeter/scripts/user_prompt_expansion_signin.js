@@ -9,6 +9,7 @@
  */
 
 const credstore = require("./credstore.js");
+const { welcomeBanner } = require("./lib/banner.js");
 const path = require("path");
 
 const SIGNIN_COMMAND = path.join(__dirname, "..", "bin", "signin");
@@ -64,7 +65,7 @@ async function main() {
 
   const existingToken = credstore.getLicenseToken();
   if (existingToken && !credstore.isLicenseTokenExpired(existingToken)) {
-    addContext("SkillMeter is already signed in.");
+    addContext(welcomeBanner(credstore.getAllowedGitHubOrgs()));
     return;
   }
 
@@ -76,7 +77,7 @@ async function main() {
 
   const jwt = await credstore.trySilentGhActivate(deviceId);
   if (jwt) {
-    addContext("SkillMeter signed in via GitHub CLI.");
+    addContext(welcomeBanner(credstore.getAllowedGitHubOrgs()));
     return;
   }
 
