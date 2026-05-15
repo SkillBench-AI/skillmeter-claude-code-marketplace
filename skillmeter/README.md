@@ -152,7 +152,19 @@ All uploads use gzip compression. Successfully uploaded event batches are rename
 
 ## Credential Store
 
-SkillMeter stores device identity, hash salt, activation JWT, and GitHub fallback cooldown metadata in `~/.skillbench/credentials.json`. Keychain and plugin-local credential fallback files are no longer supported or migrated; users with older credentials should run `/skillmeter:activate` again after upgrading.
+SkillMeter stores device identity, hash salt, license JWT, allowed GitHub identities, the global telemetry kill-switch, and the GitHub fallback cooldown in `~/.skillbench/credentials.json`. Keychain and plugin-local credential fallback files are no longer supported or migrated; users with older credentials should run `/skillmeter:signin` after upgrading.
+
+## Slash Commands
+
+| Command                              | Purpose                                                            |
+|--------------------------------------|--------------------------------------------------------------------|
+| `/skillmeter:signin`                 | Sign in with GitHub (silent via `gh`, or device-flow fallback)     |
+| `/skillmeter:signout`                | Sign out and stop all telemetry; keeps device identity intact      |
+| `/skillmeter:telemetry enable`       | Opt the current project in                                         |
+| `/skillmeter:telemetry disable`      | Opt the current project out                                        |
+| `/skillmeter:telemetry enable-global`| Clear the machine-global telemetry kill-switch                     |
+| `/skillmeter:telemetry disable-global`| Pause telemetry across every project on this machine              |
+| `/skillmeter:telemetry status`       | Show global, per-project, and sign-in state                        |
 
 ## Configuration
 
@@ -163,7 +175,7 @@ SkillMeter stores device identity, hash salt, activation JWT, and GitHub fallbac
 
 ## Repo-Scoped Filtering
 
-Telemetry is gated to repositories owned by GitHub identities the activated user controls — their own login plus every org returned by `GET /user/orgs`. The list is captured at `/skillmeter:activate` time (using the same OAuth token that exchanges for the SkillMeter license) and stored in `~/.skillbench/credentials.json` next to the device ID and license JWT. There is no per-project repo-scope config.
+Telemetry is gated to repositories owned by GitHub identities the signed-in user controls — their own login plus every org returned by `GET /user/orgs`. The list is captured at `/skillmeter:signin` time (using the same OAuth token that exchanges for the SkillMeter license) and stored in `~/.skillbench/credentials.json` next to the device ID and license JWT. There is no per-project repo-scope config.
 
 Events are dropped — even in workdirs where the user ran `/skillmeter:telemetry enable` — for:
 
@@ -171,4 +183,4 @@ Events are dropped — even in workdirs where the user ran `/skillmeter:telemetr
 - repositories without a recognizable GitHub remote
 - repositories whose remote belongs to an org the user is not a member of
 
-To refresh the allowed identity list (e.g. after joining a new org), run `/skillmeter:activate` again.
+To refresh the allowed identity list (e.g. after joining a new org), run `/skillmeter:signin` again.

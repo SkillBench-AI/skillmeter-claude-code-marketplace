@@ -118,6 +118,7 @@ async function tryRefreshLicense(deviceId) {
     return current;
   }
   if (!deviceId) return null;
+  if (credstore.getSignedOut()) return null;
   try {
     return await credstore.trySilentGhActivate(deviceId);
   } catch {
@@ -159,6 +160,11 @@ async function runHook(eventName, buildData, options = {}) {
   }
 
   const cwd = input.cwd || process.cwd();
+
+  if (credstore.getTelemetryDisabled()) {
+    console.error(`[skillmeter] ${eventName}: skipped (telemetry globally disabled)`);
+    process.exit(0);
+  }
 
   if (options.checkOptIn) {
     if (!options.checkOptIn(cwd, input)) process.exit(0);

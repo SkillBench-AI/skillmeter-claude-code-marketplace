@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
- * Interactive activation flow for the SkillMeter plugin.
+ * Interactive sign-in flow for the SkillMeter plugin (`/skillmeter:signin`).
  *
- *   1. Try silent activation using `gh auth token` when the GitHub CLI is
+ *   1. Try silent sign-in using `gh auth token` when the GitHub CLI is
  *      already logged in.
- *   2. Otherwise start the GitHub OAuth device flow: print the verification
- *      URL and user code to stdout, then hand off polling to a detached
+ *   2. Otherwise start the GitHub OAuth device flow: print the user code
+ *      and verification URL to stdout, then hand off polling to a detached
  *      child process. The foreground exits immediately so the user sees
  *      the code right away — Claude Code's `!`-prefix runner displays
  *      captured output once the command returns, so we cannot block on
@@ -13,7 +13,7 @@
  *   3. The background child polls for the GitHub access token, POSTs it +
  *      device_id to the SkillMeter activation endpoint, fetches the user's
  *      GitHub identities, and stores the license JWT + orgs in credstore.
- *      The user re-runs `/skillmeter:activate` (or any telemetry-emitting
+ *      The user re-runs `/skillmeter:signin` (or any telemetry-emitting
  *      flow) to observe the result.
  */
 
@@ -117,7 +117,7 @@ async function pollForToken(deviceCode, initialInterval) {
         interval += 5;
         continue;
       case "expired_token":
-        throw new Error("The device code expired. Run /skillmeter:activate again.");
+        throw new Error("The device code expired. Run /skillmeter:signin again.");
       case "access_denied":
         throw new Error("Access was denied on GitHub. Aborting.");
       default:
@@ -168,9 +168,10 @@ async function runBackgroundPoll(deviceId, deviceCode, interval) {
     const orgs = await credstore.fetchUserGitHubOrgs(githubToken);
     log(`[${new Date().toISOString()}] orgs fetched: ${orgs.join(", ") || "(none)"}`);
 
-    credstore.setLicenseToken(licenseJwt);
-    credstore.setAllowedGitHubOrgs(orgs);
-    credstore.setGhFallbackRetryAfter(0);
+    if (!credstore.commitSignin({ jwt: licenseJwt, orgs })) {
+      log(`[${new Date().toISOString()}] sign-in discarded: signed out during poll`);
+      process.exit(0);
+    }
     log(`[${new Date().toISOString()}] activation complete`);
     process.exit(0);
   } catch (err) {
@@ -195,6 +196,12 @@ function spawnBackgroundPoll(deviceId, deviceCode, interval) {
 }
 
 async function main() {
+  // An explicit /skillmeter:signin re-arms everything in one atomic
+  // write: clears the signed-out sentinel and the gh-fallback cooldown
+  // so a user who just fixed their `gh auth` scopes or who signed out
+  // earlier isn't bounced.
+  credstore.markEngaged();
+
   const existingToken = credstore.getLicenseToken();
   const existingOrgs = credstore.getAllowedGitHubOrgs();
   if (
@@ -215,11 +222,6 @@ async function main() {
     log("Activation failed: unable to determine device ID.");
     process.exit(1);
   }
-
-  // Explicit user-initiated activation overrides any cached gh silent-
-  // failure cooldown so a user who fixed their `gh auth` scopes doesn't
-  // have to wait the cooldown out.
-  credstore.setGhFallbackRetryAfter(0);
 
   log("Trying gh CLI first...");
   const silentJwt = await credstore.trySilentGhActivate(deviceId);
@@ -257,7 +259,7 @@ async function main() {
   spawnBackgroundPoll(deviceId, device.device_code, device.interval || 5);
 
   say("Polling for approval in the background.");
-  say("After approving on GitHub, run /skillmeter:activate again to confirm.");
+  say("After approving on GitHub, run /skillmeter:signin again to confirm.");
   say(`(background log: ${BACKGROUND_LOG})`);
 }
 

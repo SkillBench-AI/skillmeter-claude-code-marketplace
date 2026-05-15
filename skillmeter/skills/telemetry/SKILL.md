@@ -1,6 +1,6 @@
 ---
-description: Enable, disable, or check SkillMeter telemetry status for the current project
-argument-hint: <enable|disable|status>
+description: Enable, disable, or check SkillMeter telemetry (per-project, or globally with enable-global/disable-global)
+argument-hint: <enable|disable|enable-global|disable-global|status>
 disable-model-invocation: true
 allowed-tools: Bash(node *)
 ---

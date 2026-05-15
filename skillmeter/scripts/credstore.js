@@ -133,6 +133,86 @@ function getGhFallbackRetryAfter() {
   return Number(store.gh_fallback_retry_after) || 0;
 }
 
+// `signed_out` is set by /skillmeter:signout. It blocks the silent gh
+// fallback so a still-authenticated gh CLI doesn't auto-resignin on the
+// next SessionStart. `markEngaged()` (called from /skillmeter:signin) clears it.
+//
+// Reads bypass the cache so a setter run by another process is reflected
+// immediately — relevant when signin runs as a long-lived background poll
+// while the user might invoke signout from a fresh hook process.
+function getSignedOut() {
+  return readStore().signed_out === true;
+}
+
+// `telemetry_disabled` is the machine-global kill-switch toggled by
+// `/skillmeter:telemetry disable-global`. Hooks check it before any
+// per-project opt-in. Independent of signin state — the license stays
+// intact while transmission is paused.
+function getTelemetryDisabled() {
+  return readStore().telemetry_disabled === true;
+}
+
+function setTelemetryDisabled(value) {
+  const store = readStore();
+  if (value === true) {
+    store.telemetry_disabled = true;
+  } else {
+    delete store.telemetry_disabled;
+  }
+  writeStore(store);
+  _cache = store;
+}
+
+// Drop license + org list atomically. Preserves device_id and hash_salt
+// so the machine identity survives a sign-out / sign-in cycle.
+function signOut() {
+  const store = readStore();
+  delete store.license_jwt;
+  delete store.allowed_github_orgs;
+  delete store.gh_fallback_retry_after;
+  store.signed_out = true;
+  writeStore(store);
+  _cache = store;
+}
+
+// Called when the user explicitly invokes /skillmeter:signin — clears the
+// signed-out sentinel and the gh-fallback cooldown in a single write so the
+// next gh attempt is unblocked atomically.
+function markEngaged() {
+  const store = readStore();
+  delete store.signed_out;
+  delete store.gh_fallback_retry_after;
+  writeStore(store);
+  _cache = store;
+}
+
+function normalizeOrgs(orgs) {
+  if (!Array.isArray(orgs)) return [];
+  return Array.from(
+    new Set(
+      orgs
+        .filter((o) => typeof o === "string")
+        .map((o) => o.trim().toLowerCase())
+        .filter(Boolean)
+    )
+  );
+}
+
+// Persist a freshly-issued license atomically. Re-reads the store at write
+// time and aborts if /skillmeter:signout fired while the license issuance
+// was in flight — the user's most recent intent wins. Returns true when
+// the license was written, false when it was discarded.
+function commitSignin({ jwt, orgs }) {
+  const store = readStore();
+  if (store.signed_out === true) return false;
+  store.license_jwt = jwt;
+  store.allowed_github_orgs = normalizeOrgs(orgs);
+  delete store.gh_fallback_retry_after;
+  writeStore(store);
+  _cache = store;
+  return true;
+}
+
 function setGhFallbackRetryAfter(unixSeconds) {
   const store = readStore();
   if (unixSeconds > 0) {
@@ -157,28 +237,11 @@ function getAllowedGitHubOrgs() {
   return orgs;
 }
 
-function setAllowedGitHubOrgs(orgs) {
-  const store = readStore();
-  const cleaned = Array.isArray(orgs)
-    ? Array.from(
-        new Set(
-          orgs
-            .filter((o) => typeof o === "string")
-            .map((o) => o.trim().toLowerCase())
-            .filter(Boolean)
-        )
-      )
-    : [];
-  store.allowed_github_orgs = cleaned;
-  writeStore(store);
-  _cache = store;
-}
-
 /**
  * Fetch the activating user's GitHub login + every org they belong to.
- * Returns an array of lowercase logins suitable for storing via
- * setAllowedGitHubOrgs. Throws on any HTTP/network failure so the caller
- * can decide whether to abort activation.
+ * Returns an array of lowercase logins suitable for passing to
+ * `commitSignin`. Throws on any HTTP/network failure so the caller can
+ * decide whether to abort.
  */
 async function fetchUserGitHubOrgs(githubToken) {
   const headers = {
@@ -224,6 +287,11 @@ const TRANSIENT_COOLDOWN = 5 * 60;
  * don't hammer GitHub/the activation endpoint.
  */
 async function trySilentGhActivate(deviceId) {
+  if (getSignedOut()) {
+    console.error("[skillmeter] gh activation skipped: signed out (run /skillmeter:signin to re-enable)");
+    return null;
+  }
+
   const now = Math.floor(Date.now() / 1000);
   const retryAfter = getGhFallbackRetryAfter();
   if (retryAfter > now) {
@@ -311,9 +379,10 @@ async function trySilentGhActivate(deviceId) {
     return null;
   }
 
-  setLicenseToken(jwt);
-  setAllowedGitHubOrgs(orgs);
-  setGhFallbackRetryAfter(0);
+  if (!commitSignin({ jwt, orgs })) {
+    console.error("[skillmeter] gh activation discarded: signed out during issuance");
+    return null;
+  }
   console.error(`[skillmeter] gh activation succeeded (allowed orgs: ${orgs.join(", ") || "none"})`);
   return jwt;
 }
@@ -325,12 +394,18 @@ module.exports = {
   setLicenseToken,
   isLicenseTokenExpired,
   LICENSE_EXPIRY_SKEW_SECONDS,
-  getGhFallbackRetryAfter,
-  setGhFallbackRetryAfter,
   getAllowedGitHubOrgs,
-  setAllowedGitHubOrgs,
   fetchUserGitHubOrgs,
   trySilentGhActivate,
+  // Atomic sign-in lifecycle — prefer these over the lower-level set* helpers
+  // when adjusting more than one field, so partial writes can't race.
+  commitSignin,
+  markEngaged,
+  signOut,
+  // Flag accessors
+  getSignedOut,
+  getTelemetryDisabled,
+  setTelemetryDisabled,
   ACTIVATE_URL,
   CRED_FILE,
 };

@@ -32,8 +32,10 @@ runHook("SessionStart", (input) => ({
     // they pick one.
     process.stderr.write(
       `SkillMeter v${PLUGIN_VERSION} (telemetry not configured for this project)\n` +
-      `  Run /skillmeter:telemetry enable   — send anonymized session data\n` +
-      `  Run /skillmeter:telemetry disable  — opt out for this project\n`
+      `  /skillmeter:signin                — sign in with GitHub\n` +
+      `  /skillmeter:telemetry enable      — opt this project in\n` +
+      `  /skillmeter:telemetry disable     — opt this project out\n` +
+      `  /skillmeter:telemetry status      — show current state\n`
     );
     return false;
   },
