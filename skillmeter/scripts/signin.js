@@ -19,6 +19,7 @@
 
 const credstore = require("./credstore.js");
 const { welcomeBanner } = require("./lib/banner.js");
+const { startSpinner } = require("./lib/spinner.js");
 const { spawnSync, spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
@@ -254,11 +255,38 @@ async function main() {
   say("============================================================");
   say("");
 
-  spawnBackgroundPoll(deviceId, device.device_code, device.interval || 5);
+  // In a real terminal, poll inline with a live spinner so the user sees
+  // progress while they're approving on GitHub. In a non-TTY runner
+  // (Claude Code's `!`-prefix buffers output until exit), fall back to a
+  // detached background poll and let the user re-invoke /skillmeter:signin
+  // to confirm.
+  if (process.stdout.isTTY) {
+    await runForegroundPoll(deviceId, device);
+  } else {
+    spawnBackgroundPoll(deviceId, device.device_code, device.interval || 5);
+    say("Polling for approval in the background.");
+    say("After approving on GitHub, run /skillmeter:signin again to confirm.");
+    say(`(background log: ${BACKGROUND_LOG})`);
+  }
+}
 
-  say("Polling for approval in the background.");
-  say("After approving on GitHub, run /skillmeter:signin again to confirm.");
-  say(`(background log: ${BACKGROUND_LOG})`);
+async function runForegroundPoll(deviceId, device) {
+  const stop = startSpinner("Waiting for GitHub approval");
+  try {
+    const githubToken = await pollForToken(device.device_code, device.interval || 5);
+    const licenseJwt = await exchangeForLicense(githubToken, deviceId);
+    const orgs = await credstore.fetchUserGitHubOrgs(githubToken);
+    stop();
+    if (!credstore.commitSignin({ jwt: licenseJwt, orgs })) {
+      say("Sign-in discarded: signed out during issuance.");
+      process.exit(0);
+    }
+    say(welcomeBanner(orgs));
+  } catch (err) {
+    stop();
+    say(`Sign-in failed: ${err.message}`);
+    process.exit(1);
+  }
 }
 
 if (process.argv[2] === "--background-poll") {
