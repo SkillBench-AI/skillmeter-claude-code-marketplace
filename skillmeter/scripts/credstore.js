@@ -82,10 +82,8 @@ function getOrCreateHashSalt() {
 }
 
 function getLicenseToken() {
-  // Bypass the in-process cache so a license written by a sibling
-  // process (e.g. the detached background poll) is visible to a short-
-  // polling caller. The file is a few KB; one fs read per call is cheap.
-  return readStore().license_jwt || null;
+  const store = loadStore();
+  return store.license_jwt || null;
 }
 
 function setLicenseToken(jwt) {

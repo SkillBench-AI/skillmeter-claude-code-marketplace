@@ -10,7 +10,6 @@
 
 const credstore = require("./credstore.js");
 const { welcomeBanner } = require("./lib/banner.js");
-const { isPollActive, waitForLicense } = require("./lib/poll-state.js");
 const path = require("path");
 
 const SIGNIN_COMMAND = path.join(__dirname, "..", "bin", "signin");
@@ -19,9 +18,13 @@ const SIGNIN_COMMAND = path.join(__dirname, "..", "bin", "signin");
 // next prompt makes Claude Code execute the binary in the user's own shell,
 // preserving the interactive TTY the GitHub device flow needs.
 const RUN_INSTRUCTION =
-  `Tell the user to paste the following into their NEXT prompt verbatim ` +
-  `(the leading \`!\` is required — it makes Claude Code run the command ` +
-  `in their shell):\n\n    ! ${SIGNIN_COMMAND}`;
+  `Tell the user to:\n` +
+  `1. Paste the following into their NEXT prompt verbatim (the leading \`!\` ` +
+  `is required — it makes Claude Code run the command in their shell):\n\n` +
+  `    ! ${SIGNIN_COMMAND}\n\n` +
+  `2. Complete the GitHub device-flow authorization in their browser.\n` +
+  `3. Once GitHub shows the success page, run \`/skillmeter:signin\` again ` +
+  `to confirm the license and see the welcome banner.`;
 
 function readStdin() {
   return new Promise((resolve, reject) => {
@@ -67,23 +70,6 @@ async function main() {
   const existingToken = credstore.getLicenseToken();
   if (existingToken && !credstore.isLicenseTokenExpired(existingToken)) {
     addContext(welcomeBanner(credstore.getAllowedGitHubOrgs()));
-    return;
-  }
-
-  // A background poll spawned by an earlier `! bin/signin` may be racing
-  // GitHub's approval right now. Short-poll the credstore so the banner
-  // can render the moment the license lands — the hook timeout is 12s,
-  // so cap our wait below that.
-  if (isPollActive()) {
-    const arrived = await waitForLicense(credstore, 10_000);
-    if (arrived) {
-      addContext(welcomeBanner(credstore.getAllowedGitHubOrgs()));
-      return;
-    }
-    addContext(
-      "Still waiting for GitHub approval. Approve at https://github.com/login/device, " +
-      "then run /skillmeter:signin again."
-    );
     return;
   }
 

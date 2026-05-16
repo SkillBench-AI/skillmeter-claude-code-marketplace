@@ -20,7 +20,6 @@
 const credstore = require("./credstore.js");
 const { welcomeBanner } = require("./lib/banner.js");
 const { startSpinner } = require("./lib/spinner.js");
-const pollState = require("./lib/poll-state.js");
 const { spawnSync, spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
@@ -173,15 +172,12 @@ async function runBackgroundPoll(deviceId, deviceCode, interval) {
 
     if (!credstore.commitSignin({ jwt: licenseJwt, orgs })) {
       log(`[${new Date().toISOString()}] sign-in discarded: signed out during poll`);
-      pollState.markPollEnded();
       process.exit(0);
     }
     log(`[${new Date().toISOString()}] activation complete`);
-    pollState.markPollEnded();
     process.exit(0);
   } catch (err) {
     log(`[${new Date().toISOString()}] background poll failed: ${err.message}`);
-    pollState.markPollEnded();
     process.exit(1);
   }
 }
@@ -189,7 +185,6 @@ async function runBackgroundPoll(deviceId, deviceCode, interval) {
 function spawnBackgroundPoll(deviceId, deviceCode, interval) {
   fs.mkdirSync(path.dirname(BACKGROUND_LOG), { recursive: true, mode: 0o700 });
   const logFd = fs.openSync(BACKGROUND_LOG, "a");
-  pollState.markPollStarted();
   const child = spawn(
     process.execPath,
     [__filename, "--background-poll", deviceId, deviceCode, String(interval)],
