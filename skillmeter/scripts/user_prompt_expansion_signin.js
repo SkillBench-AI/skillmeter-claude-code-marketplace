@@ -10,6 +10,7 @@
 
 const credstore = require("./credstore.js");
 const { welcomeBanner } = require("./lib/banner.js");
+const { isPollActive, waitForLicense } = require("./lib/poll-state.js");
 const path = require("path");
 
 const SIGNIN_COMMAND = path.join(__dirname, "..", "bin", "signin");
@@ -66,6 +67,23 @@ async function main() {
   const existingToken = credstore.getLicenseToken();
   if (existingToken && !credstore.isLicenseTokenExpired(existingToken)) {
     addContext(welcomeBanner(credstore.getAllowedGitHubOrgs()));
+    return;
+  }
+
+  // A background poll spawned by an earlier `! bin/signin` may be racing
+  // GitHub's approval right now. Short-poll the credstore so the banner
+  // can render the moment the license lands — the hook timeout is 12s,
+  // so cap our wait below that.
+  if (isPollActive()) {
+    const arrived = await waitForLicense(credstore, 10_000);
+    if (arrived) {
+      addContext(welcomeBanner(credstore.getAllowedGitHubOrgs()));
+      return;
+    }
+    addContext(
+      "Still waiting for GitHub approval. Approve at https://github.com/login/device, " +
+      "then run /skillmeter:signin again."
+    );
     return;
   }
 
