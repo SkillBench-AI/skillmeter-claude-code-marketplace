@@ -27,26 +27,20 @@ function getActivateUrl() {
   return DEFAULT_ACTIVATE_URL;
 }
 
-const FAILURE_COOLDOWN = 24 * 60 * 60;
-const TRANSIENT_COOLDOWN = 5 * 60;
-
 /**
  * Attempt to activate silently using `gh auth token` if the user already
  * has the GitHub CLI authenticated. Returns the license JWT on success,
- * null otherwise. Failures are cached in the credstore so repeated hooks
- * don't hammer GitHub/the activation endpoint.
+ * null otherwise.
+ *
+ * Failures are not retried within the same hook — `tryRefreshLicense` is
+ * called once per SessionStart, so the hook architecture itself gives us
+ * a natural "at-most-once-per-session" rate limit. Anything that fails
+ * here just returns null; the caller leaves the on-disk queue for the
+ * next session to drain.
  */
 async function trySilentGhActivate(deviceId) {
   if (credstore.getSignedOut()) {
     console.error("[skillmeter] gh activation skipped: signed out (run /skillmeter:signin to re-enable)");
-    return null;
-  }
-
-  const now = Math.floor(Date.now() / 1000);
-  const retryAfter = credstore.getGhFallbackRetryAfter();
-  if (retryAfter > now) {
-    const secondsLeft = retryAfter - now;
-    console.error(`[skillmeter] gh activation skipped: in cooldown for another ${secondsLeft}s`);
     return null;
   }
 
@@ -59,12 +53,10 @@ async function trySilentGhActivate(deviceId) {
     }).trim();
   } catch {
     console.error("[skillmeter] gh activation skipped: gh CLI not installed or not authenticated");
-    credstore.setGhFallbackRetryAfter(now + FAILURE_COOLDOWN);
     return null;
   }
   if (!ghToken) {
     console.error("[skillmeter] gh activation skipped: `gh auth token` returned empty");
-    credstore.setGhFallbackRetryAfter(now + FAILURE_COOLDOWN);
     return null;
   }
 
@@ -83,20 +75,12 @@ async function trySilentGhActivate(deviceId) {
     });
   } catch (err) {
     console.error(`[skillmeter] gh activation failed: network error (${err.message})`);
-    credstore.setGhFallbackRetryAfter(now + TRANSIENT_COOLDOWN);
     return null;
   }
 
-  if (res.status >= 500) {
-    const body = await res.text().catch(() => "");
-    console.error(`[skillmeter] gh activation failed: activation endpoint returned ${res.status} (${body.slice(0, 200)})`);
-    credstore.setGhFallbackRetryAfter(now + TRANSIENT_COOLDOWN);
-    return null;
-  }
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     console.error(`[skillmeter] gh activation rejected: HTTP ${res.status} (${body.slice(0, 200)})`);
-    credstore.setGhFallbackRetryAfter(now + FAILURE_COOLDOWN);
     return null;
   }
 
@@ -105,13 +89,11 @@ async function trySilentGhActivate(deviceId) {
     payload = await res.json();
   } catch {
     console.error("[skillmeter] gh activation failed: activation endpoint returned invalid JSON");
-    credstore.setGhFallbackRetryAfter(now + TRANSIENT_COOLDOWN);
     return null;
   }
   const jwt = payload?.token;
   if (!jwt) {
     console.error("[skillmeter] gh activation failed: response missing `token` field");
-    credstore.setGhFallbackRetryAfter(now + FAILURE_COOLDOWN);
     return null;
   }
 
@@ -125,7 +107,6 @@ async function trySilentGhActivate(deviceId) {
     orgs = await fetchUserGitHubOrgs(ghToken);
   } catch (err) {
     console.error(`[skillmeter] gh activation failed: cannot fetch GitHub orgs (${err.message})`);
-    credstore.setGhFallbackRetryAfter(now + FAILURE_COOLDOWN);
     return null;
   }
 

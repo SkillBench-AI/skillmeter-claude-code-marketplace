@@ -5,10 +5,7 @@
  *   - swapping tenants (pull a fresh JWT with new telemetry_endpoint)
  *   - recovering from a revoked/rotated license without waiting for
  *     the natural 15-minute expiry
- *   - testing activate.js's silent-gh path
- *
- * The gh silent-failure cooldown is reset before the flow starts so a
- * rate-limit from an earlier run doesn't block a fresh attempt.
+ *   - testing the silent-gh path
  *
  * Usage:
  *   skillmeter-force-refresh
@@ -28,11 +25,7 @@ if (existing) {
   process.stderr.write("skillmeter-force-refresh: no stored license; running fresh activation\n");
 }
 
-// Reset the gh silent-failure cooldown so the silent path is attempted
-// again immediately. Matches the behavior of /activate itself.
-credstore.setGhFallbackRetryAfter(0);
-
-// Requiring activate.js runs its top-level `main()` immediately. With the
+// Requiring signin.js runs its top-level `main()` immediately. With the
 // license cleared above it falls through to the silent-gh / device-flow
 // pipeline.
-require(path.join(PLUGIN_ROOT, "scripts", "activate.js"));
+require(path.join(PLUGIN_ROOT, "scripts", "signin.js"));

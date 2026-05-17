@@ -127,11 +127,6 @@ function isLicenseTokenExpired(token, skewSeconds = LICENSE_EXPIRY_SKEW_SECONDS)
   return payload.exp <= Math.floor(Date.now() / 1000) + skewSeconds;
 }
 
-function getGhFallbackRetryAfter() {
-  const store = readStore();
-  return Number(store.gh_fallback_retry_after) || 0;
-}
-
 // `signed_out` is set by /skillmeter:signout. It blocks the silent gh
 // fallback so a still-authenticated gh CLI doesn't auto-resignin on the
 // next SessionStart. `markEngaged()` (called from /skillmeter:signin) clears it.
@@ -168,19 +163,16 @@ function signOut() {
   const store = readStore();
   delete store.license_jwt;
   delete store.allowed_github_orgs;
-  delete store.gh_fallback_retry_after;
   store.signed_out = true;
   writeStore(store);
   _cache = store;
 }
 
 // Called when the user explicitly invokes /skillmeter:signin — clears the
-// signed-out sentinel and the gh-fallback cooldown in a single write so the
-// next gh attempt is unblocked atomically.
+// signed-out sentinel so the next gh attempt is unblocked.
 function markEngaged() {
   const store = readStore();
   delete store.signed_out;
-  delete store.gh_fallback_retry_after;
   writeStore(store);
   _cache = store;
 }
@@ -206,21 +198,9 @@ function commitSignin({ jwt, orgs }) {
   if (store.signed_out === true) return false;
   store.license_jwt = jwt;
   store.allowed_github_orgs = normalizeOrgs(orgs);
-  delete store.gh_fallback_retry_after;
   writeStore(store);
   _cache = store;
   return true;
-}
-
-function setGhFallbackRetryAfter(unixSeconds) {
-  const store = readStore();
-  if (unixSeconds > 0) {
-    store.gh_fallback_retry_after = unixSeconds;
-  } else {
-    delete store.gh_fallback_retry_after;
-  }
-  writeStore(store);
-  _cache = store;
 }
 
 /**
@@ -252,8 +232,4 @@ module.exports = {
   getSignedOut,
   getTelemetryDisabled,
   setTelemetryDisabled,
-  // gh-fallback cooldown state — no external consumer, but lib/license-activation
-  // imports these and the import requires the export.
-  getGhFallbackRetryAfter,
-  setGhFallbackRetryAfter,
 };
