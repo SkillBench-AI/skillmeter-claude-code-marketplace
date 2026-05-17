@@ -5,6 +5,7 @@ const path = require("path");
 const os = require("os");
 
 const { getSkillmeterStringSetting } = require("./lib/settings");
+const { fetchUserGitHubOrgs } = require("./lib/github-api");
 
 const CRED_FILE = path.join(os.homedir(), ".skillbench", "credentials.json");
 
@@ -239,45 +240,6 @@ function getAllowedGitHubOrgs() {
   return orgs;
 }
 
-/**
- * Fetch the activating user's GitHub login + every org they belong to.
- * Returns an array of lowercase logins suitable for passing to
- * `commitSignin`. Throws on any HTTP/network failure so the caller can
- * decide whether to abort.
- */
-async function fetchUserGitHubOrgs(githubToken) {
-  const headers = {
-    "Authorization": `Bearer ${githubToken}`,
-    "Accept": "application/vnd.github+json",
-    "X-GitHub-Api-Version": "2022-11-28",
-    "User-Agent": "skillmeter-cli",
-  };
-
-  const userRes = await fetch("https://api.github.com/user", {
-    headers,
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!userRes.ok) {
-    throw new Error(`GET /user returned ${userRes.status}`);
-  }
-  const userBody = await userRes.json();
-  const userLogin = typeof userBody?.login === "string" ? userBody.login : "";
-
-  const orgsRes = await fetch("https://api.github.com/user/orgs?per_page=100", {
-    headers,
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!orgsRes.ok) {
-    throw new Error(`GET /user/orgs returned ${orgsRes.status}`);
-  }
-  const orgsBody = await orgsRes.json();
-  const orgLogins = Array.isArray(orgsBody)
-    ? orgsBody.map((org) => (typeof org?.login === "string" ? org.login : ""))
-    : [];
-
-  return [userLogin, ...orgLogins].filter(Boolean);
-}
-
 // Default points at prod. Devs/agents override via SKILLMETER_ACTIVATE_URL
 // (e.g. https://api.dev.skillbench.com/activate) or a `skillmeter.activate_url`
 // entry in the project's .claude/settings.local.json.
@@ -408,7 +370,6 @@ module.exports = {
   isLicenseTokenExpired,
   LICENSE_EXPIRY_SKEW_SECONDS,
   getAllowedGitHubOrgs,
-  fetchUserGitHubOrgs,
   trySilentGhActivate,
   // Atomic sign-in lifecycle — prefer these over the lower-level set* helpers
   // when adjusting more than one field, so partial writes can't race.
