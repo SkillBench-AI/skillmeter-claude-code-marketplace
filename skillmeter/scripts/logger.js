@@ -21,7 +21,7 @@ const path = require("path");
 
 const credstore = require("./credstore");
 const { getDeviceId, getOrCreateHashSalt, getLicenseToken } = credstore;
-const { trySilentGhActivate } = require("./lib/license-activation");
+const { trySilentGhActivate, refreshExpiredJwt } = require("./lib/license-activation");
 
 const paths = require("./lib/paths");
 const { LOG_DIR, LOG_FILE, PLUGIN_VERSION } = paths;
@@ -109,8 +109,14 @@ function readStdin() {
 }
 
 // ---------------------------------------------------------------------------
-// License refresh — best-effort gh-fallback call for hooks whose license
-// JWT is missing or within the expiry skew.
+// License refresh — try the Lambda's /refresh endpoint first (no GitHub
+// round-trip, works for users without gh-cli), fall back to the silent gh
+// /activate path on 410 / 404 / network failure.
+//
+// The /refresh path keeps refresh latency low and decouples us from GitHub
+// availability + rate limits. /activate stays as the safety net for users
+// whose sliding-refresh-window has elapsed (or whose Lambda environment
+// hasn't deployed /refresh yet).
 // ---------------------------------------------------------------------------
 
 async function tryRefreshLicense(deviceId) {
@@ -120,6 +126,16 @@ async function tryRefreshLicense(deviceId) {
   }
   if (!deviceId) return null;
   if (credstore.getSignedOut()) return null;
+
+  // Try /refresh first when we have a token to rotate. refreshExpiredJwt
+  // returns null on 410 (sliding window), 404 (endpoint not deployed),
+  // 401 (bad signature), or any network/parse error — falling through to
+  // the gh fallback in every case.
+  if (current) {
+    const fresh = await refreshExpiredJwt(current, deviceId);
+    if (fresh) return fresh;
+  }
+
   try {
     return await trySilentGhActivate(deviceId);
   } catch {
