@@ -9,6 +9,7 @@
  */
 
 const credstore = require("./credstore.js");
+const { trySilentGhActivate } = require("./lib/license-activation");
 const { welcomeBanner } = require("./lib/banner.js");
 const path = require("path");
 
@@ -79,7 +80,7 @@ async function main() {
     return;
   }
 
-  const jwt = await credstore.trySilentGhActivate(deviceId);
+  const jwt = await trySilentGhActivate(deviceId);
   if (jwt) {
     addContext(welcomeBanner(credstore.getAllowedGitHubOrgs()));
     return;

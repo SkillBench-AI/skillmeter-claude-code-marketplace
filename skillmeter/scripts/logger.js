@@ -21,6 +21,7 @@ const path = require("path");
 
 const credstore = require("./credstore");
 const { getDeviceId, getOrCreateHashSalt, getLicenseToken } = credstore;
+const { trySilentGhActivate } = require("./lib/license-activation");
 
 const paths = require("./lib/paths");
 const { LOG_DIR, LOG_FILE, PLUGIN_VERSION } = paths;
@@ -120,7 +121,7 @@ async function tryRefreshLicense(deviceId) {
   if (!deviceId) return null;
   if (credstore.getSignedOut()) return null;
   try {
-    return await credstore.trySilentGhActivate(deviceId);
+    return await trySilentGhActivate(deviceId);
   } catch {
     return null;
   }

@@ -18,6 +18,7 @@
  */
 
 const credstore = require("./credstore.js");
+const licenseActivation = require("./lib/license-activation");
 const { fetchUserGitHubOrgs } = require("./lib/github-api");
 const { welcomeBanner } = require("./lib/banner.js");
 const { startSpinner } = require("./lib/spinner.js");
@@ -141,7 +142,7 @@ async function pollForToken(deviceCode, initialInterval) {
 }
 
 async function exchangeForLicense(githubToken, deviceId) {
-  const res = await fetch(credstore.getActivateUrl(), {
+  const res = await fetch(licenseActivation.getActivateUrl(), {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${githubToken}`,
@@ -237,7 +238,7 @@ async function main() {
   }
 
   log("Trying gh CLI first...");
-  const silentJwt = await credstore.trySilentGhActivate(deviceId);
+  const silentJwt = await licenseActivation.trySilentGhActivate(deviceId);
   if (silentJwt) {
     say(welcomeBanner(credstore.getAllowedGitHubOrgs()));
     return;
