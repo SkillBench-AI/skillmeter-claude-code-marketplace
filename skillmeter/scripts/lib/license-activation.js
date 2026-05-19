@@ -27,6 +27,87 @@ function getActivateUrl() {
   return DEFAULT_ACTIVATE_URL;
 }
 
+// The /refresh endpoint sits next to /activate on the same host. Derive the
+// URL from getActivateUrl so the same host configuration covers both. If the
+// activate URL doesn't end with /activate (e.g. a dev override with a custom
+// path), we append /refresh to the base path — keeps weird overrides at least
+// roundtrippable.
+function getRefreshUrl() {
+  const url = getActivateUrl();
+  if (url.endsWith("/activate")) return url.slice(0, -"/activate".length) + "/refresh";
+  return url.replace(/\/?$/, "/refresh");
+}
+
+/**
+ * Rotate an existing license JWT through the Lambda's /refresh endpoint.
+ * The server validates the signature, enforces a sliding window against
+ * `original_iat`, re-confirms org purchase, and mints a fresh JWT — no
+ * GitHub round-trip, so this works for users without `gh` installed.
+ *
+ * Returns the new JWT string on success, or `null` for any failure
+ * (signature invalid, sliding window exceeded, license cancelled, network
+ * error, endpoint not yet deployed). The caller is expected to fall back
+ * to silent gh /activate on null.
+ *
+ * On success the new token is written to credstore atomically.
+ */
+async function refreshExpiredJwt(jwt, deviceId) {
+  if (!jwt || !deviceId) return null;
+
+  const url = getRefreshUrl();
+
+  let res;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${jwt}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ device_id: deviceId }),
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch (err) {
+    console.error(`[skillmeter] license refresh failed: network error (${err.message})`);
+    return null;
+  }
+
+  // 410: sliding window exceeded — client must re-activate via /activate.
+  // 404: endpoint not yet deployed on this environment — silent fallback.
+  // 401: token signature invalid — caller's silent-gh fallback will deal.
+  // 402: org license cancelled — refresh is permanently blocked for this org.
+  if (res.status === 410) {
+    console.error("[skillmeter] license refresh: token too old, re-activation required");
+    return null;
+  }
+  if (res.status === 404) {
+    // Quiet on 404 so logs don't spam during deploy-order rollout.
+    return null;
+  }
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    console.error(`[skillmeter] license refresh failed: HTTP ${res.status} (${body.slice(0, 200)})`);
+    return null;
+  }
+
+  let payload;
+  try {
+    payload = await res.json();
+  } catch {
+    console.error("[skillmeter] license refresh failed: invalid JSON in response");
+    return null;
+  }
+  const newJwt = payload?.token;
+  if (!newJwt) {
+    console.error("[skillmeter] license refresh failed: response missing `token` field");
+    return null;
+  }
+
+  credstore.setLicenseToken(newJwt);
+  console.error("[skillmeter] license refresh: rotated successfully");
+  return newJwt;
+}
+
 /**
  * Attempt to activate silently using `gh auth token` if the user already
  * has the GitHub CLI authenticated. Returns the license JWT on success,
@@ -120,5 +201,7 @@ async function trySilentGhActivate(deviceId) {
 
 module.exports = {
   getActivateUrl,
+  getRefreshUrl,
+  refreshExpiredJwt,
   trySilentGhActivate,
 };
