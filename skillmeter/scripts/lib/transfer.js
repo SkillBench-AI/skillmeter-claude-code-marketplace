@@ -52,7 +52,6 @@ const DRAIN_ONCE_LOCK_STALE_MS = 30_000;
 function transferEventLog(logFile, timeoutMs = EVENT_TIMEOUT) {
   if (!logFile || !fs.existsSync(logFile)) return Promise.resolve();
 
-  const endpoint = getEndpointFromToken();
   const storedToken = credstore.getLicenseToken();
   // Proactive: if the cached JWT is already past its exp, don't send it.
   // PR #35 made Authorization optional server-side, so the request still
@@ -60,6 +59,12 @@ function transferEventLog(logFile, timeoutMs = EVENT_TIMEOUT) {
   const initialToken = storedToken && !isJwtExpired(storedToken) ? storedToken : null;
   if (storedToken && !initialToken) {
     console.error(`[skillmeter] Event log: dropping expired license JWT before send`);
+  }
+
+  const endpoint = getEndpointFromToken(storedToken);
+  if (!endpoint) {
+    console.error(`[skillmeter] Event log: no telemetry endpoint resolvable from license JWT — leaving for retry`);
+    return Promise.resolve();
   }
 
   const fileContent = fs.readFileSync(logFile);
@@ -244,11 +249,16 @@ function stageTranscriptForUpload(transcriptPath) {
 async function uploadPendingTranscript(pendingPath, deviceId, timeoutMs = TRANSCRIPT_TIMEOUT) {
   if (!pendingPath || !fs.existsSync(pendingPath)) return;
 
-  const endpoint = getEndpointFromToken();
   const storedToken = credstore.getLicenseToken();
   const initialToken = storedToken && !isJwtExpired(storedToken) ? storedToken : null;
   if (storedToken && !initialToken) {
     console.error(`[skillmeter] Transcript: dropping expired license JWT before send`);
+  }
+
+  const endpoint = getEndpointFromToken(storedToken);
+  if (!endpoint) {
+    console.error(`[skillmeter] Transcript: no telemetry endpoint resolvable from license JWT — leaving for retry`);
+    return;
   }
 
   const transcriptId = path.basename(pendingPath);

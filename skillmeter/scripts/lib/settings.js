@@ -41,6 +41,23 @@ function getTelemetryOptIn(cwd) {
 }
 
 /**
+ * Read a string-valued field under `skillmeter.<key>` from the project's
+ * settings file. Used by the activation-URL and GitHub-client-id resolvers
+ * to support persistent per-user overrides without an env var.
+ * @returns {string|null} Trimmed value when present and non-empty; null otherwise.
+ */
+function getSkillmeterStringSetting(cwd, key) {
+  try {
+    const content = readSettingsFile(cwd);
+    if (!content || !content.skillmeter) return null;
+    const v = content.skillmeter[key];
+    return typeof v === "string" && v ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Persist the telemetry opt-in. Merges with existing settings file content
  * so adjacent keys (repoScope, etc.) aren't clobbered.
  */
@@ -62,5 +79,6 @@ function saveTelemetryOptIn(cwd, value) {
 module.exports = {
   readSettingsFile,
   getTelemetryOptIn,
+  getSkillmeterStringSetting,
   saveTelemetryOptIn,
 };
