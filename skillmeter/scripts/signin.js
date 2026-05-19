@@ -18,6 +18,8 @@
  */
 
 const credstore = require("./credstore.js");
+const licenseActivation = require("./lib/license-activation");
+const { fetchUserGitHubOrgs } = require("./lib/github-api");
 const { welcomeBanner } = require("./lib/banner.js");
 const { startSpinner } = require("./lib/spinner.js");
 const { getSkillmeterStringSetting } = require("./lib/settings");
@@ -140,7 +142,7 @@ async function pollForToken(deviceCode, initialInterval) {
 }
 
 async function exchangeForLicense(githubToken, deviceId) {
-  const res = await fetch(credstore.getActivateUrl(), {
+  const res = await fetch(licenseActivation.getActivateUrl(), {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${githubToken}`,
@@ -178,7 +180,7 @@ async function runBackgroundPoll(deviceId, deviceCode, interval) {
     const licenseJwt = await exchangeForLicense(githubToken, deviceId);
     log(`[${new Date().toISOString()}] license issued`);
 
-    const orgs = await credstore.fetchUserGitHubOrgs(githubToken);
+    const orgs = await fetchUserGitHubOrgs(githubToken);
     log(`[${new Date().toISOString()}] orgs fetched: ${orgs.join(", ") || "(none)"}`);
 
     if (!credstore.commitSignin({ jwt: licenseJwt, orgs })) {
@@ -236,7 +238,7 @@ async function main() {
   }
 
   log("Trying gh CLI first...");
-  const silentJwt = await credstore.trySilentGhActivate(deviceId);
+  const silentJwt = await licenseActivation.trySilentGhActivate(deviceId);
   if (silentJwt) {
     say(welcomeBanner(credstore.getAllowedGitHubOrgs()));
     return;
@@ -286,7 +288,7 @@ async function runForegroundPoll(deviceId, device) {
   try {
     const githubToken = await pollForToken(device.device_code, device.interval || 5);
     const licenseJwt = await exchangeForLicense(githubToken, deviceId);
-    const orgs = await credstore.fetchUserGitHubOrgs(githubToken);
+    const orgs = await fetchUserGitHubOrgs(githubToken);
     stop();
     if (!credstore.commitSignin({ jwt: licenseJwt, orgs })) {
       say("Sign-in discarded: signed out during issuance.");

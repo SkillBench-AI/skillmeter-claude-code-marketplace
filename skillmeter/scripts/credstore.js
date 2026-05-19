@@ -1,10 +1,7 @@
-const { execSync } = require("child_process");
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
-
-const { getSkillmeterStringSetting } = require("./lib/settings");
 
 const CRED_FILE = path.join(os.homedir(), ".skillbench", "credentials.json");
 
@@ -130,11 +127,6 @@ function isLicenseTokenExpired(token, skewSeconds = LICENSE_EXPIRY_SKEW_SECONDS)
   return payload.exp <= Math.floor(Date.now() / 1000) + skewSeconds;
 }
 
-function getGhFallbackRetryAfter() {
-  const store = readStore();
-  return Number(store.gh_fallback_retry_after) || 0;
-}
-
 // `signed_out` is set by /skillmeter:signout. It blocks the silent gh
 // fallback so a still-authenticated gh CLI doesn't auto-resignin on the
 // next SessionStart. `markEngaged()` (called from /skillmeter:signin) clears it.
@@ -171,19 +163,16 @@ function signOut() {
   const store = readStore();
   delete store.license_jwt;
   delete store.allowed_github_orgs;
-  delete store.gh_fallback_retry_after;
   store.signed_out = true;
   writeStore(store);
   _cache = store;
 }
 
 // Called when the user explicitly invokes /skillmeter:signin — clears the
-// signed-out sentinel and the gh-fallback cooldown in a single write so the
-// next gh attempt is unblocked atomically.
+// signed-out sentinel so the next gh attempt is unblocked.
 function markEngaged() {
   const store = readStore();
   delete store.signed_out;
-  delete store.gh_fallback_retry_after;
   writeStore(store);
   _cache = store;
 }
@@ -209,21 +198,9 @@ function commitSignin({ jwt, orgs }) {
   if (store.signed_out === true) return false;
   store.license_jwt = jwt;
   store.allowed_github_orgs = normalizeOrgs(orgs);
-  delete store.gh_fallback_retry_after;
   writeStore(store);
   _cache = store;
   return true;
-}
-
-function setGhFallbackRetryAfter(unixSeconds) {
-  const store = readStore();
-  if (unixSeconds > 0) {
-    store.gh_fallback_retry_after = unixSeconds;
-  } else {
-    delete store.gh_fallback_retry_after;
-  }
-  writeStore(store);
-  _cache = store;
 }
 
 /**
@@ -239,177 +216,13 @@ function getAllowedGitHubOrgs() {
   return orgs;
 }
 
-/**
- * Fetch the activating user's GitHub login + every org they belong to.
- * Returns an array of lowercase logins suitable for passing to
- * `commitSignin`. Throws on any HTTP/network failure so the caller can
- * decide whether to abort.
- */
-async function fetchUserGitHubOrgs(githubToken) {
-  const headers = {
-    "Authorization": `Bearer ${githubToken}`,
-    "Accept": "application/vnd.github+json",
-    "X-GitHub-Api-Version": "2022-11-28",
-    "User-Agent": "skillmeter-cli",
-  };
-
-  const userRes = await fetch("https://api.github.com/user", {
-    headers,
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!userRes.ok) {
-    throw new Error(`GET /user returned ${userRes.status}`);
-  }
-  const userBody = await userRes.json();
-  const userLogin = typeof userBody?.login === "string" ? userBody.login : "";
-
-  const orgsRes = await fetch("https://api.github.com/user/orgs?per_page=100", {
-    headers,
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!orgsRes.ok) {
-    throw new Error(`GET /user/orgs returned ${orgsRes.status}`);
-  }
-  const orgsBody = await orgsRes.json();
-  const orgLogins = Array.isArray(orgsBody)
-    ? orgsBody.map((org) => (typeof org?.login === "string" ? org.login : ""))
-    : [];
-
-  return [userLogin, ...orgLogins].filter(Boolean);
-}
-
-// Default points at prod. Devs/agents override via SKILLMETER_ACTIVATE_URL
-// (e.g. https://api.dev.skillbench.com/activate) or a `skillmeter.activate_url`
-// entry in the project's .claude/settings.local.json.
-const DEFAULT_ACTIVATE_URL = "https://api.skillbench.com/activate";
-
-function getActivateUrl() {
-  if (process.env.SKILLMETER_ACTIVATE_URL) return process.env.SKILLMETER_ACTIVATE_URL;
-  const fromSettings = getSkillmeterStringSetting(process.cwd(), "activate_url");
-  if (fromSettings) return fromSettings;
-  return DEFAULT_ACTIVATE_URL;
-}
-
-const FAILURE_COOLDOWN = 24 * 60 * 60;
-const TRANSIENT_COOLDOWN = 5 * 60;
-
-/**
- * Attempt to activate silently using `gh auth token` if the user already
- * has the GitHub CLI authenticated. Returns the license JWT on success,
- * null otherwise. Failures are cached in the credstore so repeated hooks
- * don't hammer GitHub/the activation endpoint.
- */
-async function trySilentGhActivate(deviceId) {
-  if (getSignedOut()) {
-    console.error("[skillmeter] gh activation skipped: signed out (run /skillmeter:signin to re-enable)");
-    return null;
-  }
-
-  const now = Math.floor(Date.now() / 1000);
-  const retryAfter = getGhFallbackRetryAfter();
-  if (retryAfter > now) {
-    const secondsLeft = retryAfter - now;
-    console.error(`[skillmeter] gh activation skipped: in cooldown for another ${secondsLeft}s`);
-    return null;
-  }
-
-  let ghToken;
-  try {
-    ghToken = execSync("gh auth token", {
-      encoding: "utf8",
-      stdio: ["pipe", "pipe", "ignore"],
-      timeout: 3000,
-    }).trim();
-  } catch {
-    console.error("[skillmeter] gh activation skipped: gh CLI not installed or not authenticated");
-    setGhFallbackRetryAfter(now + FAILURE_COOLDOWN);
-    return null;
-  }
-  if (!ghToken) {
-    console.error("[skillmeter] gh activation skipped: `gh auth token` returned empty");
-    setGhFallbackRetryAfter(now + FAILURE_COOLDOWN);
-    return null;
-  }
-
-  console.error("[skillmeter] gh activation: exchanging token with activation endpoint");
-
-  let res;
-  try {
-    res = await fetch(getActivateUrl(), {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${ghToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ device_id: deviceId }),
-      signal: AbortSignal.timeout(5000),
-    });
-  } catch (err) {
-    console.error(`[skillmeter] gh activation failed: network error (${err.message})`);
-    setGhFallbackRetryAfter(now + TRANSIENT_COOLDOWN);
-    return null;
-  }
-
-  if (res.status >= 500) {
-    const body = await res.text().catch(() => "");
-    console.error(`[skillmeter] gh activation failed: activation endpoint returned ${res.status} (${body.slice(0, 200)})`);
-    setGhFallbackRetryAfter(now + TRANSIENT_COOLDOWN);
-    return null;
-  }
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    console.error(`[skillmeter] gh activation rejected: HTTP ${res.status} (${body.slice(0, 200)})`);
-    setGhFallbackRetryAfter(now + FAILURE_COOLDOWN);
-    return null;
-  }
-
-  let payload;
-  try {
-    payload = await res.json();
-  } catch {
-    console.error("[skillmeter] gh activation failed: activation endpoint returned invalid JSON");
-    setGhFallbackRetryAfter(now + TRANSIENT_COOLDOWN);
-    return null;
-  }
-  const jwt = payload?.token;
-  if (!jwt) {
-    console.error("[skillmeter] gh activation failed: response missing `token` field");
-    setGhFallbackRetryAfter(now + FAILURE_COOLDOWN);
-    return null;
-  }
-
-  // Fetch the user's GitHub identities BEFORE persisting the license so
-  // license + orgs land atomically. If the gh CLI's token lacks the
-  // `read:org` scope the fetch fails — we treat that as silent-path
-  // failure and let the device-flow path run, which always requests the
-  // right scopes.
-  let orgs;
-  try {
-    orgs = await fetchUserGitHubOrgs(ghToken);
-  } catch (err) {
-    console.error(`[skillmeter] gh activation failed: cannot fetch GitHub orgs (${err.message})`);
-    setGhFallbackRetryAfter(now + FAILURE_COOLDOWN);
-    return null;
-  }
-
-  if (!commitSignin({ jwt, orgs })) {
-    console.error("[skillmeter] gh activation discarded: signed out during issuance");
-    return null;
-  }
-  console.error(`[skillmeter] gh activation succeeded (allowed orgs: ${orgs.join(", ") || "none"})`);
-  return jwt;
-}
-
 module.exports = {
   getDeviceId,
   getOrCreateHashSalt,
   getLicenseToken,
   setLicenseToken,
   isLicenseTokenExpired,
-  LICENSE_EXPIRY_SKEW_SECONDS,
   getAllowedGitHubOrgs,
-  fetchUserGitHubOrgs,
-  trySilentGhActivate,
   // Atomic sign-in lifecycle — prefer these over the lower-level set* helpers
   // when adjusting more than one field, so partial writes can't race.
   commitSignin,
@@ -419,7 +232,4 @@ module.exports = {
   getSignedOut,
   getTelemetryDisabled,
   setTelemetryDisabled,
-  getActivateUrl,
-  DEFAULT_ACTIVATE_URL,
-  CRED_FILE,
 };
