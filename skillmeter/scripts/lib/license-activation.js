@@ -18,7 +18,7 @@ const { getSkillmeterStringSetting } = require("./settings");
 // Default points at prod. Devs/agents override via SKILLMETER_ACTIVATE_URL
 // (e.g. https://api.dev.skillbench.com/activate) or a `skillmeter.activate_url`
 // entry in the project's .claude/settings.local.json.
-const DEFAULT_ACTIVATE_URL = "https://api.skillbench.com/activate";
+const DEFAULT_ACTIVATE_URL = "https://api.meter.skillbench.com/activate";
 
 function getActivateUrl() {
   if (process.env.SKILLMETER_ACTIVATE_URL) return process.env.SKILLMETER_ACTIVATE_URL;
