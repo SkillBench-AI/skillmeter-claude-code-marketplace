@@ -176,11 +176,11 @@ SkillMeter stores device identity, hash salt, license JWT, allowed GitHub identi
 | Environment Variable           | Default                                                                       | Description                                                                                                                                  |
 |--------------------------------|-------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
 | `SKILLMETER_BACKEND_URL`       | unset — endpoint resolved from the license JWT's `telemetry_endpoint` claim   | Base-URL override for local development / integration tests (e.g. `http://localhost:8080`). Bypasses the JWT check; callers append `/logs/claude` and `/logs/claude/transcript`. |
-| `SKILLMETER_ACTIVATE_URL`      | `https://api.meter.skillbench.com/activate`                                   | Activation endpoint that exchanges a GitHub OAuth token for a SkillMeter license JWT. Point at `https://api.dev.skillbench.com/activate` to run against dev. |
+| `SKILLMETER_ACTIVATE_URL`      | `https://api.skillbench.ai/activate`                                          | Activation endpoint that exchanges a GitHub OAuth token for a SkillMeter license JWT. Point at `https://api.dev.skillbench.com/activate` to run against dev. |
 | `SKILLMETER_GITHUB_CLIENT_ID`  | prod SkillMeter GitHub OAuth App                                              | Override the GitHub OAuth App used for the device-code login. Set to the dev App's `client_id` when activating against dev.                  |
 | `SKILLMETER_TIMEOUT`           | `10`                                                                          | Upload timeout (seconds)                                                                                                                     |
 
-In production the telemetry hostname is per-tenant and looks like `https://<slug>.meter[.<env>].skillbench.com`. The activation Lambda mints it into the license JWT against the tenant slug at issuance, and the plugin reads it back at upload time.
+In production the telemetry hostname is per-tenant and looks like `https://<slug>.meter.skillbench.ai` (non-prod: `https://<slug>.meter.<env>.skillbench.com`). The activation Lambda mints it into the license JWT against the tenant slug at issuance, and the plugin reads it back at upload time.
 
 ### Pointing at a non-default environment
 
