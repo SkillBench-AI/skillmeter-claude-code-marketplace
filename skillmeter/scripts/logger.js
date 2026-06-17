@@ -148,6 +148,29 @@ async function tryRefreshLicense(deviceId) {
 // ---------------------------------------------------------------------------
 
 /**
+ * Resolve the per-project telemetry gate, combining the explicit opt-in
+ * setting with org-ownership auto-enable.
+ *
+ *   - explicit `false` → off  (user opted out; always respected)
+ *   - explicit `true`  → on   (subject to the repo-scope gate downstream)
+ *   - unset (`null`)   → on **only when the repo is owned by an allowed org**
+ *                        ("auto_org"); otherwise off
+ *
+ * Pure function — no I/O — so the policy can be reasoned about and tested
+ * directly (the codebase has no runner; see AGENTS.md).
+ *
+ * @param {boolean|null} optIn - getTelemetryOptIn(cwd) result
+ * @param {boolean} repoOrgOwned - repoScopeDecision.allowed
+ * @returns {{capture: boolean, mode: "opted_out"|"opted_in"|"auto_org"|"not_enabled"}}
+ */
+function resolveTelemetryGate(optIn, repoOrgOwned) {
+  if (optIn === false) return { capture: false, mode: "opted_out" };
+  if (optIn === true) return { capture: true, mode: "opted_in" };
+  if (repoOrgOwned === true) return { capture: true, mode: "auto_org" };
+  return { capture: false, mode: "not_enabled" };
+}
+
+/**
  * Common hook runner — handles all boilerplate shared by every hook script.
  *
  * @param {string} eventName - Hook event name (e.g. "SessionStart")
@@ -183,11 +206,27 @@ async function runHook(eventName, buildData, options = {}) {
     process.exit(0);
   }
 
+  // Resolve repo ownership up front: it both gates capture (below) and, for
+  // projects with no explicit opt-in, decides whether telemetry auto-enables.
+  const repoScopeDecision = getRepoScopeDecision(cwd);
+
   if (options.checkOptIn) {
     if (!options.checkOptIn(cwd, input)) process.exit(0);
-  } else if (getTelemetryOptIn(cwd) !== true) {
-    console.error(`[skillmeter] ${eventName}: skipped (telemetry not enabled)`);
-    process.exit(0);
+  } else {
+    const gate = resolveTelemetryGate(getTelemetryOptIn(cwd), repoScopeDecision.allowed);
+    if (!gate.capture) {
+      const reason =
+        gate.mode === "opted_out"
+          ? "telemetry disabled for this project"
+          : "telemetry not enabled";
+      console.error(`[skillmeter] ${eventName}: skipped (${reason})`);
+      process.exit(0);
+    }
+    if (gate.mode === "auto_org") {
+      console.error(
+        `[skillmeter] ${eventName}: telemetry auto-enabled (repo owned by allowed org; run /skillmeter:telemetry disable to opt out)`
+      );
+    }
   }
 
   const sessionId = input.session_id || "unknown";
@@ -197,7 +236,6 @@ async function runHook(eventName, buildData, options = {}) {
     process.exit(0);
   }
 
-  const repoScopeDecision = getRepoScopeDecision(cwd);
   if (!repoScopeDecision.allowed) {
     console.error(
       `[skillmeter] ${eventName}: skipped (${repoScopeDecision.classification})`
@@ -263,6 +301,7 @@ async function runHook(eventName, buildData, options = {}) {
 module.exports = {
   // Core
   runHook,
+  resolveTelemetryGate,
   readStdin,
   getTimestamp,
   logStructured,
