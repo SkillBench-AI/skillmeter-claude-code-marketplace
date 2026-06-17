@@ -17,7 +17,8 @@ const { spawn } = require("child_process");
 
 const credstore = require("../credstore");
 const { sanitizeTranscript } = require("./sanitize");
-const { getEndpointFromToken, isJwtExpired } = require("./jwt");
+const { getEndpointFromToken, getEndpointFromTokenAllowExpired, isJwtExpired } = require("./jwt");
+const { ensureFreshLicense } = require("./license-activation");
 const {
   PLUGIN_ROOT,
   LOG_DIR,
@@ -49,22 +50,24 @@ const DRAIN_ONCE_LOCK_STALE_MS = 30_000;
  * the next SessionStart's retryFailedLogs sweep.
  * @returns {Promise<void>}
  */
-function transferEventLog(logFile, timeoutMs = EVENT_TIMEOUT) {
-  if (!logFile || !fs.existsSync(logFile)) return Promise.resolve();
+async function transferEventLog(logFile, timeoutMs = EVENT_TIMEOUT) {
+  if (!logFile || !fs.existsSync(logFile)) return;
 
-  const storedToken = credstore.getLicenseToken();
-  // Proactive: if the cached JWT is already past its exp, don't send it.
-  // PR #35 made Authorization optional server-side, so the request still
-  // succeeds without it.
+  // Uncached so the long-lived daemon sees a token refreshed by another process.
+  const storedToken = credstore.getLicenseTokenUncached();
+  // Only attach a still-valid bearer; never send a token we know is expired.
   const initialToken = storedToken && !isJwtExpired(storedToken) ? storedToken : null;
   if (storedToken && !initialToken) {
     console.error(`[skillmeter] Event log: dropping expired license JWT before send`);
   }
 
-  const endpoint = getEndpointFromToken(storedToken);
+  // Endpoint is routing info — resolvable even from an expired token. The
+  // collector accepts unauthenticated uploads, so a drain still delivers while
+  // a refresh is pending/failing.
+  const endpoint = getEndpointFromToken(storedToken) || getEndpointFromTokenAllowExpired(storedToken);
   if (!endpoint) {
     console.error(`[skillmeter] Event log: no telemetry endpoint resolvable from license JWT — leaving for retry`);
-    return Promise.resolve();
+    return;
   }
 
   const fileContent = fs.readFileSync(logFile);
@@ -95,33 +98,43 @@ function transferEventLog(logFile, timeoutMs = EVENT_TIMEOUT) {
 
   console.error(`[skillmeter] Transferring event log: ${baseName} (${compressed.length} bytes gzipped)`);
 
-  return doPost(initialToken)
-    .then((res) => {
+  try {
+    let res = await doPost(initialToken);
+    if (res.ok) {
+      console.error(`[skillmeter] Event log transferred: ${baseName}`);
+      markSent();
+      return;
+    }
+    // Reactive: auth rejected (only possible if a gateway authorizer is added
+    // later — the collector itself accepts unauth today). Refresh once,
+    // single-flight, and retry with the fresh token. Never wipe the stored
+    // license on a transient rejection.
+    if (initialToken && (res.status === 401 || res.status === 403)) {
+      console.error(`[skillmeter] Event log auth rejected (HTTP ${res.status}), refreshing license and retrying`);
+      const fresh = await ensureFreshLicense(credstore.getDeviceId(), { force: true });
+      if (fresh && !isJwtExpired(fresh)) {
+        res = await doPost(fresh);
+        if (res.ok) {
+          console.error(`[skillmeter] Event log transferred on retry: ${baseName}`);
+          markSent();
+          return;
+        }
+      }
+      // Last resort: unauthenticated upload (collector accepts) — the path that
+      // actually delivers today.
+      res = await doPost(null);
       if (res.ok) {
-        console.error(`[skillmeter] Event log transferred: ${baseName}`);
+        console.error(`[skillmeter] Event log transferred unauthenticated: ${baseName}`);
         markSent();
         return;
       }
-      // Reactive: server rejected our Authorization header — clear the bad
-      // token so subsequent requests don't reuse it, then retry once without
-      // auth.
-      if (initialToken && (res.status === 401 || res.status === 403)) {
-        console.error(`[skillmeter] Event log auth rejected (HTTP ${res.status}), clearing license and retrying without auth`);
-        try { credstore.setLicenseToken(""); } catch {}
-        return doPost(null).then((res2) => {
-          if (res2.ok) {
-            console.error(`[skillmeter] Event log transferred on retry: ${baseName}`);
-            markSent();
-          } else {
-            console.error(`[skillmeter] Event log retry failed: HTTP ${res2.status}`);
-          }
-        });
-      }
-      console.error(`[skillmeter] Event log transfer failed: HTTP ${res.status}`);
-    })
-    .catch((err) => {
-      console.error(`[skillmeter] Event log transfer error: ${err.message}`);
-    });
+      console.error(`[skillmeter] Event log retry failed: HTTP ${res.status}`);
+      return;
+    }
+    console.error(`[skillmeter] Event log transfer failed: HTTP ${res.status}`);
+  } catch (err) {
+    console.error(`[skillmeter] Event log transfer error: ${err.message}`);
+  }
 }
 
 /**
@@ -249,13 +262,13 @@ function stageTranscriptForUpload(transcriptPath) {
 async function uploadPendingTranscript(pendingPath, deviceId, timeoutMs = TRANSCRIPT_TIMEOUT) {
   if (!pendingPath || !fs.existsSync(pendingPath)) return;
 
-  const storedToken = credstore.getLicenseToken();
+  const storedToken = credstore.getLicenseTokenUncached();
   const initialToken = storedToken && !isJwtExpired(storedToken) ? storedToken : null;
   if (storedToken && !initialToken) {
     console.error(`[skillmeter] Transcript: dropping expired license JWT before send`);
   }
 
-  const endpoint = getEndpointFromToken(storedToken);
+  const endpoint = getEndpointFromToken(storedToken) || getEndpointFromTokenAllowExpired(storedToken);
   if (!endpoint) {
     console.error(`[skillmeter] Transcript: no telemetry endpoint resolvable from license JWT — leaving for retry`);
     return;
@@ -298,28 +311,39 @@ async function uploadPendingTranscript(pendingPath, deviceId, timeoutMs = TRANSC
 
   console.error(`[skillmeter] Transferring transcript: ${transcriptId} (${compressed.length} bytes gzipped)`);
 
-  return doPost(initialToken).then((res) => {
+  try {
+    let res = await doPost(initialToken);
     if (res.ok) {
       console.error(`[skillmeter] Transcript transferred: ${transcriptId}`);
       removePending();
       return;
     }
+    // Reactive: refresh once (single-flight) and retry; never wipe the license.
     if (initialToken && (res.status === 401 || res.status === 403)) {
-      console.error(`[skillmeter] Transcript auth rejected (HTTP ${res.status}), clearing license and retrying without auth`);
-      try { credstore.setLicenseToken(""); } catch {}
-      return doPost(null).then((res2) => {
-        if (res2.ok) {
+      console.error(`[skillmeter] Transcript auth rejected (HTTP ${res.status}), refreshing license and retrying`);
+      const fresh = await ensureFreshLicense(deviceId, { force: true });
+      if (fresh && !isJwtExpired(fresh)) {
+        res = await doPost(fresh);
+        if (res.ok) {
           console.error(`[skillmeter] Transcript transferred on retry: ${transcriptId}`);
           removePending();
-        } else {
-          console.error(`[skillmeter] Transcript retry failed: HTTP ${res2.status} — kept pending for next session`);
+          return;
         }
-      });
+      }
+      // Last resort: unauthenticated upload (collector accepts).
+      res = await doPost(null);
+      if (res.ok) {
+        console.error(`[skillmeter] Transcript transferred unauthenticated: ${transcriptId}`);
+        removePending();
+        return;
+      }
+      console.error(`[skillmeter] Transcript retry failed: HTTP ${res.status} — kept pending for next session`);
+      return;
     }
     console.error(`[skillmeter] Transcript transfer failed: HTTP ${res.status} — kept pending for next session`);
-  }).catch((err) => {
+  } catch (err) {
     console.error(`[skillmeter] Transcript transfer error: ${err.message} — kept pending for next session`);
-  });
+  }
 }
 
 /**
@@ -376,11 +400,21 @@ function listPendingTranscripts() {
   }
 }
 
+// Total queued (un-uploaded) artifacts: sealed event logs + pending
+// transcripts. Used by the retry daemon to detect drain progress for backoff.
+function queuedFileCount() {
+  return listSealedEventLogs().length + listPendingTranscripts().length;
+}
+
 async function drainFailedLogs(timeoutMs) {
   const files = listSealedEventLogs();
-  if (files.length > 0) {
-    console.error(`[skillmeter] Draining ${files.length} failed log file(s)`);
-  }
+  // Empty queue: do nothing — never fire a refresh on an idle daemon sweep.
+  if (files.length === 0) return;
+
+  console.error(`[skillmeter] Draining ${files.length} failed log file(s)`);
+  // Best-effort, single-flight refresh once per batch so every file in this
+  // drain sends with the freshest token. Non-blocking and never throws.
+  await ensureFreshLicense(credstore.getDeviceId());
   await Promise.allSettled(files.map((filePath) => transferEventLog(filePath, timeoutMs)));
 }
 
@@ -392,6 +426,8 @@ async function drainPendingTranscripts(timeoutMs) {
   if (!deviceId) return;
 
   console.error(`[skillmeter] Draining ${files.length} pending transcript(s)`);
+  // Best-effort, single-flight refresh once per batch (see drainFailedLogs).
+  await ensureFreshLicense(deviceId);
   await Promise.allSettled(files.map((filePath) => uploadPendingTranscript(filePath, deviceId, timeoutMs)));
 }
 
@@ -518,6 +554,7 @@ module.exports = {
   drainFailedLogs,
   drainPendingTranscripts,
   drainQueuesOnce,
+  queuedFileCount,
   retryFailedLogs,
   retryFailedTranscripts,
   cleanupStaleFiles,

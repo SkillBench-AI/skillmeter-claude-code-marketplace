@@ -61,9 +61,26 @@ function getEndpointFromToken(token) {
   return payload.telemetry_endpoint;
 }
 
+/**
+ * Like getEndpointFromToken but WITHOUT the expiry gate. The telemetry
+ * endpoint is routing info (the per-tenant meter hostname), still valid when
+ * the token has aged out — and the collector accepts unauthenticated uploads,
+ * so a drain can still deliver while a refresh is pending or failing. Never
+ * used for an auth decision; only to recover the destination URL.
+ */
+function getEndpointFromTokenAllowExpired(token) {
+  const override = process.env.SKILLMETER_BACKEND_URL;
+  if (override) return override;
+  if (!token) return null;
+  const payload = decodeJwtPayload(token);
+  if (!payload || typeof payload.telemetry_endpoint !== "string") return null;
+  return payload.telemetry_endpoint;
+}
+
 module.exports = {
   JWT_EXPIRY_GRACE_SECONDS,
   decodeJwtPayload,
   isJwtExpired,
   getEndpointFromToken,
+  getEndpointFromTokenAllowExpired,
 };

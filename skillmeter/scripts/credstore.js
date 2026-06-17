@@ -85,6 +85,14 @@ function getLicenseToken() {
   return store.license_jwt || null;
 }
 
+// Bypasses the in-process cache (`loadStore`) and reads from disk. The
+// long-lived retry daemon warms `_cache` on first read and would otherwise
+// never observe a license refreshed by another process (e.g. a SessionStart in
+// a different terminal). Use this wherever the freshest on-disk token matters.
+function getLicenseTokenUncached() {
+  return readStore().license_jwt || null;
+}
+
 function setLicenseToken(jwt) {
   const store = readStore();
   store.license_jwt = jwt;
@@ -220,6 +228,7 @@ module.exports = {
   getDeviceId,
   getOrCreateHashSalt,
   getLicenseToken,
+  getLicenseTokenUncached,
   setLicenseToken,
   isLicenseTokenExpired,
   getAllowedGitHubOrgs,

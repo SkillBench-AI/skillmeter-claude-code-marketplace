@@ -26,6 +26,9 @@ const transfer = require("../lib/transfer");
 
 const INITIAL_DELAY_MS = 60_000;
 const INTERVAL_MS = parseInt(process.env.SKILLMETER_RETRY_DAEMON_INTERVAL_MS || "", 10) || 120_000;
+// Cap for the adaptive backoff when sweeps make no progress (e.g. the backend
+// is down). Resets to INTERVAL_MS as soon as the queue shrinks.
+const MAX_INTERVAL_MS = 30 * 60_000;
 
 function log(msg) {
   // stderr so it's plugin-debug info, not a Claude notification.
@@ -53,10 +56,25 @@ async function main() {
   log(`started (initial delay ${INITIAL_DELAY_MS} ms, interval ${INTERVAL_MS} ms)`);
   await sleep(INITIAL_DELAY_MS);
 
+  // Adaptive backoff: when a sweep makes no progress and files remain (backend
+  // down, refresh failing), exponentially grow the wait up to MAX_INTERVAL_MS
+  // so we don't tight-loop on a dead endpoint. Reset to the base interval the
+  // moment the queue shrinks. In-memory only — no per-file state.
+  let interval = INTERVAL_MS;
+
   // Loop until Claude Code terminates the monitor process at session end.
   while (true) {
+    const before = transfer.queuedFileCount();
     await sweep();
-    await sleep(INTERVAL_MS);
+    const after = transfer.queuedFileCount();
+
+    if (after > 0 && after >= before) {
+      interval = Math.min(interval * 2, MAX_INTERVAL_MS);
+    } else {
+      interval = INTERVAL_MS;
+    }
+
+    await sleep(interval);
   }
 }
 
