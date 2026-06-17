@@ -21,7 +21,7 @@ const path = require("path");
 
 const credstore = require("./credstore");
 const { getDeviceId, getOrCreateHashSalt, getLicenseToken } = credstore;
-const { trySilentGhActivate, refreshExpiredJwt } = require("./lib/license-activation");
+const { refreshLicense } = require("./lib/license-activation");
 
 const paths = require("./lib/paths");
 const { LOG_DIR, LOG_FILE, PLUGIN_VERSION } = paths;
@@ -119,28 +119,11 @@ function readStdin() {
 // hasn't deployed /refresh yet).
 // ---------------------------------------------------------------------------
 
+// Thin wrapper preserved for session_start.js. The orchestration now lives in
+// lib/license-activation.refreshLicense so the drain/upload path (lib/transfer)
+// can share it without a logger↔transfer require cycle.
 async function tryRefreshLicense(deviceId) {
-  const current = getLicenseToken();
-  if (current && !credstore.isLicenseTokenExpired(current)) {
-    return current;
-  }
-  if (!deviceId) return null;
-  if (credstore.getSignedOut()) return null;
-
-  // Try /refresh first when we have a token to rotate. refreshExpiredJwt
-  // returns null on 410 (sliding window), 404 (endpoint not deployed),
-  // 401 (bad signature), or any network/parse error — falling through to
-  // the gh fallback in every case.
-  if (current) {
-    const fresh = await refreshExpiredJwt(current, deviceId);
-    if (fresh) return fresh;
-  }
-
-  try {
-    return await trySilentGhActivate(deviceId);
-  } catch {
-    return null;
-  }
+  return refreshLicense(deviceId);
 }
 
 // ---------------------------------------------------------------------------

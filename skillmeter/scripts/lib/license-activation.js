@@ -10,10 +10,13 @@
  * sign-in entrypoints and the hook-runtime refresh path consume.
  */
 
+const fs = require("fs");
+const path = require("path");
 const { execSync } = require("child_process");
 const credstore = require("../credstore");
 const { fetchUserGitHubOrgs } = require("./github-api");
 const { getSkillmeterStringSetting } = require("./settings");
+const { LOG_DIR } = require("./paths");
 
 // Default points at prod (the published plugin serves real users). Devs/agents
 // override via SKILLMETER_ACTIVATE_URL (e.g. https://api.dev.skillbench.com/activate)
@@ -199,9 +202,123 @@ async function trySilentGhActivate(deviceId) {
   return jwt;
 }
 
+// ---------------------------------------------------------------------------
+// On-demand refresh with cross-process single-flight.
+//
+// The license JWT is short-lived (15-min TTL). Refreshing only at SessionStart
+// leaves mid-session and retry-daemon uploads holding an expired token. These
+// helpers let any drain/upload best-effort refresh the token right before it's
+// needed, while a file-lock collapses concurrent callers (separate hook
+// processes + the daemon) into a single /refresh round-trip.
+// ---------------------------------------------------------------------------
+
+const LICENSE_REFRESH_LOCK_FILE = path.join(LOG_DIR, ".license-refresh.lock");
+// Don't retry a refresh within this window of the last attempt (non-force).
+const LICENSE_REFRESH_COOLDOWN_MS = 60_000;
+// A lock younger than this is assumed held by a live, in-flight refresh
+// (worst case ~13s: 5s /refresh + 5s gh-activate fetch + 3s `gh auth token`).
+// Older locks are reclaimable, so a crashed holder can't wedge refresh.
+const LICENSE_REFRESH_STALE_MS = 15_000;
+
+/**
+ * Pure single-flight + cooldown decision (no I/O — unit-testable).
+ * @param {boolean} tokenFresh   - current token exists and is not near expiry
+ * @param {boolean} force        - reactive path (e.g. a 401); ignores cooldown
+ * @param {number|null} lockMtimeMs - mtime of the lock file, or null if absent
+ * @param {number} now           - Date.now()
+ * @returns {"return_current"|"acquire_and_refresh"|"skip_locked"}
+ */
+function shouldRefresh(
+  tokenFresh,
+  force,
+  lockMtimeMs,
+  now,
+  cooldownMs = LICENSE_REFRESH_COOLDOWN_MS,
+  staleMs = LICENSE_REFRESH_STALE_MS
+) {
+  if (tokenFresh && !force) return "return_current";
+  const lockAge = lockMtimeMs == null ? Infinity : now - lockMtimeMs;
+  // A live in-flight holder — never stampede, even on force.
+  if (lockAge < staleMs) return "skip_locked";
+  // Non-force also honors the cooldown so we don't hammer /refresh; force
+  // (a real auth rejection) bypasses cooldown but respected the lock above.
+  if (!force && lockAge < cooldownMs) return "skip_locked";
+  return "acquire_and_refresh";
+}
+
+/**
+ * Orchestrate one refresh: try /refresh rotation first (gh-independent), then
+ * fall back to silent gh /activate. Returns the freshest token or null. Reads
+ * the token uncached so a refresh written by another process is observed.
+ * (Body lifted from logger.tryRefreshLicense, which now delegates here.)
+ */
+async function refreshLicense(deviceId) {
+  const current = credstore.getLicenseTokenUncached();
+  if (current && !credstore.isLicenseTokenExpired(current)) return current;
+  if (!deviceId) return null;
+  if (credstore.getSignedOut()) return null;
+
+  if (current) {
+    const fresh = await refreshExpiredJwt(current, deviceId);
+    if (fresh) return fresh;
+  }
+  try {
+    return await trySilentGhActivate(deviceId);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Best-effort, single-flight license refresh. Never throws; returns the
+ * freshest token available (refreshed, existing, or null). Safe to call before
+ * every drain/upload — cheap no-op when the token is already fresh, and
+ * non-blocking when another process holds the refresh lock.
+ */
+async function ensureFreshLicense(deviceId, { force = false } = {}) {
+  if (!deviceId) return null;
+  if (credstore.getSignedOut()) return null;
+
+  const current = credstore.getLicenseTokenUncached();
+  const tokenFresh = Boolean(current) && !credstore.isLicenseTokenExpired(current);
+
+  let lockMtimeMs = null;
+  try {
+    lockMtimeMs = fs.statSync(LICENSE_REFRESH_LOCK_FILE).mtimeMs;
+  } catch {
+    // lock absent
+  }
+
+  const action = shouldRefresh(tokenFresh, force, lockMtimeMs, Date.now());
+  // return_current or skip_locked: hand back what we have without blocking.
+  if (action !== "acquire_and_refresh") return current;
+
+  // Record the attempt time — serves as both the in-flight marker (single
+  // flight) and the cooldown anchor. Intentionally not deleted afterward; the
+  // mtime ages out past STALE/COOLDOWN. Not matched by listSealedEventLogs /
+  // cleanupStaleFiles (same as .drain-once.lock), so it's never swept.
+  try {
+    fs.mkdirSync(LOG_DIR, { recursive: true });
+    fs.writeFileSync(LICENSE_REFRESH_LOCK_FILE, `${process.pid} ${Date.now()}\n`);
+  } catch {
+    // best-effort lock; proceed even if it couldn't be written
+  }
+
+  try {
+    return (await refreshLicense(deviceId)) || current;
+  } catch {
+    return current;
+  }
+}
+
 module.exports = {
   getActivateUrl,
   getRefreshUrl,
   refreshExpiredJwt,
   trySilentGhActivate,
+  shouldRefresh,
+  refreshLicense,
+  ensureFreshLicense,
+  LICENSE_REFRESH_COOLDOWN_MS,
+  LICENSE_REFRESH_STALE_MS,
 };
