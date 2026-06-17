@@ -207,4 +207,14 @@ Events are dropped — even in workdirs where the user ran `/skillmeter:telemetr
 - repositories without a recognizable GitHub remote
 - repositories whose remote belongs to an org the user is not a member of
 
+### Per-project opt-in & auto-enable
+
+Whether a project emits telemetry resolves in three states:
+
+- **Explicitly disabled** (`/skillmeter:telemetry disable`) — never sends; always wins.
+- **Explicitly enabled** (`/skillmeter:telemetry enable`) — sends (still subject to the repo-scope filter above).
+- **Unset** (default) — telemetry **auto-enables when the repo is owned by an allowed org** (the same `GET /user/orgs` set used for repo-scoped filtering). For any other directory it stays off until you choose. SessionStart prints `telemetry auto-enabled — repo owned by allowed org`; run `/skillmeter:telemetry disable` to opt a matching project back out.
+
+The machine-global kill-switch (`/skillmeter:telemetry disable-global`) overrides all of the above.
+
 To refresh the allowed identity list (e.g. after joining a new org), run `/skillmeter:signin` again.

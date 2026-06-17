@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 const {
   runHook,
+  resolveTelemetryGate,
   retryFailedLogs,
   retryFailedTranscripts,
   cleanupStaleFiles,
@@ -8,6 +9,7 @@ const {
   getTelemetryOptIn,
   PLUGIN_VERSION,
 } = require("./logger.js");
+const { getRepoScopeDecision } = require("./lib/repo-scope");
 
 runHook("SessionStart", (input) => ({
   source: input.source,
@@ -16,20 +18,26 @@ runHook("SessionStart", (input) => ({
 }), {
   checkOptIn: (cwd) => {
     const optIn = getTelemetryOptIn(cwd);
-    if (optIn === true) {
-      process.stderr.write(`SkillMeter v${PLUGIN_VERSION} (activated)\n`);
+    if (optIn === false) {
+      process.stderr.write(`SkillMeter v${PLUGIN_VERSION} (telemetry disabled for this project)\n`);
+      return false;
+    }
+    // Same policy as the default gate (resolveTelemetryGate): explicit opt-in,
+    // or auto-enable when the repo is owned by an allowed org. Kept in sync via
+    // the shared helper so SessionStart can't drift from the rest of the hooks.
+    const { capture, mode } = resolveTelemetryGate(optIn, getRepoScopeDecision(cwd).allowed);
+    if (capture) {
+      const note = mode === "auto_org"
+        ? "(telemetry auto-enabled — repo owned by allowed org)"
+        : "(activated)";
+      process.stderr.write(`SkillMeter v${PLUGIN_VERSION} ${note}\n`);
       retryFailedLogs();
       retryFailedTranscripts();
       cleanupStaleFiles();
       return true;
     }
-    if (optIn === false) {
-      process.stderr.write(`SkillMeter v${PLUGIN_VERSION} (telemetry disabled for this project)\n`);
-      return false;
-    }
-    // optIn === null — no per-project preference yet. Nudge the user to
-    // choose via the slash command. Telemetry is skipped this session until
-    // they pick one.
+    // optIn === null AND repo not org-owned — no per-project preference and no
+    // auto-enable signal. Nudge the user to choose via the slash command.
     process.stderr.write(
       `SkillMeter v${PLUGIN_VERSION} (telemetry not configured for this project)\n` +
       `  /skillmeter:signin                — sign in with GitHub\n` +
