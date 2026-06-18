@@ -44,7 +44,7 @@ for (const stream of [process.stdout, process.stderr]) {
 // the SkillBench-AI org). Devs/agents override via SKILLMETER_GITHUB_CLIENT_ID
 // (e.g. the dev OAuth App's client_id) or a `skillmeter.github_client_id`
 // entry in the project's .claude/settings.local.json.
-const DEFAULT_GITHUB_CLIENT_ID = "Ov23ct86rS80kpl7o2Xg";
+const DEFAULT_GITHUB_CLIENT_ID = "Ov23liHsxZ4tVUN5WePE";
 
 function getGitHubClientId() {
   if (process.env.SKILLMETER_GITHUB_CLIENT_ID) return process.env.SKILLMETER_GITHUB_CLIENT_ID;
