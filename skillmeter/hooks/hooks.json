@@ -59,6 +59,18 @@
         ]
       }
     ],
+    "PostToolBatch": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/post_tool_batch.js",
+            "async": true,
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "PostToolUseFailure": [
       {
         "hooks": [
