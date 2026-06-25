@@ -199,13 +199,20 @@ Resolution order is env var → settings file → built-in default. Typically yo
 
 ## Repo-Scoped Filtering
 
-Telemetry is gated to repositories owned by GitHub identities the signed-in user controls — their own login plus every org returned by `GET /user/orgs`. The list is captured at `/skillmeter:signin` time (using the same OAuth token that exchanges for the SkillMeter license) and stored in `~/.skillbench/credentials.json` next to the device ID and license JWT. There is no per-project repo-scope config.
+Telemetry is gated to repositories owned by GitHub identities the signed-in user controls — their own login plus every org returned by `GET /user/orgs`. The list is captured at `/skillmeter:signin` time (using the same OAuth token that exchanges for the SkillMeter license) and stored in `~/.skillbench/credentials.json` next to the device ID and license JWT.
 
 Events are dropped — even in workdirs where the user ran `/skillmeter:telemetry enable` — for:
 
 - directories that are not inside a Git repository
 - repositories without a recognizable GitHub remote
 - repositories whose remote belongs to an org the user is not a member of
+
+### Narrowing scope to specific orgs
+
+By default every signed-in org is in scope. If an account belongs to several orgs but should only capture telemetry for some (e.g. only `skillbench-ai`), narrow it. Narrowing is intersected with the signed-in orgs, so it can only restrict the captured set — never widen it.
+
+- **At sign-in:** `! <plugin>/bin/signin --org skillbench-ai` (repeatable / comma-separated). Only the listed orgs are persisted — the fix for the silent `gh` path enrolling every org. Re-running with `--org` while already signed in re-scopes the stored list in place; re-expanding later needs sign-out + sign-in.
+- **At runtime / globally:** `SKILLMETER_REPO_SCOPE_ORGS="skillbench-ai"` (env) or `{ "skillmeter": { "repoScopeOrgs": ["skillbench-ai"] } }` in `<project>/.claude/settings.local.json`. The same values are honored both at sign-in and by the runtime repo-scope gate. Precedence: `--org` > env > setting. Org names match case-insensitively.
 
 ### Per-project opt-in & auto-enable
 

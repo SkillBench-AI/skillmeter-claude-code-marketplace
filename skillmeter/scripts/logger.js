@@ -36,7 +36,7 @@ const {
 } = settings;
 
 const repoScope = require("./lib/repo-scope");
-const { getRepoScopeDecision } = repoScope;
+const { getRepoScopeDecision, getRepoScopeOrgFilter } = repoScope;
 
 const transfer = require("./lib/transfer");
 const {
@@ -314,6 +314,7 @@ module.exports = {
 
   // Re-exports from lib/repo-scope
   getRepoScopeDecision,
+  getRepoScopeOrgFilter,
 
   // Re-exports from lib/transfer
   sealEventLogAndTriggerDrain,

@@ -16,6 +16,7 @@ const { execSync } = require("child_process");
 const credstore = require("../credstore");
 const { fetchUserGitHubOrgs } = require("./github-api");
 const { getSkillmeterStringSetting } = require("./settings");
+const { resolveOrgScope, narrowOrgsToScope } = require("./org-scope");
 const { LOG_DIR } = require("./paths");
 
 // Default points at prod (the published plugin serves real users). Devs/agents
@@ -121,8 +122,13 @@ async function refreshExpiredJwt(jwt, deviceId) {
  * a natural "at-most-once-per-session" rate limit. Anything that fails
  * here just returns null; the caller leaves the on-disk queue for the
  * next session to drain.
+ *
+ * `options.orgScope` (an explicit org allow-list, e.g. from `signin --org`)
+ * narrows which fetched memberships are persisted. When omitted, the scope is
+ * resolved from SKILLMETER_REPO_SCOPE_ORGS / the project setting so even the
+ * hook-triggered silent refresh stays narrowed.
  */
-async function trySilentGhActivate(deviceId) {
+async function trySilentGhActivate(deviceId, options = {}) {
   if (credstore.getSignedOut()) {
     console.error("[skillmeter] gh activation skipped: signed out (run /skillmeter:signin to re-enable)");
     return null;
@@ -194,11 +200,27 @@ async function trySilentGhActivate(deviceId) {
     return null;
   }
 
-  if (!credstore.commitSignin({ jwt, orgs })) {
+  // Narrow the captured memberships to the configured org scope (CLI > env >
+  // project setting). This is what stops the silent path from enrolling every
+  // org the user belongs to.
+  const scope = resolveOrgScope({ cliOrgs: options.orgScope });
+  const { orgs: scopedOrgs, excluded, applied } = narrowOrgsToScope(orgs, scope);
+  if (applied) {
+    console.error(
+      `[skillmeter] gh activation: org scope ${JSON.stringify(scope)} applied — keeping [${scopedOrgs.join(", ") || "none"}], excluded [${excluded.join(", ") || "none"}]`
+    );
+    if (scopedOrgs.length === 0) {
+      console.error(
+        `[skillmeter] gh activation: WARNING — scope matched none of your memberships; no repos will be in scope`
+      );
+    }
+  }
+
+  if (!credstore.commitSignin({ jwt, orgs: scopedOrgs })) {
     console.error("[skillmeter] gh activation discarded: signed out during issuance");
     return null;
   }
-  console.error(`[skillmeter] gh activation succeeded (allowed orgs: ${orgs.join(", ") || "none"})`);
+  console.error(`[skillmeter] gh activation succeeded (allowed orgs: ${scopedOrgs.join(", ") || "none"})`);
   return jwt;
 }
 
