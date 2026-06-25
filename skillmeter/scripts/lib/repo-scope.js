@@ -11,6 +11,7 @@
 const fs = require("fs");
 const path = require("path");
 const { getAllowedGitHubOrgs } = require("../credstore");
+const { resolveOrgScope } = require("./org-scope");
 
 /**
  * Extract the GitHub org from a remote URL. Handles:
@@ -128,11 +129,29 @@ function getRemoteUrlsForRepo(repoRoot) {
 }
 
 /**
+ * Optional narrowing allow-list of GitHub orgs. When configured, repo-scope is
+ * restricted to the *intersection* of this list and the activated user's org
+ * memberships, so a user whose account belongs to several orgs can scope
+ * telemetry to just one (e.g. only "skillbench-ai"). The filter can only narrow
+ * the captured set, never widen it — an org you aren't a member of stays
+ * blocked even if it's listed. Returns null when unconfigured, preserving the
+ * default "all signed-in orgs" behavior. Resolution (env → per-project setting)
+ * lives in lib/org-scope so the sign-in flow narrows identically.
+ */
+function getRepoScopeOrgFilter(cwd) {
+  return resolveOrgScope({ cwd });
+}
+
+/**
  * Decide whether an event from `cwd` is in-scope. Telemetry fires only in
  * repos whose GitHub remote belongs to the activated user's own login or
  * one of their org memberships (captured at activation time and stored in
  * credstore). Anything outside that set — including non-git directories
  * and non-GitHub remotes — is blocked.
+ *
+ * The signed-in org set may be further narrowed by an optional org filter
+ * (getRepoScopeOrgFilter); when set, only repos in orgs that are both
+ * signed-in *and* on the filter are in scope.
  *
  * Result always contains `allowed` (boolean) and `classification` (string);
  * other fields (`scope`, `repoRoot`, `remoteOrg`) are included when
@@ -140,10 +159,18 @@ function getRemoteUrlsForRepo(repoRoot) {
  * decisions after the fact.
  */
 function getRepoScopeDecision(cwd) {
-  const allowedOrgs = getAllowedGitHubOrgs();
-  if (allowedOrgs.length === 0) {
+  const signedInOrgs = getAllowedGitHubOrgs();
+  if (signedInOrgs.length === 0) {
     return { allowed: false, scope: "unknown", classification: "not_activated" };
   }
+
+  // Narrow to the configured org allow-list when present (intersection only —
+  // never widens the signed-in set). An empty intersection means every repo
+  // falls through to the github_org_mismatch path below.
+  const orgFilter = getRepoScopeOrgFilter(cwd);
+  const allowedOrgs = orgFilter
+    ? signedInOrgs.filter((org) => orgFilter.includes(org))
+    : signedInOrgs;
 
   const repoRoot = findGitRoot(cwd);
   if (!repoRoot) {
@@ -189,4 +216,5 @@ module.exports = {
   resolveGitDir,
   getRemoteUrlsForRepo,
   getRepoScopeDecision,
+  getRepoScopeOrgFilter,
 };
