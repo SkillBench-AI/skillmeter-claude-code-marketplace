@@ -78,11 +78,19 @@ function parseOrgArgs(argv) {
     if (a === "--org" || a === "--orgs") {
       const v = argv[i + 1];
       if (v && !v.startsWith("--")) {
-        orgs.push(...v.split(/[,\s]+/));
+        orgs.push(...v.split(/[,\s]+/).filter(Boolean));
         i++;
+      } else {
+        log(`Error: ${a} requires a value (e.g., ${a} skillbench-ai)`);
+        process.exit(1);
       }
     } else if (a.startsWith("--org=") || a.startsWith("--orgs=")) {
-      orgs.push(...a.slice(a.indexOf("=") + 1).split(/[,\s]+/));
+      const value = a.slice(a.indexOf("=") + 1);
+      if (!value.trim()) {
+        log(`Error: ${a.split("=")[0]}= requires a value (e.g., ${a.split("=")[0]}=skillbench-ai)`);
+        process.exit(1);
+      }
+      orgs.push(...value.split(/[,\s]+/).filter(Boolean));
     }
   }
   return orgs;
@@ -97,7 +105,7 @@ function scopeAndCommit(licenseJwt, orgs, cliOrgs, { sayFn = log } = {}) {
   if (applied) {
     sayFn(
       `Org scope applied: keeping [${scopedOrgs.join(", ") || "none"}]` +
-        (excluded.length ? `, excluded [${excluded.join(", ")}]` : "")
+        (excluded.length ? `, excluded ${excluded.length} org(s)` : "")
     );
     if (scopedOrgs.length === 0) {
       sayFn(
@@ -281,8 +289,13 @@ async function main() {
       const scope = resolveOrgScope({ cliOrgs });
       const { orgs: scopedOrgs, excluded, applied } = narrowOrgsToScope(existingOrgs, scope);
       if (applied && excluded.length) {
+        if (scopedOrgs.length === 0) {
+          log(`Error: org scope [${scope.join(", ")}] matched none of your signed-in orgs [${existingOrgs.join(", ")}].`);
+          log("To re-expand scope, run /skillmeter:signout then /skillmeter:signin again.");
+          process.exit(1);
+        }
         if (credstore.commitSignin({ jwt: existingToken, orgs: scopedOrgs })) {
-          log(`Re-scoped existing sign-in: keeping [${scopedOrgs.join(", ") || "none"}], excluded [${excluded.join(", ")}]`);
+          log(`Re-scoped existing sign-in: keeping [${scopedOrgs.join(", ") || "none"}], excluded ${excluded.length} org(s)`);
           say(welcomeBanner(scopedOrgs));
           return;
         }

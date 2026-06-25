@@ -24,7 +24,10 @@ function normalizeOrgList(orgs) {
     new Set(
       orgs
         .filter((o) => typeof o === "string")
-        .map((o) => o.trim().toLowerCase())
+        .map((o) => {
+          const trimmed = o.trim();
+          return trimmed.startsWith("@") ? trimmed.slice(1).toLowerCase() : trimmed.toLowerCase();
+        })
         .filter(Boolean)
     )
   );

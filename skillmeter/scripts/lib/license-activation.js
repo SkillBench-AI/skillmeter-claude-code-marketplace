@@ -207,7 +207,7 @@ async function trySilentGhActivate(deviceId, options = {}) {
   const { orgs: scopedOrgs, excluded, applied } = narrowOrgsToScope(orgs, scope);
   if (applied) {
     console.error(
-      `[skillmeter] gh activation: org scope ${JSON.stringify(scope)} applied — keeping [${scopedOrgs.join(", ") || "none"}], excluded [${excluded.join(", ") || "none"}]`
+      `[skillmeter] gh activation: org scope ${JSON.stringify(scope)} applied — keeping [${scopedOrgs.join(", ") || "none"}], excluded ${excluded.length} org(s)`
     );
     if (scopedOrgs.length === 0) {
       console.error(
