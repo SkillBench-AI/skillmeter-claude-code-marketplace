@@ -23,6 +23,8 @@ runHook("SessionStart", (input, ctx) => {
     pluginRoot: PLUGIN_ROOT,
     pluginVersion: PLUGIN_VERSION,
     agentType: input.agent_type,
+    model: input.model,
+    sessionSource: input.source,
   });
 
   // Phase 2 (SBEE-165): route the harness block through the deterministic

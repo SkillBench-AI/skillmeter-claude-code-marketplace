@@ -1,32 +1,43 @@
 "use strict";
 
 /**
- * Harness detection (SBEE-163, Phase 1 — metadata-only MVP) with the Phase 2
- * sanitization integration (SBEE-165) baked in.
+ * Harness detection — SBEE-166 (Phase 1) implementation of the locked SBEE-164
+ * harness-metadata contract (`spec/harness-metadata-contract.v1.json`), with the
+ * SBEE-165 sanitization integration baked in.
  *
  * "Harness" = the scaffolding a developer wraps around their coding agent:
- * instruction files (CLAUDE.md / AGENTS.md), skills, lifecycle hooks, plugins,
- * and higher-level orchestration. Analysis needs to know whether a session was
- * run bare or with a sophisticated harness so it can judge the work fairly.
+ * instruction files (CLAUDE.md / AGENTS.md), skills, subagents, slash commands,
+ * lifecycle hooks, MCP servers, plugins/marketplaces, and higher-level
+ * orchestration. Analysis needs to know whether a session was run bare or with a
+ * sophisticated harness so it can judge the work fairly.
  *
- * This module produces *presence / shape metadata only* — never raw file
- * contents (raw harness content is a higher-risk Phase 4). It is deterministic,
- * filesystem-only, and must never throw: harness detection runs inside the
- * SessionStart hook and a failure here must not break the session, so every
- * probe is wrapped and falls back to a safe "unknown"/empty default.
+ * This module emits the contract's **flat** `data.harness` field set and is
+ * *metadata-only* — presence booleans, counts, size buckets, allow-listed hook
+ * event-name enums, and opaque HMAC-hashed identifiers. It never emits raw
+ * harness file CONTENT, hook command strings, MCP command/args/env, or file
+ * paths (those are Tier 1/Tier 2 / out-of-scope for the MVP; see the contract's
+ * `outOfScopeForMvp`). It is deterministic, filesystem-only, and must never
+ * throw: detection runs inside the SessionStart hook and a failure here must not
+ * break the session, so every probe is wrapped and falls back to a safe
+ * default.
  *
- * Detection levels (from the work item):
- *   - Level 1 (prompt/filesystem-detectable): instruction-file presence, skills,
- *     hooks, plugin/agent info. Collected here.
- *   - Level 2 (architecture-level, NOT detectable): external orchestration and
- *     multi-agent setups. Emitted as "unknown" until explicit metadata exists.
+ * Detection levels (contract `detectionLevels`):
+ *   - Level 1 (filesystem-detectable): everything collected here.
+ *   - Level 2 (architecture-level, NOT detectable): external orchestration /
+ *     multi-agent topology. Emitted as "unknown" (SBEE-168) — `multi_agent` may
+ *     be upgraded to "present" downstream once a subagent is observed running.
  *
- * Phase 2 (SBEE-165): the block carries the sanitization `policy_version`,
- * applies a Tier 1 fail-closed scan to free-form names (a skill name embedding
- * a secret is dropped before it can be hashed), and records every hash/drop in
- * a `redactions` bookkeeping object (counts/types only). The whole block is also
- * routed through the central `sanitizeEventData` boundary by the caller before
- * it is logged/uploaded, so any residual secret/email is still scrubbed.
+ * Privacy (SANITIZATION_EPIC.md 3-tier policy, contract `tiers`/`actions`):
+ *   - tier3_safe values (presence/counts/buckets/enums/versions) are collected
+ *     raw.
+ *   - tier2_business identifiers (skill / subagent / command / MCP / private
+ *     plugin names) are HMAC-hashed before egress; only the opaque token leaves
+ *     the machine. Plugin names from public marketplaces are tier3 and kept raw.
+ *   - tier1_secret material (hook commands, MCP env, anything matching a Tier 1
+ *     detector) is dropped fail-closed and never hashed or emitted.
+ * Every hash/drop is tallied in the `redactions` bookkeeping (counts/types only,
+ * never original values). The whole block is also routed through the central
+ * `sanitizeEventData` boundary by the caller as a catch-all.
  */
 
 const fs = require("fs");
@@ -35,16 +46,15 @@ const path = require("path");
 
 const { hashHmac, containsTier1, POLICY_VERSION } = require("./lib/sanitize");
 
-// Bump when the shape of the emitted harness metadata changes. Aligned with the
-// Codex collector's schema generation (2) so the backend sees a single harness
-// schema version across both client surfaces; version 2 carries the Phase 2
-// `policy_version` and `redactions` fields.
-const HARNESS_SCHEMA_VERSION = 2;
+// Version of the emitted harness metadata contract this payload conforms to.
+// String to match the contract's `harness_schema_version` field (the machine
+// spec is at spec/harness-metadata-contract.v1.json, contractVersion 1.0.0).
+const HARNESS_SCHEMA_VERSION = "1.0";
 
 // Standard lifecycle hook event names. We only ever report event names from
-// this allow-list so an arbitrary user-authored settings.json / hooks.json
-// can't inject free-form strings (which could carry project context) into the
-// metadata. Covers the full Claude Code hook catalog.
+// this allow-list (contract `hooks_enabled` action: enum) so an arbitrary
+// user-authored settings.json / hooks.json can't inject free-form strings
+// (which could carry project context) into the metadata.
 const KNOWN_HOOK_EVENTS = new Set([
   "SessionStart",
   "SessionEnd",
@@ -72,17 +82,56 @@ const KNOWN_HOOK_EVENTS = new Set([
   "WorktreeRemove",
 ]);
 
-// Depth-bounded so a pathological skills tree can't make SessionStart slow.
+// Marketplaces whose plugin names are public and therefore tier3_safe — their
+// names may be carried raw (contract `plugins` note). Anything else is treated
+// as a private/internal name and hashed.
+const PUBLIC_MARKETPLACES = new Set([
+  "skillbench",
+  "claude-plugins-official",
+  "anthropics",
+  "anthropic",
+]);
+
+// Depth-bounded so a pathological tree can't make SessionStart slow.
 const SKILL_SCAN_MAX_DEPTH = 4;
-// Cap the number of skill names we enumerate; the count is always exact, but
-// the name list is bounded so a huge skills library can't bloat the event.
-const SKILL_NAMES_LIMIT = 64;
+const COMMAND_SCAN_MAX_DEPTH = 4;
+const AGENT_SCAN_MAX_DEPTH = 2;
+// Bounded walk for counting nested CLAUDE.md files across a (possibly large)
+// monorepo without stat-storming the whole tree.
+const CLAUDE_MD_WALK_MAX_DEPTH = 6;
+const CLAUDE_MD_WALK_MAX_DIRS = 4000;
+// Directories never worth descending for harness detection.
+const SKIP_DIRS = new Set([
+  "node_modules",
+  "dist",
+  "build",
+  "vendor",
+  "target",
+  "__pycache__",
+  ".venv",
+  ".next",
+  "coverage",
+]);
+// Cap the number of names we enumerate per surface; counts stay exact, but the
+// name lists are bounded so a huge library can't bloat the event.
+const NAMES_LIMIT = 64;
+
+// Coarse size buckets for the project CLAUDE.md (contract `claude_md_size_bucket`
+// enum). Raw byte counts are bucketed to avoid fingerprinting a specific file.
+function sizeBucket(bytes) {
+  if (!bytes || bytes <= 0) return "none";
+  if (bytes < 1024) return "xs";
+  if (bytes < 4096) return "s";
+  if (bytes < 16384) return "m";
+  if (bytes < 65536) return "l";
+  return "xl";
+}
 
 // Record a single sanitization action against the harness redaction bookkeeping
-// (SBEE-165, Phase 2). `kind` is "hashed" (an HMAC token replaced a raw Tier 2
-// name) or "dropped" (a Tier 1 fail-closed removal). Only counts and a coarse
-// field `type` are tracked — never the original name/value — so the bookkeeping
-// is itself Tier 3 safe.
+// (contract `redactions`). `kind` is "hashed" (an HMAC token replaced a raw
+// Tier 2 name) or "dropped" (a Tier 1 fail-closed removal). Only counts and a
+// coarse field `type` are tracked — never the original name/value — so the
+// bookkeeping is itself tier3_safe.
 function recordRedaction(redactions, kind, type) {
   if (kind === "hashed") redactions.hashed_count += 1;
   else if (kind === "dropped") redactions.dropped_count += 1;
@@ -113,6 +162,14 @@ function safeReadDir(p) {
   }
 }
 
+function safeReadJson(p) {
+  try {
+    return JSON.parse(fs.readFileSync(p, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
 // Walk up from `startPath` looking for a `.git` marker. Returns "" when the
 // path isn't inside a git repo. Mirrors logger's git-root walk but is kept
 // local so harness detection stays self-contained and unit-testable.
@@ -134,6 +191,31 @@ function findRepoRoot(startPath) {
   }
 }
 
+/**
+ * Convert a list of raw tier2_business names into the contract's
+ * `*_names_hashed` array. Fail-closed: a name embedding a Tier 1 secret is
+ * dropped outright (never hashed or emitted), because once hashed the central
+ * boundary can no longer tell it apart from a benign token. When no salt is
+ * available we cannot produce a stable opaque token, so the raw Tier 2 name is
+ * dropped rather than leaked. Every action is tallied in `redactions`.
+ */
+function hashNames(names, type, hashSalt, redactions) {
+  const out = [];
+  for (const name of names.slice(0, NAMES_LIMIT)) {
+    if (containsTier1(name)) {
+      recordRedaction(redactions, "dropped", type);
+      continue;
+    }
+    if (!hashSalt) {
+      recordRedaction(redactions, "dropped", type);
+      continue;
+    }
+    out.push(hashHmac(name, hashSalt));
+    recordRedaction(redactions, "hashed", type);
+  }
+  return out;
+}
+
 // Collect skill directory names (the parent dir of each SKILL.md) under `root`,
 // recursing up to SKILL_SCAN_MAX_DEPTH. Hidden namespaces (any path segment
 // starting with ".", e.g. runtime-provided ".system" skills) are skipped so the
@@ -144,195 +226,298 @@ function collectSkillNames(root, depth, acc) {
     if (!entry.isDirectory()) continue;
     if (entry.name.startsWith(".")) continue;
     const dir = path.join(root, entry.name);
-    if (safeIsFile(path.join(dir, "SKILL.md"))) {
-      acc.add(entry.name);
-    }
+    if (safeIsFile(path.join(dir, "SKILL.md"))) acc.add(entry.name);
     collectSkillNames(dir, depth + 1, acc);
   }
 }
 
-function detectSkills(roots) {
-  const names = new Set();
-  const scopes = new Set();
-  for (const { scope, dir } of roots) {
-    if (!safeIsDir(dir)) continue;
-    const dirNames = new Set();
-    collectSkillNames(dir, 1, dirNames);
-    if (dirNames.size > 0) scopes.add(scope);
-    for (const name of dirNames) names.add(name);
+// Collect markdown command/agent names under `root`. Each `*.md` file is one
+// entry; nested directories become a `namespace:` prefix (Claude's command
+// namespacing). Hidden dirs are skipped.
+function collectMarkdownNames(root, depth, maxDepth, prefix, acc) {
+  if (depth > maxDepth) return;
+  for (const entry of safeReadDir(root)) {
+    if (entry.isFile()) {
+      if (entry.name.endsWith(".md")) acc.add(prefix + entry.name.slice(0, -3));
+      continue;
+    }
+    if (entry.isDirectory() && !entry.name.startsWith(".")) {
+      collectMarkdownNames(
+        path.join(root, entry.name),
+        depth + 1,
+        maxDepth,
+        `${prefix}${entry.name}:`,
+        acc
+      );
+    }
   }
-  return { names: [...names].sort(), scopes: [...scopes].sort() };
 }
 
-// Read the hook event names declared in a settings.json / hooks.json file. Both
-// Claude shapes expose a top-level `hooks` object keyed by event name, so the
-// same reader handles the plugin's hooks.json and user/project settings.json.
-// Only names on the known-events allow-list survive, so we never echo arbitrary
-// user strings.
-function readHookEvents(hooksFilePath) {
+// Count CLAUDE.md files across a project tree (contract `claude_md_count` —
+// "nested/imported"). Bounded in depth and total directories visited so a giant
+// monorepo can't slow SessionStart.
+function countNestedClaudeMd(root) {
+  let count = 0;
+  let visited = 0;
+  const walk = (dir, depth) => {
+    if (depth > CLAUDE_MD_WALK_MAX_DEPTH || visited > CLAUDE_MD_WALK_MAX_DIRS) return;
+    visited += 1;
+    for (const entry of safeReadDir(dir)) {
+      if (entry.isFile()) {
+        if (entry.name === "CLAUDE.md") count += 1;
+      } else if (entry.isDirectory()) {
+        if (entry.name.startsWith(".") || SKIP_DIRS.has(entry.name)) continue;
+        walk(path.join(dir, entry.name), depth + 1);
+      }
+    }
+  };
+  if (root) walk(root, 0);
+  return count;
+}
+
+// Count `@path` imports referenced from a CLAUDE.md (contract
+// `claude_md_import_count`). Only the COUNT is collected — the referenced paths
+// themselves are never read or emitted. Email-like `@` (preceded by a word
+// char) is excluded by requiring a leading boundary.
+function countImports(claudeMdPath) {
   try {
-    const parsed = JSON.parse(fs.readFileSync(hooksFilePath, "utf8"));
-    const hooks = parsed && parsed.hooks;
-    if (!hooks || typeof hooks !== "object") return [];
-    return Object.keys(hooks).filter((event) => KNOWN_HOOK_EVENTS.has(event));
+    const text = fs.readFileSync(claudeMdPath, "utf8");
+    const matches = text.match(/(?:^|\s)@[^\s@]+/g);
+    return matches ? matches.length : 0;
   } catch {
-    return [];
+    return 0;
   }
 }
 
-function detectHooks(sources) {
-  const enabled = new Set();
-  const scopes = new Set();
-  for (const { scope, file } of sources) {
-    if (!safeIsFile(file)) continue;
-    const events = readHookEvents(file);
-    if (events.length === 0) continue;
-    for (const event of events) enabled.add(event);
-    scopes.add(scope);
+// Read the hook config from a settings.json / hooks.json file. Both Claude
+// shapes expose a top-level `hooks` object keyed by event name. Returns the
+// allow-listed event names present and the number of configured hook ENTRIES
+// (matcher groups / inner commands) — never any command string.
+function readHooks(hooksFilePath) {
+  const parsed = safeReadJson(hooksFilePath);
+  const hooks = parsed && parsed.hooks;
+  if (!hooks || typeof hooks !== "object") return { events: [], entries: 0 };
+  const events = [];
+  let entries = 0;
+  for (const [event, groups] of Object.entries(hooks)) {
+    if (!KNOWN_HOOK_EVENTS.has(event)) continue;
+    events.push(event);
+    if (Array.isArray(groups)) {
+      for (const group of groups) {
+        // Each matcher group may hold an inner `hooks` array of commands; count
+        // those when present, otherwise count the group itself as one entry.
+        const inner = group && Array.isArray(group.hooks) ? group.hooks.length : 0;
+        entries += inner > 0 ? inner : 1;
+      }
+    }
   }
-  return { enabled: [...enabled].sort(), scopes: [...scopes].sort() };
+  return { events, entries };
 }
 
 /**
- * Detect Level 1 harness metadata for a session running in `cwd`.
+ * Detect Level 1 harness metadata for a session running in `cwd` and emit the
+ * flat SBEE-164 contract field set.
  *
- * @param {string} cwd - session working directory (unhashed; only used to probe
- *   the filesystem — never emitted).
+ * @param {string} cwd - session working directory (only used to probe the
+ *   filesystem — never emitted).
  * @param {object} [options]
- * @param {string} [options.repoRoot] - precomputed git root (avoids a re-walk);
- *   derived from `cwd` when omitted.
+ * @param {string} [options.repoRoot] - precomputed git root (avoids a re-walk).
  * @param {string} [options.homeDir] - overrides os.homedir() (test seam).
  * @param {string} [options.pluginRoot] - this plugin's root, for its hooks.json.
- * @param {string} [options.pluginVersion] - this plugin's version.
- * @param {string} [options.agentType] - agent label (defaults to "claude-code").
- * @param {string} [options.hashSalt] - per-machine HMAC salt; required to hash
- *   skill names.
- * @param {boolean} [options.hashSkillNames] - when true, emit `names_hashed`
- *   (HMAC) instead of plaintext `names`. Defaults from
- *   SKILLMETER_HARNESS_HASH_SKILL_NAMES.
- * @returns {object} plain-JSON harness metadata (safe to route through the
+ * @param {string} [options.pluginVersion] - this collector plugin's version.
+ * @param {string} [options.agentType] - agent surface (defaults "claude-code").
+ * @param {string} [options.model] - model id from SessionStart input.model.
+ * @param {string} [options.sessionSource] - SessionStart input.source.
+ * @param {string} [options.hashSalt] - per-install HMAC salt; required to emit
+ *   any hashed identifier.
+ * @returns {object} flat, plain-JSON harness metadata (safe to route through the
  *   sanitizer and upload).
  */
 function detectHarness(cwd, options = {}) {
-  const base = {
-    schema_version: HARNESS_SCHEMA_VERSION,
-    // Sanitization policy version this metadata was produced under (SBEE-165,
-    // Phase 2). Sourced from the single sanitizer constant so the harness block
-    // and the central sanitizeEventData metadata always agree on the policy in
-    // force, and the backend can reason about which 3-tier rules applied.
+  const harness = {
+    // ---- Contract & runtime ----
+    harness_schema_version: HARNESS_SCHEMA_VERSION,
+    // Sanitization policy version this metadata was produced under, sourced from
+    // the single sanitizer constant so the harness block and the central
+    // sanitizeEventData metadata always agree on the policy in force.
     policy_version: POLICY_VERSION,
     agent_type: options.agentType || "claude-code",
-    instructions: { has_claude_md: false, has_claude_md_global: false, has_agents_md: false, has_agents_md_global: false, scopes: [] },
-    skills: { count: 0, names: [], scopes: [] },
-    hooks: { enabled: [], scopes: [] },
-    // Level 2 — architecture-level signals are not detectable from the
-    // filesystem/transcript, so they are explicitly "unknown" rather than a
-    // misleading false. subagent_used is derived downstream from the
-    // SubagentStart/SubagentStop events the collector already emits.
-    orchestration: {
-      external_orchestration: "unknown",
-      multi_agent: "unknown",
-    },
-    // Sanitization bookkeeping (SBEE-165, Phase 2): how many harness values
-    // were HMAC-hashed (Tier 2 names) or dropped (Tier 1 fail-closed) at this
-    // boundary, broken down by field type. Counts/types only — the original
-    // names/values never appear here. Complements the central sanitizeEventData
-    // summary, which only ever sees the already hashed/dropped result.
+    model: options.model || "",
+    session_source: options.sessionSource || "",
+    plugin_version: options.pluginVersion || "",
+
+    // ---- Memory / instruction files ----
+    has_claude_md: false,
+    has_claude_local_md: false,
+    has_user_claude_md: false,
+    has_agents_md: false,
+    claude_md_count: 0,
+    claude_md_size_bucket: "none",
+    claude_md_import_count: 0,
+
+    // ---- Skills ----
+    skills_present: false,
+    skills_count: 0,
+    skill_source_counts: { project: 0, user: 0, plugin: 0 },
+    skill_names_hashed: [],
+
+    // ---- Subagents ----
+    subagents_present: false,
+    subagents_count: 0,
+    subagent_names_hashed: [],
+    // Derived downstream from SubagentStart/SubagentStop; false at session start.
+    subagent_used: false,
+
+    // ---- Hooks ----
+    hooks_enabled: [],
+    hooks_count: 0,
+    hooks_source_counts: { user: 0, project: 0, local: 0, plugin: 0 },
+
+    // ---- Slash commands ----
+    commands_present: false,
+    commands_count: 0,
+    command_names_hashed: [],
+
+    // ---- MCP servers ----
+    has_mcp_config: false,
+    mcp_servers_count: 0,
+    mcp_server_names_hashed: [],
+
+    // ---- Plugins / marketplaces ----
+    plugins_count: 0,
+    marketplaces_count: 0,
+    plugins: [],
+
+    // ---- Level 2 (architecture) — not detectable; explicit "unknown" ----
+    external_orchestration: "unknown",
+    multi_agent: "unknown",
+
+    // ---- Sanitization bookkeeping (counts/types only, never values) ----
     redactions: { hashed_count: 0, dropped_count: 0, by_type: {} },
   };
 
   try {
-    if (options.pluginVersion) {
-      base.plugin = { name: "skillmeter", version: options.pluginVersion };
-    }
-
+    const hashSalt = options.hashSalt;
     const homeDir = options.homeDir || os.homedir();
     const repoRoot =
       options.repoRoot !== undefined ? options.repoRoot : findRepoRoot(cwd);
-
-    // ---- Instruction files (CLAUDE.md / AGENTS.md) ----
-    // Project-scope = cwd or repo root; global-scope = ~/.claude. CLAUDE.md is
-    // Claude Code's primary memory file; AGENTS.md is tracked too so cross-agent
-    // harnesses are visible.
-    const instrScopes = new Set();
     const projectDirs = [cwd, repoRoot].filter(Boolean);
+    const userClaudeDir = homeDir ? path.join(homeDir, ".claude") : "";
 
     const hasProjectFile = (name) =>
       projectDirs.some((dir) => safeIsFile(path.join(dir, name)));
 
-    const claudeProject = hasProjectFile("CLAUDE.md");
-    const agentsProject = hasProjectFile("AGENTS.md");
-    const claudeGlobal =
-      !!homeDir && safeIsFile(path.join(homeDir, ".claude", "CLAUDE.md"));
-    const agentsGlobal =
-      !!homeDir && safeIsFile(path.join(homeDir, ".claude", "AGENTS.md"));
+    // ---- Memory / instruction files ----
+    harness.has_claude_md = hasProjectFile("CLAUDE.md");
+    harness.has_claude_local_md = hasProjectFile("CLAUDE.local.md");
+    harness.has_agents_md = hasProjectFile("AGENTS.md");
+    harness.has_user_claude_md =
+      !!userClaudeDir && safeIsFile(path.join(userClaudeDir, "CLAUDE.md"));
 
-    if (claudeProject || agentsProject) instrScopes.add("project");
-    if (claudeGlobal || agentsGlobal) instrScopes.add("global");
+    const claudeMdPath = projectDirs
+      .map((dir) => path.join(dir, "CLAUDE.md"))
+      .find(safeIsFile);
+    if (claudeMdPath) {
+      try {
+        harness.claude_md_size_bucket = sizeBucket(fs.statSync(claudeMdPath).size);
+      } catch {
+        /* leave "none" */
+      }
+      harness.claude_md_import_count = countImports(claudeMdPath);
+    }
+    // Count across the repo tree when we have a root; otherwise just cwd.
+    harness.claude_md_count = countNestedClaudeMd(repoRoot || cwd);
 
-    base.instructions.has_claude_md = claudeProject;
-    base.instructions.has_claude_md_global = claudeGlobal;
-    base.instructions.has_agents_md = agentsProject;
-    base.instructions.has_agents_md_global = agentsGlobal;
-    base.instructions.scopes = [...instrScopes].sort();
-
-    // ---- Skills ----
+    // ---- Skills (project / user / plugin) ----
     const skillRoots = [];
     if (repoRoot) skillRoots.push({ scope: "project", dir: path.join(repoRoot, ".claude", "skills") });
     if (cwd && cwd !== repoRoot) skillRoots.push({ scope: "project", dir: path.join(cwd, ".claude", "skills") });
-    if (homeDir) skillRoots.push({ scope: "global", dir: path.join(homeDir, ".claude", "skills") });
+    if (userClaudeDir) skillRoots.push({ scope: "user", dir: path.join(userClaudeDir, "skills") });
 
-    const { names: skillNames, scopes: skillScopes } = detectSkills(skillRoots);
-    base.skills.count = skillNames.length;
-    base.skills.scopes = skillScopes;
-
-    const hashNames =
-      options.hashSkillNames !== undefined
-        ? options.hashSkillNames
-        : process.env.SKILLMETER_HARNESS_HASH_SKILL_NAMES === "1";
-    const limited = skillNames.slice(0, SKILL_NAMES_LIMIT);
-
-    // Tier 1 fail-closed scan (SBEE-165, Phase 2). A skill *name* is Tier 2
-    // business data we may hash, but the directory name could still accidentally
-    // embed a Tier 1 secret (an env var or token pasted into a folder name).
-    // Drop any such name outright — never hash or emit it — and record the drop
-    // in the bookkeeping. Scanning happens here, before the value is hashed,
-    // because once hashed the central boundary can no longer tell it apart from
-    // a benign token. (`skills.count` is a non-sensitive integer and keeps the
-    // true on-disk total, just as it does for truncation.)
-    const safeNames = limited.filter((name) => {
-      if (containsTier1(name)) {
-        recordRedaction(base.redactions, "dropped", "skill_name");
-        return false;
+    const skillNames = new Set();
+    const seenSkillScopes = { project: new Set(), user: new Set(), plugin: new Set() };
+    for (const { scope, dir } of skillRoots) {
+      if (!safeIsDir(dir)) continue;
+      const names = new Set();
+      collectSkillNames(dir, 1, names);
+      for (const n of names) {
+        skillNames.add(n);
+        seenSkillScopes[scope].add(n);
       }
-      return true;
-    });
+    }
+    // Plugin-provided skills: scan each installed plugin's bundled skills dir.
+    const pluginInfo = detectPlugins(userClaudeDir, hashSalt, harness.redactions);
+    for (const installPath of pluginInfo.installPaths) {
+      const dir = path.join(installPath, "skills");
+      if (!safeIsDir(dir)) continue;
+      const names = new Set();
+      collectSkillNames(dir, 1, names);
+      for (const n of names) {
+        skillNames.add(n);
+        seenSkillScopes.plugin.add(n);
+      }
+    }
+    harness.skills_count = skillNames.size;
+    harness.skills_present = skillNames.size > 0;
+    harness.skill_source_counts = {
+      project: seenSkillScopes.project.size,
+      user: seenSkillScopes.user.size,
+      plugin: seenSkillScopes.plugin.size,
+    };
+    harness.skill_names_hashed = hashNames(
+      [...skillNames].sort(),
+      "skill_name",
+      hashSalt,
+      harness.redactions
+    );
 
-    if (hashNames && options.hashSalt) {
-      delete base.skills.names;
-      base.skills.names_hashed = safeNames.map((n) => {
-        recordRedaction(base.redactions, "hashed", "skill_name");
-        return hashHmac(n, options.hashSalt);
-      });
-    } else {
-      base.skills.names = safeNames;
+    // ---- Subagents (.claude/agents/*.md) ----
+    const agentRoots = [];
+    if (repoRoot) agentRoots.push(path.join(repoRoot, ".claude", "agents"));
+    if (cwd && cwd !== repoRoot) agentRoots.push(path.join(cwd, ".claude", "agents"));
+    if (userClaudeDir) agentRoots.push(path.join(userClaudeDir, "agents"));
+    const subagentNames = new Set();
+    for (const dir of agentRoots) {
+      if (!safeIsDir(dir)) continue;
+      collectMarkdownNames(dir, 1, AGENT_SCAN_MAX_DEPTH, "", subagentNames);
     }
-    if (skillNames.length > limited.length) {
-      base.skills.names_truncated = true;
+    harness.subagents_count = subagentNames.size;
+    harness.subagents_present = subagentNames.size > 0;
+    harness.subagent_names_hashed = hashNames(
+      [...subagentNames].sort(),
+      "subagent_name",
+      hashSalt,
+      harness.redactions
+    );
+
+    // ---- Slash commands (.claude/commands/**/*.md) ----
+    const commandRoots = [];
+    if (repoRoot) commandRoots.push(path.join(repoRoot, ".claude", "commands"));
+    if (cwd && cwd !== repoRoot) commandRoots.push(path.join(cwd, ".claude", "commands"));
+    if (userClaudeDir) commandRoots.push(path.join(userClaudeDir, "commands"));
+    const commandNames = new Set();
+    for (const dir of commandRoots) {
+      if (!safeIsDir(dir)) continue;
+      collectMarkdownNames(dir, 1, COMMAND_SCAN_MAX_DEPTH, "", commandNames);
     }
+    harness.commands_count = commandNames.size;
+    harness.commands_present = commandNames.size > 0;
+    harness.command_names_hashed = hashNames(
+      [...commandNames].sort(),
+      "command_name",
+      hashSalt,
+      harness.redactions
+    );
 
     // ---- Hooks ----
     // Claude hooks live in the plugin's hooks.json and in settings.json files
-    // (user / project / local), all of which expose a top-level `hooks` object
-    // keyed by event name.
+    // (user / project / local), all exposing a top-level `hooks` object keyed by
+    // event name. Only allow-listed event names and entry COUNTS are emitted.
     const hookSources = [];
     if (options.pluginRoot) {
-      hookSources.push({
-        scope: "plugin",
-        file: path.join(options.pluginRoot, "hooks", "hooks.json"),
-      });
+      hookSources.push({ scope: "plugin", file: path.join(options.pluginRoot, "hooks", "hooks.json") });
     }
-    if (homeDir) hookSources.push({ scope: "user", file: path.join(homeDir, ".claude", "settings.json") });
+    if (userClaudeDir) hookSources.push({ scope: "user", file: path.join(userClaudeDir, "settings.json") });
     if (repoRoot) {
       hookSources.push({ scope: "project", file: path.join(repoRoot, ".claude", "settings.json") });
       hookSources.push({ scope: "local", file: path.join(repoRoot, ".claude", "settings.local.json") });
@@ -341,21 +526,110 @@ function detectHarness(cwd, options = {}) {
       hookSources.push({ scope: "project", file: path.join(cwd, ".claude", "settings.json") });
       hookSources.push({ scope: "local", file: path.join(cwd, ".claude", "settings.local.json") });
     }
+    const enabledEvents = new Set();
+    for (const { scope, file } of hookSources) {
+      if (!safeIsFile(file)) continue;
+      const { events, entries } = readHooks(file);
+      for (const e of events) enabledEvents.add(e);
+      harness.hooks_count += entries;
+      harness.hooks_source_counts[scope] =
+        (harness.hooks_source_counts[scope] || 0) + entries;
+    }
+    harness.hooks_enabled = [...enabledEvents].sort();
 
-    const { enabled, scopes: hookScopes } = detectHooks(hookSources);
-    base.hooks.enabled = enabled;
-    base.hooks.scopes = hookScopes;
+    // ---- MCP servers ----
+    const mcpFiles = [];
+    for (const dir of projectDirs) mcpFiles.push(path.join(dir, ".mcp.json"));
+    if (homeDir) mcpFiles.push(path.join(homeDir, ".claude.json"));
+    const mcpNames = new Set();
+    for (const file of mcpFiles) {
+      if (!safeIsFile(file)) continue;
+      const parsed = safeReadJson(file);
+      const servers = parsed && parsed.mcpServers;
+      if (servers && typeof servers === "object") {
+        harness.has_mcp_config = true;
+        for (const name of Object.keys(servers)) mcpNames.add(name);
+      }
+    }
+    harness.mcp_servers_count = mcpNames.size;
+    harness.mcp_server_names_hashed = hashNames(
+      [...mcpNames].sort(),
+      "mcp_name",
+      hashSalt,
+      harness.redactions
+    );
+
+    // ---- Plugins / marketplaces (computed above for plugin-skill scanning) ----
+    harness.plugins_count = pluginInfo.plugins_count;
+    harness.marketplaces_count = pluginInfo.marketplaces_count;
+    harness.plugins = pluginInfo.plugins;
   } catch {
-    // Any unexpected failure leaves the safe defaults in place — never throw
-    // out of the SessionStart hook.
+    // Any unexpected failure leaves the safe defaults in place — never throw out
+    // of the SessionStart hook.
   }
 
-  return base;
+  return harness;
+}
+
+/**
+ * Read installed plugin + marketplace metadata from ~/.claude/plugins.
+ * Public-marketplace plugin names are tier3 (raw); private names are hashed.
+ * Returns counts, the emittable `plugins` array, and the install paths (used by
+ * the caller to scan plugin-bundled skills).
+ */
+function detectPlugins(userClaudeDir, hashSalt, redactions) {
+  const result = { plugins_count: 0, marketplaces_count: 0, plugins: [], installPaths: [] };
+  if (!userClaudeDir) return result;
+  const pluginsDir = path.join(userClaudeDir, "plugins");
+
+  const installed = safeReadJson(path.join(pluginsDir, "installed_plugins.json"));
+  const plugins = installed && installed.plugins;
+  if (plugins && typeof plugins === "object") {
+    const keys = Object.keys(plugins);
+    result.plugins_count = keys.length;
+    for (const key of keys.slice(0, NAMES_LIMIT)) {
+      const at = key.lastIndexOf("@");
+      const name = at >= 0 ? key.slice(0, at) : key;
+      const marketplace = at >= 0 ? key.slice(at + 1) : "";
+      const entry = Array.isArray(plugins[key]) ? plugins[key][0] : plugins[key];
+      const version =
+        entry && typeof entry.version === "string" ? entry.version : undefined;
+      if (entry && typeof entry.installPath === "string") {
+        result.installPaths.push(entry.installPath);
+      }
+
+      const rec = {};
+      if (containsTier1(name)) {
+        recordRedaction(redactions, "dropped", "plugin_name");
+        continue;
+      }
+      if (PUBLIC_MARKETPLACES.has(marketplace)) {
+        rec.name = name; // tier3_safe: public marketplace name
+      } else if (hashSalt) {
+        rec.name_hashed = hashHmac(name, hashSalt);
+        recordRedaction(redactions, "hashed", "plugin_name");
+      } else {
+        recordRedaction(redactions, "dropped", "plugin_name");
+        continue;
+      }
+      if (version) rec.version = version;
+      result.plugins.push(rec);
+    }
+  }
+
+  const marketplaces = safeReadJson(path.join(pluginsDir, "known_marketplaces.json"));
+  if (marketplaces && typeof marketplaces === "object") {
+    result.marketplaces_count = Object.keys(marketplaces).length;
+  }
+
+  return result;
 }
 
 module.exports = {
   HARNESS_SCHEMA_VERSION,
   KNOWN_HOOK_EVENTS,
+  PUBLIC_MARKETPLACES,
   detectHarness,
   findRepoRoot,
+  sizeBucket,
 };
