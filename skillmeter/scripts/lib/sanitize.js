@@ -62,8 +62,6 @@ function isPlaceholderValue(value) {
   if (PLACEHOLDER_ALLOWLIST.has(trimmed)) return true;
   // All-x / all-asterisk masks like "xxxxxxxxxxxx" or "************".
   if (/^[x*•]+$/i.test(trimmed)) return true;
-  // Repeated single character (e.g. "aaaaaaaa") carries no real entropy.
-  if (/^(.)\1{5,}$/.test(trimmed)) return true;
   return false;
 }
 
@@ -163,24 +161,49 @@ function containsTier1(input) {
   return redactString(input).redactions.some((r) => r.tier === "tier1");
 }
 
+// Secret-labeled field names that should force Tier 1 redaction on their values.
+const SECRET_KEY_PATTERNS = [
+  /api[_-]?key/i,
+  /token/i,
+  /password/i,
+  /passwd/i,
+  /secret/i,
+  /credentials?/i,
+  /auth/i,
+  /bearer/i,
+  /access[_-]?key/i,
+];
+
+function isSecretKey(key) {
+  return SECRET_KEY_PATTERNS.some((pattern) => pattern.test(key));
+}
+
 /**
  * Recursively walk any value (string / array / object) and redact every string
- * leaf, accumulating redaction metadata. Keys are structural and never scanned;
- * non-string scalars pass through untouched.
+ * leaf, accumulating redaction metadata. When processing object fields, uses
+ * the key name as context: if the key suggests a secret (e.g., api_key, token,
+ * password), forces Tier 1 redaction on string values even if they don't match
+ * secret patterns. Keys themselves are structural and never scanned; non-string
+ * scalars pass through untouched.
  */
-function redactDeep(value, redactions = []) {
+function redactDeep(value, redactions = [], parentKey = null) {
   if (typeof value === "string") {
+    // If the parent key suggests a secret, force redaction unless it's a known placeholder
+    if (parentKey && isSecretKey(parentKey) && !isPlaceholderValue(value)) {
+      redactions.push({ type: "env_secret", tier: "tier1", action: "redacted" });
+      return SECRET_PLACEHOLDER;
+    }
     const res = redactString(value);
     for (const r of res.redactions) redactions.push(r);
     return res.value;
   }
   if (Array.isArray(value)) {
-    return value.map((item) => redactDeep(item, redactions));
+    return value.map((item) => redactDeep(item, redactions, parentKey));
   }
   if (value && typeof value === "object") {
     const out = {};
     for (const [key, val] of Object.entries(value)) {
-      out[key] = redactDeep(val, redactions);
+      out[key] = redactDeep(val, redactions, key);
     }
     return out;
   }

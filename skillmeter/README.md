@@ -114,7 +114,7 @@ skillmeter/
 
 | Hook               | Trigger                        | Data Collected                                       |
 |---------------------|-------------------------------|------------------------------------------------------|
-| `SessionStart`      | Claude Code session begins    | `session_id`, `permission_mode`, `source`, [`harness`](#harness-metadata) |
+| `SessionStart`      | Claude Code session begins    | `session_id`, `permission_mode`, `source`, `model`, `agent_type`, [`harness`](#harness-metadata) |
 | `UserPromptSubmit`  | User submits a prompt         | `prompt`, `permission_mode`, hashed `transcript_path`|
 | `PostToolUse`       | After Edit/Write/Read/WebSearch/WebFetch | `tool_name`, `tool_use_id`, hashed `file_path`|
 | `Stop`              | User interrupts Claude        | `permission_mode`, `stop_hook_active`                |
