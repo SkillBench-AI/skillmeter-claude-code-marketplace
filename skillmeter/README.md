@@ -99,6 +99,7 @@ skillmeter/
 │   └── transcripts/pending/ # Sanitized transcripts awaiting upload
 └── scripts/
     ├── logger.js            # Core logging library
+    ├── harness.js           # Level 1 harness metadata detection (SessionStart)
     ├── session_start.js     # SessionStart hook handler
     ├── session_end.js       # SessionEnd hook handler + conversation extraction
     ├── user_prompt_submit.js# UserPromptSubmit hook handler
@@ -113,7 +114,7 @@ skillmeter/
 
 | Hook               | Trigger                        | Data Collected                                       |
 |---------------------|-------------------------------|------------------------------------------------------|
-| `SessionStart`      | Claude Code session begins    | `session_id`, `permission_mode`, `source`            |
+| `SessionStart`      | Claude Code session begins    | `session_id`, `permission_mode`, `source`, [`harness`](#harness-metadata) |
 | `UserPromptSubmit`  | User submits a prompt         | `prompt`, `permission_mode`, hashed `transcript_path`|
 | `PostToolUse`       | After Edit/Write/Read/WebSearch/WebFetch | `tool_name`, `tool_use_id`, hashed `file_path`|
 | `Stop`              | User interrupts Claude        | `permission_mode`, `stop_hook_active`                |
@@ -138,11 +139,84 @@ Each line in `events.jsonl` is a self-contained JSON object:
 }
 ```
 
+## Harness Metadata
+
+To judge a session fairly, analysis needs to know whether the developer was
+working *bare* or with a sophisticated **harness** — the instruction files,
+skills, hooks, plugins, and orchestration wrapped around the agent. The
+`SessionStart` event carries a `harness` block describing the **presence and
+shape** of that scaffolding. It is **metadata only**: SkillMeter never collects
+raw `CLAUDE.md` / `AGENTS.md` / skill / hook-config contents.
+
+Detection is split by what is actually observable:
+
+- **Level 1 (filesystem-detectable, collected today):** instruction-file
+  presence, skills, hooks, and plugin/agent info — probed once at session start
+  by [`scripts/harness.js`](scripts/harness.js).
+- **Level 2 (architecture-level, NOT detectable):** external orchestration and
+  multi-agent setups. These can't be inferred from the filesystem or transcript,
+  so they are reported as the explicit string `"unknown"` rather than a
+  misleading `false`.
+
+Example `harness` payload:
+
+```json
+{
+  "schema_version": 2,
+  "policy_version": "1.0.0",
+  "agent_type": "claude-code",
+  "plugin": { "name": "skillmeter", "version": "0.x.y" },
+  "instructions": {
+    "has_claude_md": true,
+    "has_claude_md_global": false,
+    "has_agents_md": false,
+    "has_agents_md_global": false,
+    "scopes": ["project"]
+  },
+  "skills": { "count": 3, "names": ["deploy", "review-pr", "signin"], "scopes": ["project", "global"] },
+  "hooks": { "enabled": ["PostToolUse", "PreToolUse", "SessionStart", "Stop"], "scopes": ["plugin", "project"] },
+  "orchestration": { "external_orchestration": "unknown", "multi_agent": "unknown" },
+  "redactions": { "hashed_count": 0, "dropped_count": 0, "by_type": {} }
+}
+```
+
+What is probed:
+
+| Field | Source |
+|-------|--------|
+| `instructions.has_claude_md` / `has_agents_md` | `CLAUDE.md` / `AGENTS.md` in the cwd or repo root |
+| `instructions.has_*_global` | `~/.claude/CLAUDE.md`, `~/.claude/AGENTS.md` |
+| `skills.count` / `names` / `scopes` | `SKILL.md` files under `.claude/skills/` (project and `~/.claude/skills/`); hidden `.system` namespaces are skipped |
+| `hooks.enabled` / `scopes` | allow-listed lifecycle event names declared in the plugin's `hooks.json` and any user/project/local `.claude/settings.json` |
+| `plugin` / `agent_type` / `schema_version` | this plugin's manifest and the harness schema version |
+| `policy_version` | the sanitization policy version this metadata was produced under |
+| `redactions` | sanitization bookkeeping (`hashed_count`, `dropped_count`, `by_type`) — counts/types only |
+
+Sanitization integration (SBEE-165, Phase 2):
+
+- The whole `harness` block is routed through the deterministic
+  `sanitizeEventData` boundary (`lib/sanitize.js`) before upload, so a skill or
+  hook name that happens to embed a secret/email is still scrubbed.
+- **Tier 1 fail-closed at the harness boundary:** before any skill name is
+  hashed or emitted it is scanned for Tier 1 secrets, and a name that embeds one
+  is **dropped** outright (the hashing step would otherwise hide it from the
+  downstream scrubber). Every hash and drop is tallied in the `redactions`
+  block — counts and field types only, never the original values.
+  `skills.count` always keeps the true on-disk total.
+- Only **allow-listed** hook event names are reported, so an arbitrary
+  user-authored `settings.json` can't inject free-form strings into the metadata.
+- Skill names are emitted in plaintext by default. Set
+  `SKILLMETER_HARNESS_HASH_SKILL_NAMES=1` to emit HMAC-hashed `names_hashed`
+  instead when skill names may be sensitive.
+- Detection is filesystem-only, depth-bounded, and fail-safe: any error leaves
+  the safe `unknown`/empty defaults in place and never breaks the session.
+
 ## Privacy
 
 - **File paths** are SHA-256 hashed (truncated to 16 hex chars) before logging -- actual paths never leave the machine.
 - **Conversation content** is filtered to only include `text` and `thinking` blocks -- tool results, images, and other content types are stripped.
 - **Device ID** is a random UUID stored in `~/.skillbench/credentials.json`, not derived from hardware.
+- **Harness metadata** (`SessionStart`) is presence/shape only and runs through the Tier-1/Tier-2 sanitizer; see [Harness Metadata](#harness-metadata).
 
 ## Log Transfer
 
