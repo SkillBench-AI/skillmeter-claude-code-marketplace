@@ -1,6 +1,6 @@
 # Skillmeter
 
-A Claude Code plugin that tracks session activity and tool usage, providing anonymized telemetry to the [SkillBench](https://skillbench.com) platform for developer skill analytics.
+A Claude Code plugin that tracks session activity and tool usage, providing privacy-scoped telemetry (secrets redacted, paths hashed, opt-in + repo-scope gated) to the [SkillBench](https://skillbench.com) platform for developer skill analytics.
 
 ## Data Flow
 

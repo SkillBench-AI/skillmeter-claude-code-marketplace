@@ -11,15 +11,16 @@
  * orchestration. Analysis needs to know whether a session was run bare or with a
  * sophisticated harness so it can judge the work fairly.
  *
- * This module emits the contract's **flat** `data.harness` field set and is
- * *metadata-only* — presence booleans, counts, size buckets, allow-listed hook
- * event-name enums, and opaque HMAC-hashed identifiers. It never emits raw
- * harness file CONTENT, hook command strings, MCP command/args/env, or file
- * paths (those are Tier 1/Tier 2 / out-of-scope for the MVP; see the contract's
- * `outOfScopeForMvp`). It is deterministic, filesystem-only, and must never
- * throw: detection runs inside the SessionStart hook and a failure here must not
- * break the session, so every probe is wrapped and falls back to a safe
- * default.
+ * This module emits the contract's **flat** `data.harness` field set. As of
+ * schema v2.0 (SBEE-170, analysis-side request) it carries harness identifiers
+ * — skill / subagent / command / MCP server / plugin names — as **raw** values
+ * so the analysis pipeline can do semantic work (e.g. join public skill names to
+ * the catalog) that opaque hashes made impossible. It still never emits raw
+ * harness file CONTENT (SKILL.md / CLAUDE.md bodies — Phase 4 / SBEE-169), hook
+ * command strings, or MCP command/args/env (those carry literal secrets; see
+ * below). It is deterministic, filesystem-only, and must never throw: detection
+ * runs inside the SessionStart hook and a failure here must not break the
+ * session, so every probe is wrapped and falls back to a safe default.
  *
  * Detection levels (contract `detectionLevels`):
  *   - Level 1 (filesystem-detectable): everything collected here.
@@ -30,26 +31,31 @@
  * Privacy (SANITIZATION_EPIC.md 3-tier policy, contract `tiers`/`actions`):
  *   - tier3_safe values (presence/counts/buckets/enums/versions) are collected
  *     raw.
- *   - tier2_business identifiers (skill / subagent / command / MCP / private
- *     plugin names) are HMAC-hashed before egress; only the opaque token leaves
- *     the machine. Plugin names from public marketplaces are tier3 and kept raw.
- *   - tier1_secret material (hook commands, MCP env, anything matching a Tier 1
- *     detector) is dropped fail-closed and never hashed or emitted.
- * Every hash/drop is tallied in the `redactions` bookkeeping (counts/types only,
- * never original values). The whole block is also routed through the central
- * `sanitizeEventData` boundary by the caller as a catch-all.
+ *   - Harness identifiers (skill / subagent / command / MCP / plugin names) are
+ *     collected raw in v2.0. Names/permission rules that embed a Tier 1 secret
+ *     are STILL dropped fail-closed — "raw names" never means "leak a
+ *     credential" (epic Guiding Principle #1). Every string in the block is also
+ *     routed through the central `sanitizeEventData` Tier-1/Tier-2 boundary by
+ *     the caller as a catch-all before egress.
+ *   - tier1_secret material (hook commands, MCP command/args/env) is never
+ *     collected: those fields hold API keys/tokens directly, so they stay out
+ *     regardless of the identifier policy.
+ * Every fail-closed drop is tallied in the `redactions` bookkeeping (counts/
+ * types only, never original values).
  */
 
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const { hashHmac, containsTier1, POLICY_VERSION } = require("./lib/sanitize");
+const { containsTier1, POLICY_VERSION } = require("./lib/sanitize");
 
 // Version of the emitted harness metadata contract this payload conforms to.
 // String to match the contract's `harness_schema_version` field (the machine
-// spec is at spec/harness-metadata-contract.v1.json, contractVersion 1.0.0).
-const HARNESS_SCHEMA_VERSION = "1.0";
+// spec is at spec/harness-metadata-contract.v1.json). Bumped to 2.0 when
+// identifier fields switched from `*_names_hashed` (HMAC tokens) to raw
+// `*_names`; downstream otel_logs queries must select the new field names.
+const HARNESS_SCHEMA_VERSION = "2.0";
 
 // Standard lifecycle hook event names. We only ever report event names from
 // this allow-list (contract `hooks_enabled` action: enum) so an arbitrary
@@ -82,9 +88,10 @@ const KNOWN_HOOK_EVENTS = new Set([
   "WorktreeRemove",
 ]);
 
-// Marketplaces whose plugin names are public and therefore tier3_safe — their
-// names may be carried raw (contract `plugins` note). Anything else is treated
-// as a private/internal name and hashed.
+// Marketplaces recognised as public/known. As of schema v2.0 all plugin names
+// are emitted raw, so this set is no longer a raw-vs-hash gate; it is retained
+// (and exported) so downstream can still tell public-catalog plugins from
+// private ones without re-deriving the list.
 const PUBLIC_MARKETPLACES = new Set([
   "skillbench",
   "claude-plugins-official",
@@ -192,28 +199,42 @@ function findRepoRoot(startPath) {
 }
 
 /**
- * Convert a list of raw tier2_business names into the contract's
- * `*_names_hashed` array. Fail-closed: a name embedding a Tier 1 secret is
- * dropped outright (never hashed or emitted), because once hashed the central
- * boundary can no longer tell it apart from a benign token. When no salt is
- * available we cannot produce a stable opaque token, so the raw Tier 2 name is
- * dropped rather than leaked. Every action is tallied in `redactions`.
+ * Collect harness identifier names for emission. As of schema v2.0 names are
+ * emitted RAW (the analysis side joins them to the catalog / reads them
+ * semantically). Fail-closed remains: a name embedding a Tier 1 secret is
+ * dropped outright and tallied in `redactions` — the raw-name policy never
+ * permits leaking a credential that happens to be baked into a name.
  */
-function hashNames(names, type, hashSalt, redactions) {
+function collectNames(names, type, redactions) {
   const out = [];
   for (const name of names.slice(0, NAMES_LIMIT)) {
     if (containsTier1(name)) {
       recordRedaction(redactions, "dropped", type);
       continue;
     }
-    if (!hashSalt) {
-      recordRedaction(redactions, "dropped", type);
-      continue;
-    }
-    out.push(hashHmac(name, hashSalt));
-    recordRedaction(redactions, "hashed", type);
+    out.push(name);
   }
   return out;
+}
+
+// Read the `permissions` block from a settings.json file (contract
+// `permission_*`). Returns the allow/deny/ask rule arrays, defaultMode, and the
+// additionalDirectories list, or null when the file has no permissions object.
+// Rule strings are emitted raw (they describe the user's trust boundary) but,
+// like names, still pass through the central Tier-1/Tier-2 boundary before
+// egress so a stray secret in a rule can't leak.
+function readPermissions(settingsFilePath) {
+  const parsed = safeReadJson(settingsFilePath);
+  const p = parsed && parsed.permissions;
+  if (!p || typeof p !== "object") return null;
+  const asArray = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === "string") : []);
+  return {
+    allow: asArray(p.allow),
+    deny: asArray(p.deny),
+    ask: asArray(p.ask),
+    defaultMode: typeof p.defaultMode === "string" ? p.defaultMode : "",
+    additionalDirectories: asArray(p.additionalDirectories),
+  };
 }
 
 // Collect skill directory names (the parent dir of each SKILL.md) under `root`,
@@ -328,8 +349,11 @@ function readHooks(hooksFilePath) {
  * @param {string} [options.agentType] - agent surface (defaults "claude-code").
  * @param {string} [options.model] - model id from SessionStart input.model.
  * @param {string} [options.sessionSource] - SessionStart input.source.
- * @param {string} [options.hashSalt] - per-install HMAC salt; required to emit
- *   any hashed identifier.
+ * @param {string} [options.agentVersion] - agent CLI version, when the runtime
+ *   exposes it (Claude Code does not surface this to hooks today, so it is
+ *   typically ""; wired for parity + future availability).
+ * @param {string} [options.hashSalt] - accepted for backward compatibility;
+ *   no longer used by harness detection (identifiers are emitted raw in v2.0).
  * @returns {object} flat, plain-JSON harness metadata (safe to route through the
  *   sanitizer and upload).
  */
@@ -342,6 +366,7 @@ function detectHarness(cwd, options = {}) {
     // sanitizeEventData metadata always agree on the policy in force.
     policy_version: POLICY_VERSION,
     agent_type: options.agentType || "claude-code",
+    agent_version: options.agentVersion || "",
     model: options.model || "",
     session_source: options.sessionSource || "",
     plugin_version: options.pluginVersion || "",
@@ -359,12 +384,12 @@ function detectHarness(cwd, options = {}) {
     skills_present: false,
     skills_count: 0,
     skill_source_counts: { project: 0, user: 0, plugin: 0 },
-    skill_names_hashed: [],
+    skill_names: [],
 
     // ---- Subagents ----
     subagents_present: false,
     subagents_count: 0,
-    subagent_names_hashed: [],
+    subagent_names: [],
     // Derived downstream from SubagentStart/SubagentStop; false at session start.
     subagent_used: false,
 
@@ -376,12 +401,19 @@ function detectHarness(cwd, options = {}) {
     // ---- Slash commands ----
     commands_present: false,
     commands_count: 0,
-    command_names_hashed: [],
+    command_names: [],
 
     // ---- MCP servers ----
     has_mcp_config: false,
     mcp_servers_count: 0,
-    mcp_server_names_hashed: [],
+    mcp_server_names: [],
+
+    // ---- Permissions / sandbox (the developer's AI trust boundary) ----
+    permission_default_mode: "",
+    permission_allow: [],
+    permission_deny: [],
+    permission_ask: [],
+    permission_additional_directories_count: 0,
 
     // ---- Plugins / marketplaces ----
     plugins_count: 0,
@@ -397,7 +429,6 @@ function detectHarness(cwd, options = {}) {
   };
 
   try {
-    const hashSalt = options.hashSalt;
     const homeDir = options.homeDir || os.homedir();
     const repoRoot =
       options.repoRoot !== undefined ? options.repoRoot : findRepoRoot(cwd);
@@ -446,7 +477,7 @@ function detectHarness(cwd, options = {}) {
       }
     }
     // Plugin-provided skills: scan each installed plugin's bundled skills dir.
-    const pluginInfo = detectPlugins(userClaudeDir, hashSalt, harness.redactions);
+    const pluginInfo = detectPlugins(userClaudeDir, harness.redactions);
     for (const installPath of pluginInfo.installPaths) {
       const dir = path.join(installPath, "skills");
       if (!safeIsDir(dir)) continue;
@@ -464,10 +495,9 @@ function detectHarness(cwd, options = {}) {
       user: seenSkillScopes.user.size,
       plugin: seenSkillScopes.plugin.size,
     };
-    harness.skill_names_hashed = hashNames(
+    harness.skill_names = collectNames(
       [...skillNames].sort(),
       "skill_name",
-      hashSalt,
       harness.redactions
     );
 
@@ -483,10 +513,9 @@ function detectHarness(cwd, options = {}) {
     }
     harness.subagents_count = subagentNames.size;
     harness.subagents_present = subagentNames.size > 0;
-    harness.subagent_names_hashed = hashNames(
+    harness.subagent_names = collectNames(
       [...subagentNames].sort(),
       "subagent_name",
-      hashSalt,
       harness.redactions
     );
 
@@ -502,10 +531,9 @@ function detectHarness(cwd, options = {}) {
     }
     harness.commands_count = commandNames.size;
     harness.commands_present = commandNames.size > 0;
-    harness.command_names_hashed = hashNames(
+    harness.command_names = collectNames(
       [...commandNames].sort(),
       "command_name",
-      hashSalt,
       harness.redactions
     );
 
@@ -537,6 +565,31 @@ function detectHarness(cwd, options = {}) {
     }
     harness.hooks_enabled = [...enabledEvents].sort();
 
+    // ---- Permissions / sandbox (AI trust boundary) ----
+    // Read the `permissions` block from the same settings.json files (user /
+    // project / local) — never the plugin hooks.json. Rule arrays are merged
+    // (deduped) across sources; defaultMode follows Claude's own precedence
+    // (user < project < local), so a more specific file overrides.
+    const allowRules = new Set();
+    const denyRules = new Set();
+    const askRules = new Set();
+    const additionalDirs = new Set();
+    for (const { scope, file } of hookSources) {
+      if (scope === "plugin") continue;
+      if (!safeIsFile(file)) continue;
+      const perms = readPermissions(file);
+      if (!perms) continue;
+      for (const r of perms.allow) allowRules.add(r);
+      for (const r of perms.deny) denyRules.add(r);
+      for (const r of perms.ask) askRules.add(r);
+      for (const d of perms.additionalDirectories) additionalDirs.add(d);
+      if (perms.defaultMode) harness.permission_default_mode = perms.defaultMode;
+    }
+    harness.permission_allow = collectNames([...allowRules], "permission_rule", harness.redactions);
+    harness.permission_deny = collectNames([...denyRules], "permission_rule", harness.redactions);
+    harness.permission_ask = collectNames([...askRules], "permission_rule", harness.redactions);
+    harness.permission_additional_directories_count = additionalDirs.size;
+
     // ---- MCP servers ----
     const mcpFiles = [];
     for (const dir of projectDirs) mcpFiles.push(path.join(dir, ".mcp.json"));
@@ -552,10 +605,13 @@ function detectHarness(cwd, options = {}) {
       }
     }
     harness.mcp_servers_count = mcpNames.size;
-    harness.mcp_server_names_hashed = hashNames(
+    // Server NAMES are emitted raw (v2.0). The server *config* (command / args /
+    // env / url) is deliberately NOT collected: env holds literal API keys and
+    // args/urls can embed tokens, so it stays tier1-out regardless of the
+    // identifier policy.
+    harness.mcp_server_names = collectNames(
       [...mcpNames].sort(),
       "mcp_name",
-      hashSalt,
       harness.redactions
     );
 
@@ -573,11 +629,13 @@ function detectHarness(cwd, options = {}) {
 
 /**
  * Read installed plugin + marketplace metadata from ~/.claude/plugins.
- * Public-marketplace plugin names are tier3 (raw); private names are hashed.
- * Returns counts, the emittable `plugins` array, and the install paths (used by
- * the caller to scan plugin-bundled skills).
+ * As of schema v2.0 all plugin names are emitted raw (with the source
+ * marketplace, so downstream can still tell public from private); names that
+ * embed a Tier 1 secret are dropped fail-closed. Returns counts, the emittable
+ * `plugins` array, and the install paths (used by the caller to scan
+ * plugin-bundled skills).
  */
-function detectPlugins(userClaudeDir, hashSalt, redactions) {
+function detectPlugins(userClaudeDir, redactions) {
   const result = { plugins_count: 0, marketplaces_count: 0, plugins: [], installPaths: [] };
   if (!userClaudeDir) return result;
   const pluginsDir = path.join(userClaudeDir, "plugins");
@@ -598,20 +656,15 @@ function detectPlugins(userClaudeDir, hashSalt, redactions) {
         result.installPaths.push(entry.installPath);
       }
 
-      const rec = {};
       if (containsTier1(name)) {
         recordRedaction(redactions, "dropped", "plugin_name");
         continue;
       }
-      if (PUBLIC_MARKETPLACES.has(marketplace)) {
-        rec.name = name; // tier3_safe: public marketplace name
-      } else if (hashSalt) {
-        rec.name_hashed = hashHmac(name, hashSalt);
-        recordRedaction(redactions, "hashed", "plugin_name");
-      } else {
-        recordRedaction(redactions, "dropped", "plugin_name");
-        continue;
-      }
+      // v2.0: plugin names are raw. `marketplace` is retained so downstream can
+      // still distinguish public-catalog plugins from private ones.
+      const rec = { name };
+      if (marketplace) rec.marketplace = marketplace;
+      rec.public = PUBLIC_MARKETPLACES.has(marketplace);
       if (version) rec.version = version;
       result.plugins.push(rec);
     }
