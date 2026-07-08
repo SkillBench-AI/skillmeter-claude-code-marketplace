@@ -55,18 +55,18 @@ const DRAIN_ONCE_LOCK_STALE_MS = 30_000;
 async function transferEventLog(logFile, timeoutMs = EVENT_TIMEOUT) {
   if (!logFile || !fs.existsSync(logFile)) return;
 
-  // Uncached so the long-lived daemon sees a token refreshed by another process.
-  const storedToken = credstore.getLicenseTokenUncached();
-  // Only attach a still-valid bearer; never send a token we know is expired.
-  const initialToken = storedToken && !isJwtExpired(storedToken) ? storedToken : null;
-  if (storedToken && !initialToken) {
-    console.error(`[skillmeter] Event log: dropping expired license JWT before send`);
+  // A valid (non-expired) license JWT is REQUIRED — the backend does not accept
+  // unauthenticated telemetry. No valid token → leave the file for retry (the
+  // drain batch calls ensureFreshLicense first, and SessionStart / the monitor
+  // retry once a fresh license is available). Uncached read so the long-lived
+  // daemon sees a token refreshed by another process.
+  const token = credstore.getLicenseTokenUncached();
+  if (!token || isJwtExpired(token)) {
+    console.error(`[skillmeter] Event log: no valid license JWT — leaving for retry`);
+    return;
   }
 
-  // Endpoint is routing info — resolvable even from an expired token. The
-  // collector accepts unauthenticated uploads, so a drain still delivers while
-  // a refresh is pending/failing.
-  const endpoint = getEndpointFromTokenAllowExpired(storedToken);
+  const endpoint = getEndpointFromTokenAllowExpired(token);
   if (!endpoint) {
     console.error(`[skillmeter] Event log: no telemetry endpoint resolvable from license JWT — leaving for retry`);
     return;
@@ -76,24 +76,6 @@ async function transferEventLog(logFile, timeoutMs = EVENT_TIMEOUT) {
   const compressed = zlib.gzipSync(fileContent);
   const baseName = path.basename(logFile);
 
-  const buildHeaders = (token) => {
-    const h = {
-      "Content-Type": "application/x-ndjson",
-      "Content-Encoding": "gzip",
-      "X-Plugin-Version": PLUGIN_VERSION,
-    };
-    if (token) h["Authorization"] = `Bearer ${token}`;
-    return h;
-  };
-
-  const doPost = (token) =>
-    fetch(`${endpoint}/logs/claude`, {
-      method: "POST",
-      headers: buildHeaders(token),
-      body: compressed,
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-
   const markSent = () => {
     try { fs.renameSync(logFile, `${logFile}.sent`); } catch {}
   };
@@ -101,9 +83,17 @@ async function transferEventLog(logFile, timeoutMs = EVENT_TIMEOUT) {
   console.error(`[skillmeter] Transferring event log: ${baseName} (${compressed.length} bytes gzipped)`);
 
   try {
-    // Bearer when a valid token exists, plain POST otherwise — the collector
-    // accepts unauthenticated uploads, so the plain POST is what delivers today.
-    const res = await doPost(initialToken);
+    const res = await fetch(`${endpoint}/logs/claude`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-ndjson",
+        "Content-Encoding": "gzip",
+        "X-Plugin-Version": PLUGIN_VERSION,
+        "Authorization": `Bearer ${token}`,
+      },
+      body: compressed,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
     if (res.ok) {
       console.error(`[skillmeter] Event log transferred: ${baseName}`);
       markSent();
@@ -240,13 +230,15 @@ function stageTranscriptForUpload(transcriptPath) {
 async function uploadPendingTranscript(pendingPath, deviceId, timeoutMs = TRANSCRIPT_TIMEOUT) {
   if (!pendingPath || !fs.existsSync(pendingPath)) return;
 
-  const storedToken = credstore.getLicenseTokenUncached();
-  const initialToken = storedToken && !isJwtExpired(storedToken) ? storedToken : null;
-  if (storedToken && !initialToken) {
-    console.error(`[skillmeter] Transcript: dropping expired license JWT before send`);
+  // A valid (non-expired) license JWT is REQUIRED — the backend does not accept
+  // unauthenticated telemetry. No valid token → leave the pending file for retry.
+  const token = credstore.getLicenseTokenUncached();
+  if (!token || isJwtExpired(token)) {
+    console.error(`[skillmeter] Transcript: no valid license JWT — kept pending for next session`);
+    return;
   }
 
-  const endpoint = getEndpointFromTokenAllowExpired(storedToken);
+  const endpoint = getEndpointFromTokenAllowExpired(token);
   if (!endpoint) {
     console.error(`[skillmeter] Transcript: no telemetry endpoint resolvable from license JWT — leaving for retry`);
     return;
@@ -263,22 +255,17 @@ async function uploadPendingTranscript(pendingPath, deviceId, timeoutMs = TRANSC
     return;
   }
 
-  const buildHeaders = (token) => {
-    const h = {
-      "Content-Type": "application/x-ndjson",
-      "Content-Encoding": "gzip",
-      "X-Device-ID": deviceId,
-      "X-Transcript-ID": transcriptId,
-      "X-Plugin-Version": PLUGIN_VERSION,
-    };
-    if (token) h["Authorization"] = `Bearer ${token}`;
-    return h;
-  };
-
-  const doPost = (token) =>
+  const doPost = () =>
     fetch(`${endpoint}/logs/claude/transcript`, {
       method: "POST",
-      headers: buildHeaders(token),
+      headers: {
+        "Content-Type": "application/x-ndjson",
+        "Content-Encoding": "gzip",
+        "X-Device-ID": deviceId,
+        "X-Transcript-ID": transcriptId,
+        "X-Plugin-Version": PLUGIN_VERSION,
+        "Authorization": `Bearer ${token}`,
+      },
       body: compressed,
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -290,9 +277,7 @@ async function uploadPendingTranscript(pendingPath, deviceId, timeoutMs = TRANSC
   console.error(`[skillmeter] Transferring transcript: ${transcriptId} (${compressed.length} bytes gzipped)`);
 
   try {
-    // Bearer when a valid token exists, plain POST otherwise — the collector
-    // accepts unauthenticated uploads, so the plain POST is what delivers today.
-    const res = await doPost(initialToken);
+    const res = await doPost();
     if (res.ok) {
       console.error(`[skillmeter] Transcript transferred: ${transcriptId}`);
       removePending();
