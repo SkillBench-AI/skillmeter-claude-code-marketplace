@@ -52,8 +52,12 @@ const DRAIN_ONCE_LOCK_STALE_MS = 30_000;
  * the next SessionStart's retryFailedLogs sweep.
  * @returns {Promise<void>}
  */
+// Returns { ok } on success, { ok:false, error } on a real transmission failure
+// (HTTP status / network), or { ok:false } for a precondition skip (no file,
+// no token, no endpoint) — precondition skips carry no `error` so they aren't
+// reported as send failures (the not-signed-in banner already covers those).
 async function transferEventLog(logFile, timeoutMs = EVENT_TIMEOUT) {
-  if (!logFile || !fs.existsSync(logFile)) return;
+  if (!logFile || !fs.existsSync(logFile)) return { ok: false };
 
   // A valid (non-expired) license JWT is REQUIRED — the backend does not accept
   // unauthenticated telemetry. No valid token → leave the file for retry (the
@@ -63,13 +67,13 @@ async function transferEventLog(logFile, timeoutMs = EVENT_TIMEOUT) {
   const token = credstore.getLicenseTokenUncached();
   if (!token || isJwtExpired(token)) {
     console.error(`[skillmeter] Event log: no valid license JWT — leaving for retry`);
-    return;
+    return { ok: false };
   }
 
   const endpoint = getEndpointFromTokenAllowExpired(token);
   if (!endpoint) {
     console.error(`[skillmeter] Event log: no telemetry endpoint resolvable from license JWT — leaving for retry`);
-    return;
+    return { ok: false };
   }
 
   const fileContent = fs.readFileSync(logFile);
@@ -97,11 +101,13 @@ async function transferEventLog(logFile, timeoutMs = EVENT_TIMEOUT) {
     if (res.ok) {
       console.error(`[skillmeter] Event log transferred: ${baseName}`);
       markSent();
-      return;
+      return { ok: true };
     }
     console.error(`[skillmeter] Event log transfer failed: HTTP ${res.status}`);
+    return { ok: false, error: `HTTP ${res.status}` };
   } catch (err) {
     console.error(`[skillmeter] Event log transfer error: ${err.message}`);
+    return { ok: false, error: err.message };
   }
 }
 
@@ -225,23 +231,24 @@ function stageTranscriptForUpload(transcriptPath) {
 /**
  * Upload a staged pending transcript file. On 2xx, deletes the pending file.
  * On failure, leaves it on disk for the next SessionStart retry.
- * @returns {Promise<void>} resolves after the upload attempt finishes.
+ * @returns {Promise<{ok:boolean, error?:string}>} same result shape as
+ *   transferEventLog: `error` is set only on a real transmission failure.
  */
 async function uploadPendingTranscript(pendingPath, deviceId, timeoutMs = TRANSCRIPT_TIMEOUT) {
-  if (!pendingPath || !fs.existsSync(pendingPath)) return;
+  if (!pendingPath || !fs.existsSync(pendingPath)) return { ok: false };
 
   // A valid (non-expired) license JWT is REQUIRED — the backend does not accept
   // unauthenticated telemetry. No valid token → leave the pending file for retry.
   const token = credstore.getLicenseTokenUncached();
   if (!token || isJwtExpired(token)) {
     console.error(`[skillmeter] Transcript: no valid license JWT — kept pending for next session`);
-    return;
+    return { ok: false };
   }
 
   const endpoint = getEndpointFromTokenAllowExpired(token);
   if (!endpoint) {
     console.error(`[skillmeter] Transcript: no telemetry endpoint resolvable from license JWT — leaving for retry`);
-    return;
+    return { ok: false };
   }
 
   const transcriptId = path.basename(pendingPath);
@@ -252,7 +259,7 @@ async function uploadPendingTranscript(pendingPath, deviceId, timeoutMs = TRANSC
     compressed = await gzipAsync(raw);
   } catch (err) {
     console.error(`[skillmeter] Transcript gzip failed for ${transcriptId}: ${err.message}`);
-    return;
+    return { ok: false, error: err.message };
   }
 
   const doPost = () =>
@@ -281,11 +288,13 @@ async function uploadPendingTranscript(pendingPath, deviceId, timeoutMs = TRANSC
     if (res.ok) {
       console.error(`[skillmeter] Transcript transferred: ${transcriptId}`);
       removePending();
-      return;
+      return { ok: true };
     }
     console.error(`[skillmeter] Transcript transfer failed: HTTP ${res.status} — kept pending for next session`);
+    return { ok: false, error: `HTTP ${res.status}` };
   } catch (err) {
     console.error(`[skillmeter] Transcript transfer error: ${err.message} — kept pending for next session`);
+    return { ok: false, error: err.message };
   }
 }
 
@@ -387,34 +396,67 @@ function queuedFileCount() {
   return listSealedEventLogs().length + listPendingTranscripts().length;
 }
 
+// Tally { ok, error } results from a batch into { ok: <count>, errors: [...] }.
+function tally(results) {
+  let ok = 0;
+  const errors = [];
+  for (const r of results) {
+    if (r.status === "fulfilled" && r.value) {
+      if (r.value.ok) ok++;
+      else if (r.value.error) errors.push(r.value.error);
+    } else if (r.status === "rejected") {
+      errors.push(r.reason && r.reason.message ? r.reason.message : String(r.reason));
+    }
+  }
+  return { ok, errors };
+}
+
+// Returns { ok: <#uploaded>, errors: [...] } for this batch.
 async function drainFailedLogs(timeoutMs) {
   const files = listSealedEventLogs();
   // Empty queue: do nothing — never fire a refresh on an idle daemon sweep.
-  if (files.length === 0) return;
+  if (files.length === 0) return { ok: 0, errors: [] };
 
   console.error(`[skillmeter] Draining ${files.length} failed log file(s)`);
   // Best-effort, single-flight refresh once per batch so every file in this
   // drain sends with the freshest token. Non-blocking and never throws.
   await ensureFreshLicense(credstore.getDeviceId());
-  await Promise.allSettled(files.map((filePath) => transferEventLog(filePath, timeoutMs)));
+  const results = await Promise.allSettled(files.map((filePath) => transferEventLog(filePath, timeoutMs)));
+  return tally(results);
 }
 
+// Returns { ok: <#uploaded>, errors: [...] } for this batch.
 async function drainPendingTranscripts(timeoutMs) {
   const files = listPendingTranscripts();
-  if (files.length === 0) return;
+  if (files.length === 0) return { ok: 0, errors: [] };
 
   const deviceId = credstore.getDeviceId();
-  if (!deviceId) return;
+  if (!deviceId) return { ok: 0, errors: [] };
 
   console.error(`[skillmeter] Draining ${files.length} pending transcript(s)`);
   // Best-effort, single-flight refresh once per batch (see drainFailedLogs).
   await ensureFreshLicense(deviceId);
-  await Promise.allSettled(files.map((filePath) => uploadPendingTranscript(filePath, deviceId, timeoutMs)));
+  const results = await Promise.allSettled(files.map((filePath) => uploadPendingTranscript(filePath, deviceId, timeoutMs)));
+  return tally(results);
 }
 
+// Drain both queues once. Record an upload-result sentinel so the next
+// SessionStart can surface a one-line notice: success when anything uploaded,
+// or a failure (with the error) when nothing uploaded but a real transmission
+// error occurred. This is the single choke point every drain path funnels
+// through, so the notice reflects at most one outcome per drain.
 async function drainQueuesOnce(timeoutMs) {
-  await drainFailedLogs(timeoutMs);
-  await drainPendingTranscripts(timeoutMs);
+  const ev = await drainFailedLogs(timeoutMs);
+  const tr = await drainPendingTranscripts(timeoutMs);
+  const events = ev.ok;
+  const transcripts = tr.ok;
+  const errors = [...ev.errors, ...tr.errors];
+  if (events + transcripts > 0) {
+    credstore.writeUploadResult({ events, transcripts });
+  } else if (errors.length > 0) {
+    credstore.writeUploadResult({ error: errors[0] });
+  }
+  return { events, transcripts, errors };
 }
 
 function withTimeout(promise, timeoutMs, label) {
@@ -429,7 +471,13 @@ function withTimeout(promise, timeoutMs, label) {
   ]);
 }
 
-async function sealFinalSessionArtifactsAndDrain(input, timeoutMs = SESSION_END_DRAIN_TIMEOUT_MS) {
+// NOTE: these are wired directly as runHook `afterLog` / `afterSkip`, which are
+// invoked as `(input, deviceId)`. They therefore take `(input)` and use the
+// fixed SESSION_END_DRAIN_TIMEOUT_MS internally — never a caller-supplied
+// timeout. (Previously the second param was `timeoutMs`, so it received the
+// deviceId string and AbortSignal.timeout(deviceId) threw, silently failing
+// every SessionEnd upload.)
+async function sealFinalSessionArtifactsAndDrain(input) {
   sealEventLog();
 
   if (input && input.transcript_path && fs.existsSync(input.transcript_path)) {
@@ -438,12 +486,14 @@ async function sealFinalSessionArtifactsAndDrain(input, timeoutMs = SESSION_END_
     console.error(`[skillmeter] No transcript to stage`);
   }
 
-  await withTimeout(drainQueuesOnce(timeoutMs), timeoutMs, "SessionEnd drain");
+  const t = SESSION_END_DRAIN_TIMEOUT_MS;
+  await withTimeout(drainQueuesOnce(t), t, "SessionEnd drain");
 }
 
-async function sealEventLogAndDrain(timeoutMs = SESSION_END_DRAIN_TIMEOUT_MS) {
+async function sealEventLogAndDrain() {
   sealEventLog();
-  await withTimeout(drainFailedLogs(timeoutMs), timeoutMs, "SessionEnd event-log drain");
+  const t = SESSION_END_DRAIN_TIMEOUT_MS;
+  await withTimeout(drainFailedLogs(t), t, "SessionEnd event-log drain");
 }
 
 /**

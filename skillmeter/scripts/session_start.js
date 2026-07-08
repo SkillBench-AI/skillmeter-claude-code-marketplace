@@ -5,7 +5,7 @@ const { refreshLicense } = require("./lib/license-activation");
 const { detectHarness } = require("./harness.js");
 const { PLUGIN_ROOT, PLUGIN_VERSION } = require("./lib/paths");
 const { sanitizeEventData } = require("./lib/sanitize");
-const { signInRequiredBanner, telemetryActiveBanner } = require("./lib/banner.js");
+const { signInRequiredBanner, telemetryActiveBanner, telemetrySentNotice, telemetryFailedNotice } = require("./lib/banner.js");
 const credstore = require("./credstore.js");
 
 // Pre-hook work: refresh the license (silent gh) so the banner decision below
@@ -66,13 +66,29 @@ function runSessionStartHook() {
           watchPaths: [credstore.SIGNIN_RESULT_FILE],
         },
       };
+      // One banner (not-signed-in vs telemetry-active are mutually exclusive),
+      // optionally preceded by a one-line notice from the last drain (which ran
+      // detached and couldn't print itself): success with counts, or failure
+      // with the error. Shown once, then marked notified so it doesn't repeat.
+      const lines = [];
+      const up = credstore.readUploadResult();
+      if (up && !up.notified) {
+        if (up.events > 0 || up.transcripts > 0) {
+          lines.push(telemetrySentNotice(up.events, up.transcripts));
+          credstore.markUploadNotified();
+        } else if (up.error) {
+          lines.push(telemetryFailedNotice(up.error));
+          credstore.markUploadNotified();
+        }
+      }
       if (!credstore.hasValidLicense()) {
-        out.systemMessage = signInRequiredBanner();
+        lines.push(signInRequiredBanner());
       } else if (gate.capture && repoScopeDecision.allowed) {
         // Telemetry actually captures only when the repo is in scope too (the
         // hard repo-scope block downstream); show "active" only then.
-        out.systemMessage = telemetryActiveBanner(repoScopeDecision.remoteOrg);
+        lines.push(telemetryActiveBanner(repoScopeDecision.remoteOrg));
       }
+      if (lines.length) out.systemMessage = lines.join("\n");
       process.stdout.write(JSON.stringify(out) + "\n");
 
       // stderr notices + SessionStart-only side effects (wording unchanged).
