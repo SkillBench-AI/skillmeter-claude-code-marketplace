@@ -31,6 +31,14 @@ function runSessionStartHook() {
       pluginRoot: PLUGIN_ROOT,
       pluginVersion: PLUGIN_VERSION,
       agentType: input.agent_type,
+      // Claude Code does not expose its CLI version to hooks today; read the
+      // common env-var candidates best-effort so the field populates if a future
+      // runtime does. Typically "".
+      agentVersion:
+        input.version ||
+        process.env.CLAUDE_CODE_VERSION ||
+        process.env.CLAUDECODE_VERSION ||
+        "",
       model: input.model,
       sessionSource: input.source,
     });
