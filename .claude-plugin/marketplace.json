@@ -3,11 +3,12 @@
   "owner": {
     "name": "skillbench"
   },
+  "description": "SkillBench plugins for Claude Code.",
   "plugins": [
     {
       "name": "skillmeter",
       "source": "./skillmeter",
-      "description": ""
+      "description": "Tracks Claude Code session activity and sends anonymized telemetry to the SkillBench platform for developer skill analytics."
     }
   ]
 }
