@@ -15,10 +15,21 @@ const path = require("path");
 const { STATE_DIR, CRED_FILE } = require("./config");
 
 const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, "..", "..");
-const LOG_DIR = path.join(PLUGIN_ROOT, "logs");
+
+// The telemetry queue + lock files must survive plugin updates. PLUGIN_ROOT is
+// the install/cache dir — it changes on every update and the old copy is deleted
+// ~7 days later, which would strand any un-drained queue. CLAUDE_PLUGIN_DATA is
+// the host-provided persistent data dir; prefer it. When it's unavailable
+// (older Claude Code, direct `node`, tests) we fall back to PLUGIN_ROOT so
+// behavior is byte-identical to before. lib/transfer.migrateLegacyQueue() moves
+// any queue left in the legacy location forward on first run.
+const DATA_ROOT = process.env.CLAUDE_PLUGIN_DATA || PLUGIN_ROOT;
+const LOG_DIR = path.join(DATA_ROOT, "logs");
 const LOG_FILE = path.join(LOG_DIR, "events.jsonl");
 // Transcripts that failed to upload get parked here for retry on next session.
 const TRANSCRIPTS_PENDING_DIR = path.join(LOG_DIR, "transcripts", "pending");
+// Pre-0.17 / no-CLAUDE_PLUGIN_DATA location, for one-time forward migration.
+const LEGACY_LOG_DIR = path.join(PLUGIN_ROOT, "logs");
 
 const PLUGIN_VERSION = (() => {
   try {
@@ -38,5 +49,6 @@ module.exports = {
   LOG_DIR,
   LOG_FILE,
   TRANSCRIPTS_PENDING_DIR,
+  LEGACY_LOG_DIR,
   PLUGIN_VERSION,
 };
