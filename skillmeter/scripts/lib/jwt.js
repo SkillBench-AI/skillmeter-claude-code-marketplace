@@ -79,10 +79,33 @@ function getEndpointFromTokenAllowExpired(token) {
   return payload.telemetry_endpoint;
 }
 
+/**
+ * The GitHub org(s) this license validates for telemetry, as decided by the
+ * activator and minted into the JWT. No expiry gate — this is identity/routing
+ * info (like getEndpointFromTokenAllowExpired), not an auth decision. Returns a
+ * normalized (lowercased) array; `[]` when the token is missing/undecodable or
+ * carries no org claim. Accepts the current singular `org.login` claim and a
+ * future plural `orgs` array for forward-compat.
+ */
+function getLicenseOrgs(token) {
+  const payload = token ? decodeJwtPayload(token) : null;
+  if (!payload) return [];
+  const raw = Array.isArray(payload.orgs)
+    ? payload.orgs
+    : payload.org && payload.org.login
+      ? [payload.org.login]
+      : [];
+  return raw
+    .filter((o) => typeof o === "string")
+    .map((o) => o.trim().toLowerCase())
+    .filter(Boolean);
+}
+
 module.exports = {
   JWT_EXPIRY_GRACE_SECONDS,
   decodeJwtPayload,
   isJwtExpired,
   getEndpointFromToken,
   getEndpointFromTokenAllowExpired,
+  getLicenseOrgs,
 };

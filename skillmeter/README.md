@@ -279,23 +279,18 @@ Events are dropped — even in workdirs where the user ran `/skillmeter:telemetr
 
 - directories that are not inside a Git repository
 - repositories without a recognizable GitHub remote
-- repositories whose remote owner is not present in the stored allow-list (even if the user is currently a member of that org but it was excluded at sign-in time or added to their account afterward)
+- repositories whose remote owner is not the org your license was validated for (the license activator issues a license for one GitHub org; the org is carried in the license JWT)
 
-### Narrowing scope to specific orgs
-
-By default every signed-in org is in scope. If an account belongs to several orgs but should only capture telemetry for some (e.g. only `skillbench-ai`), narrow it. Narrowing is intersected with the signed-in orgs, so it can only restrict the captured set — never widen it.
-
-- **At sign-in:** `! <plugin>/bin/signin --org skillbench-ai` (repeatable / comma-separated). Only the listed orgs are persisted — the fix for the silent `gh` path enrolling every org. Re-running with `--org` while already signed in re-scopes the stored list in place; re-expanding later needs sign-out + sign-in.
-- **At runtime / globally:** `SKILLMETER_REPO_SCOPE_ORGS="skillbench-ai"` (env) or `{ "skillmeter": { "repoScopeOrgs": ["skillbench-ai"] } }` in `<project>/.claude/settings.local.json`. The same values are honored both at sign-in and by the runtime repo-scope gate. Precedence: `--org` > env > setting. Org names match case-insensitively.
+The tracked org is decided by the license activator, not the client — there is no client-side org narrowing. Org names match case-insensitively.
 
 ### Per-project opt-in & auto-enable
 
 Whether a project emits telemetry resolves in three states:
 
 - **Explicitly disabled** (`/skillmeter:telemetry disable`) — never sends; always wins.
-- **Explicitly enabled** (`/skillmeter:telemetry enable`) — sends (still subject to the repo-scope filter above).
-- **Unset** (default) — telemetry **auto-enables when the repo is owned by an allowed org** (the same `GET /user/orgs` set used for repo-scoped filtering). For any other directory it stays off until you choose. SessionStart prints `telemetry auto-enabled — repo owned by allowed org`; run `/skillmeter:telemetry disable` to opt a matching project back out.
+- **Explicitly enabled** (`/skillmeter:telemetry enable`) — sends (still subject to the repo-scope gate above).
+- **Unset** (default) — telemetry **auto-enables when the repo is owned by the licensed org** (the org from your license JWT). For any other directory it stays off until you choose. SessionStart prints `telemetry auto-enabled — repo owned by allowed org`; run `/skillmeter:telemetry disable` to opt a matching project back out.
 
 The machine-global kill-switch (`/skillmeter:telemetry disable-global`) overrides all of the above.
 
-To refresh the allowed identity list (e.g. after joining a new org), run `/skillmeter:signin` again.
+The tracked org follows your license — re-run `/skillmeter:signin` to pick up a re-issued license.

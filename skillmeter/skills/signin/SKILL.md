@@ -17,12 +17,6 @@ the `!`-prefixed command exactly as the hook provided it, on its own line, in a
 fenced code block, so the user can copy and paste it into their next prompt
 without modification. Do not rephrase, shorten, or strip the leading `!`.
 
-If the user wants to scope telemetry to specific GitHub org(s) instead of every
-org their account belongs to (e.g. "only @skillbench-ai"), they can append
-`--org` to the interactive command — for example `! <signin-command> --org
-skillbench-ai` (repeatable, or comma-separated). Only the listed orgs
-(intersected with their real memberships) are persisted. Re-running with `--org`
-while already signed in re-scopes the stored list in place. Alternatively they
-can set `SKILLMETER_REPO_SCOPE_ORGS=skillbench-ai` or
-`skillmeter.repoScopeOrgs` in `.claude/settings.local.json`, which both sign-in
-and the runtime repo-scope gate honor.
+Telemetry is scoped to the single GitHub org your license is validated for; that
+org is decided by the license activator and carried in the license JWT, so there
+is no client-side org selection.

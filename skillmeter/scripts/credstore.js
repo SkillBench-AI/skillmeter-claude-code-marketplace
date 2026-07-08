@@ -5,9 +5,10 @@ const path = require("path");
 // Resolved centrally in lib/paths.js so SKILLMETER_STATE_DIR can isolate a dev
 // environment's credentials/identity from prod.
 const { CRED_FILE } = require("./lib/paths");
-// Canonical JWT decoder + org normalizer (de-duplicated from local copies).
-const { decodeJwtPayload } = require("./lib/jwt");
-const { normalizeOrgList } = require("./lib/org-scope");
+// Canonical JWT helpers. The validated org(s) for telemetry are read straight
+// from the license JWT (the activator's decision) — the client no longer stores
+// or narrows a GitHub org list.
+const { decodeJwtPayload, getLicenseOrgs } = require("./lib/jwt");
 
 // ---------------------------------------------------------------------------
 // Low-level file helpers
@@ -222,28 +223,26 @@ function markEngaged() {
 // Persist a freshly-issued license atomically. Re-reads the store at write
 // time and aborts if /skillmeter:signout fired while the license issuance
 // was in flight — the user's most recent intent wins. Returns true when
-// the license was written, false when it was discarded.
-function commitSignin({ jwt, orgs }) {
+// the license was written, false when it was discarded. The validated org
+// lives in the JWT itself, so nothing else is stored.
+function commitSignin({ jwt }) {
   const store = readStore();
   if (store.signed_out === true) return false;
   store.license_jwt = jwt;
-  store.allowed_github_orgs = normalizeOrgList(orgs);
   writeStore(store);
   _cache = store;
   return true;
 }
 
 /**
- * GitHub identities (user login + org logins) the activated user is a member
- * of. Used by repo-scope to gate telemetry to the user's own repos and the
- * orgs they belong to. Empty array means "not activated" — gating treats
- * this as a hard block, not an allow-all.
+ * The GitHub org(s) telemetry is validated for, as decided by the license
+ * activator and minted into the JWT. Empty array means "not activated" —
+ * repo-scope treats this as a hard block, not an allow-all. Reads uncached so
+ * a token refreshed by another process is reflected immediately.
  */
 function getAllowedGitHubOrgs() {
-  const store = loadStore();
-  const orgs = store.allowed_github_orgs;
-  if (!Array.isArray(orgs)) return [];
-  return orgs;
+  const token = getLicenseTokenUncached();
+  return token ? getLicenseOrgs(token) : [];
 }
 
 module.exports = {
