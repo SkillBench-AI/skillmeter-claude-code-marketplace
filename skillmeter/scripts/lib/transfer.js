@@ -471,7 +471,13 @@ function withTimeout(promise, timeoutMs, label) {
   ]);
 }
 
-async function sealFinalSessionArtifactsAndDrain(input, timeoutMs = SESSION_END_DRAIN_TIMEOUT_MS) {
+// NOTE: these are wired directly as runHook `afterLog` / `afterSkip`, which are
+// invoked as `(input, deviceId)`. They therefore take `(input)` and use the
+// fixed SESSION_END_DRAIN_TIMEOUT_MS internally — never a caller-supplied
+// timeout. (Previously the second param was `timeoutMs`, so it received the
+// deviceId string and AbortSignal.timeout(deviceId) threw, silently failing
+// every SessionEnd upload.)
+async function sealFinalSessionArtifactsAndDrain(input) {
   sealEventLog();
 
   if (input && input.transcript_path && fs.existsSync(input.transcript_path)) {
@@ -480,12 +486,14 @@ async function sealFinalSessionArtifactsAndDrain(input, timeoutMs = SESSION_END_
     console.error(`[skillmeter] No transcript to stage`);
   }
 
-  await withTimeout(drainQueuesOnce(timeoutMs), timeoutMs, "SessionEnd drain");
+  const t = SESSION_END_DRAIN_TIMEOUT_MS;
+  await withTimeout(drainQueuesOnce(t), t, "SessionEnd drain");
 }
 
-async function sealEventLogAndDrain(timeoutMs = SESSION_END_DRAIN_TIMEOUT_MS) {
+async function sealEventLogAndDrain() {
   sealEventLog();
-  await withTimeout(drainFailedLogs(timeoutMs), timeoutMs, "SessionEnd event-log drain");
+  const t = SESSION_END_DRAIN_TIMEOUT_MS;
+  await withTimeout(drainFailedLogs(t), t, "SessionEnd event-log drain");
 }
 
 /**
