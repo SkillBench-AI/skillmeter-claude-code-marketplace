@@ -5,6 +5,8 @@
  * decisions and to avoid sending tokens we know are already expired.
  */
 
+const { getBackendUrlOverride } = require("./config");
+
 // 30-second grace window tolerates minor clock skew between client and server.
 const JWT_EXPIRY_GRACE_SECONDS = 30;
 
@@ -51,7 +53,7 @@ function isJwtExpired(token) {
  *   the on-disk file for retry once a fresh JWT is available.
  */
 function getEndpointFromToken(token) {
-  const override = process.env.SKILLMETER_BACKEND_URL;
+  const override = getBackendUrlOverride();
   if (override) return override;
   if (!token) return null;
   if (isJwtExpired(token)) return null;
@@ -69,7 +71,7 @@ function getEndpointFromToken(token) {
  * used for an auth decision; only to recover the destination URL.
  */
 function getEndpointFromTokenAllowExpired(token) {
-  const override = process.env.SKILLMETER_BACKEND_URL;
+  const override = getBackendUrlOverride();
   if (override) return override;
   if (!token) return null;
   const payload = decodeJwtPayload(token);

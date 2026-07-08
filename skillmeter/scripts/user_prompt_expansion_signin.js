@@ -11,6 +11,7 @@
 const credstore = require("./credstore.js");
 const { trySilentGhActivate } = require("./lib/license-activation");
 const { welcomeBanner } = require("./lib/banner.js");
+const { getRepoScopeDecision } = require("./lib/repo-scope");
 const path = require("path");
 
 const SIGNIN_COMMAND = path.join(__dirname, "..", "bin", "signin");
@@ -70,7 +71,7 @@ async function main() {
 
   const existingToken = credstore.getLicenseToken();
   if (existingToken && !credstore.isLicenseTokenExpired(existingToken)) {
-    addContext(welcomeBanner(credstore.getAllowedGitHubOrgs()));
+    addContext(welcomeBanner(getRepoScopeDecision(input.cwd || process.cwd())));
     return;
   }
 
@@ -82,7 +83,7 @@ async function main() {
 
   const jwt = await trySilentGhActivate(deviceId);
   if (jwt) {
-    addContext(welcomeBanner(credstore.getAllowedGitHubOrgs()));
+    addContext(welcomeBanner(getRepoScopeDecision(input.cwd || process.cwd())));
     return;
   }
 

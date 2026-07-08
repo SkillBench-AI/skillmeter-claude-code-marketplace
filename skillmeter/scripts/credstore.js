@@ -1,9 +1,13 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
-const os = require("os");
 
-const CRED_FILE = path.join(os.homedir(), ".skillbench", "credentials.json");
+// Resolved centrally in lib/paths.js so SKILLMETER_STATE_DIR can isolate a dev
+// environment's credentials/identity from prod.
+const { CRED_FILE } = require("./lib/paths");
+// Canonical JWT decoder + org normalizer (de-duplicated from local copies).
+const { decodeJwtPayload } = require("./lib/jwt");
+const { normalizeOrgList } = require("./lib/org-scope");
 
 // ---------------------------------------------------------------------------
 // Low-level file helpers
@@ -17,16 +21,15 @@ function readStore() {
   }
 }
 
-function writeStore(data) {
-  const dir = path.dirname(CRED_FILE);
+// Atomic write: write payload to a sibling tempfile, fsync, then rename into
+// place. POSIX rename within the same filesystem is atomic — readers see either
+// the old file or the new file, never a partial write. Concurrent writers can
+// still lose updates; eliminating that requires a file lock (separate follow-up).
+function atomicWriteJson(file, data) {
+  const dir = path.dirname(file);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
 
-  // Atomic write: write payload to a sibling tempfile, fsync, then
-  // rename into place. POSIX rename within the same filesystem is
-  // atomic — readers see either the old file or the new file, never
-  // a partial write. Concurrent writers can still lose updates;
-  // eliminating that requires a file lock (separate follow-up).
-  const tempPath = `${CRED_FILE}.tmp.${process.pid}.${Date.now()}`;
+  const tempPath = `${file}.tmp.${process.pid}.${Date.now()}`;
   let fd;
   try {
     fd = fs.openSync(tempPath, "w", 0o600);
@@ -34,13 +37,53 @@ function writeStore(data) {
     fs.fsyncSync(fd);
     fs.closeSync(fd);
     fd = undefined;
-    fs.renameSync(tempPath, CRED_FILE);
+    fs.renameSync(tempPath, file);
   } catch (err) {
     if (fd !== undefined) {
       try { fs.closeSync(fd); } catch {}
     }
     try { fs.unlinkSync(tempPath); } catch {}
     throw err;
+  }
+}
+
+function writeStore(data) {
+  atomicWriteJson(CRED_FILE, data);
+}
+
+// ---------------------------------------------------------------------------
+// Sign-in result sentinel — records the outcome of an interactive sign-in
+// attempt so a FileChanged hook can notify success/failure without the user
+// re-running /skillmeter:signin. Kept in its own file (not credentials.json,
+// which license refresh rewrites often) so a watcher fires only on real
+// sign-in attempts, not on every token refresh.
+// ---------------------------------------------------------------------------
+
+const SIGNIN_RESULT_FILE = path.join(path.dirname(CRED_FILE), "signin-result.json");
+
+function writeSigninResult(result) {
+  try {
+    atomicWriteJson(SIGNIN_RESULT_FILE, { ...result, ts: Date.now() });
+  } catch {
+    // Best-effort: a missing sentinel only degrades to the re-run UX.
+  }
+}
+
+function readSigninResult() {
+  try {
+    return JSON.parse(fs.readFileSync(SIGNIN_RESULT_FILE, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+// Pre-create the sentinel so SessionStart `watchPaths` can register it before
+// the first sign-in (some file watchers only fire on modify, not create).
+function ensureSigninResultFile() {
+  if (!fs.existsSync(SIGNIN_RESULT_FILE)) {
+    try {
+      atomicWriteJson(SIGNIN_RESULT_FILE, { status: "none" });
+    } catch {}
   }
 }
 
@@ -100,24 +143,6 @@ function setLicenseToken(jwt) {
   _cache = store;
 }
 
-/**
- * Decode the payload section of a JWT without verifying the signature.
- * Only safe to use for local expiry hints; never trust the contents for
- * authorization decisions. Kept internal to credstore so the storage
- * layer can answer `isLicenseTokenExpired` without pulling a full JWT
- * library dependency.
- */
-function decodeJwtPayloadUnsafe(token) {
-  try {
-    const parts = token.split(".");
-    if (parts.length !== 3) return null;
-    const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
-    return JSON.parse(Buffer.from(base64, "base64").toString("utf8"));
-  } catch {
-    return null;
-  }
-}
-
 // Matches the VS Code extension's TOKEN_EXPIRY_SKEW_MS (5 min). Refresh
 // fires proactively while the JWT is still technically valid so requests
 // in flight don't cross the expiry boundary.
@@ -130,9 +155,18 @@ const LICENSE_EXPIRY_SKEW_SECONDS = 5 * 60;
  */
 function isLicenseTokenExpired(token, skewSeconds = LICENSE_EXPIRY_SKEW_SECONDS) {
   if (!token) return true;
-  const payload = decodeJwtPayloadUnsafe(token);
+  const payload = decodeJwtPayload(token);
   if (!payload || typeof payload.exp !== "number") return true;
   return payload.exp <= Math.floor(Date.now() / 1000) + skewSeconds;
+}
+
+// True when a non-expired license JWT is present on disk. Reads uncached so a
+// token just refreshed by this process (or another terminal) is observed — the
+// canonical "am I signed in" check, replacing inlined
+// `t && !isLicenseTokenExpired(t)` at call sites.
+function hasValidLicense() {
+  const t = getLicenseTokenUncached();
+  return !!t && !isLicenseTokenExpired(t);
 }
 
 // `signed_out` is set by /skillmeter:signout. It blocks the silent gh
@@ -185,18 +219,6 @@ function markEngaged() {
   _cache = store;
 }
 
-function normalizeOrgs(orgs) {
-  if (!Array.isArray(orgs)) return [];
-  return Array.from(
-    new Set(
-      orgs
-        .filter((o) => typeof o === "string")
-        .map((o) => o.trim().toLowerCase())
-        .filter(Boolean)
-    )
-  );
-}
-
 // Persist a freshly-issued license atomically. Re-reads the store at write
 // time and aborts if /skillmeter:signout fired while the license issuance
 // was in flight — the user's most recent intent wins. Returns true when
@@ -205,7 +227,7 @@ function commitSignin({ jwt, orgs }) {
   const store = readStore();
   if (store.signed_out === true) return false;
   store.license_jwt = jwt;
-  store.allowed_github_orgs = normalizeOrgs(orgs);
+  store.allowed_github_orgs = normalizeOrgList(orgs);
   writeStore(store);
   _cache = store;
   return true;
@@ -231,6 +253,7 @@ module.exports = {
   getLicenseTokenUncached,
   setLicenseToken,
   isLicenseTokenExpired,
+  hasValidLicense,
   getAllowedGitHubOrgs,
   // Atomic sign-in lifecycle — prefer these over the lower-level set* helpers
   // when adjusting more than one field, so partial writes can't race.
@@ -241,4 +264,9 @@ module.exports = {
   getSignedOut,
   getTelemetryDisabled,
   setTelemetryDisabled,
+  // Sign-in result sentinel (for the FileChanged sign-in notifier)
+  SIGNIN_RESULT_FILE,
+  writeSigninResult,
+  readSigninResult,
+  ensureSigninResultFile,
 };

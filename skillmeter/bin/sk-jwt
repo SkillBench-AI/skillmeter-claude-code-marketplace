@@ -15,17 +15,7 @@ const path = require("path");
 
 const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, "..");
 const credstore = require(path.join(PLUGIN_ROOT, "scripts", "credstore.js"));
-
-function decodeJwtPayload(token) {
-  try {
-    const parts = token.split(".");
-    if (parts.length !== 3) return null;
-    const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
-    return JSON.parse(Buffer.from(b64, "base64").toString("utf8"));
-  } catch {
-    return null;
-  }
-}
+const { decodeJwtPayload } = require(path.join(PLUGIN_ROOT, "scripts", "lib", "jwt.js"));
 
 const token = credstore.getLicenseToken();
 const deviceId = credstore.getDeviceId() || "(none)";

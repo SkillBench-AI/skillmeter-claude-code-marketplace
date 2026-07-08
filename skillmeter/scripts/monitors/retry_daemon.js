@@ -23,9 +23,10 @@
  */
 
 const transfer = require("../lib/transfer");
+const { getRetryDaemonIntervalMs } = require("../lib/config");
 
 const INITIAL_DELAY_MS = 60_000;
-const INTERVAL_MS = parseInt(process.env.SKILLMETER_RETRY_DAEMON_INTERVAL_MS || "", 10) || 120_000;
+const INTERVAL_MS = getRetryDaemonIntervalMs();
 // Cap for the adaptive backoff when sweeps make no progress (e.g. the backend
 // is down). Resets to INTERVAL_MS as soon as the queue shrinks.
 const MAX_INTERVAL_MS = 30 * 60_000;

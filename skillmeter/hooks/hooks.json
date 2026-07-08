@@ -11,6 +11,18 @@
         ]
       }
     ],
+    "FileChanged": [
+      {
+        "matcher": "signin-result.json",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/on_signin_result.js",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "hooks": [

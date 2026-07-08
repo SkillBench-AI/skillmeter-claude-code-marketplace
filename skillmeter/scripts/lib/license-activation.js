@@ -15,32 +15,12 @@ const path = require("path");
 const { execSync } = require("child_process");
 const credstore = require("../credstore");
 const { fetchUserGitHubOrgs } = require("./github-api");
-const { getSkillmeterStringSetting } = require("./settings");
 const { resolveOrgScope, narrowOrgsToScope } = require("./org-scope");
 const { LOG_DIR } = require("./paths");
-
-// Default points at prod (the published plugin serves real users). Devs/agents
-// override via SKILLMETER_ACTIVATE_URL (e.g. https://api.dev.skillbench.com/activate)
-// or a `skillmeter.activate_url` entry in the project's .claude/settings.local.json.
-const DEFAULT_ACTIVATE_URL = "https://api.skillbench.ai/activate";
-
-function getActivateUrl() {
-  if (process.env.SKILLMETER_ACTIVATE_URL) return process.env.SKILLMETER_ACTIVATE_URL;
-  const fromSettings = getSkillmeterStringSetting(process.cwd(), "activate_url");
-  if (fromSettings) return fromSettings;
-  return DEFAULT_ACTIVATE_URL;
-}
-
-// The /refresh endpoint sits next to /activate on the same host. Derive the
-// URL from getActivateUrl so the same host configuration covers both. If the
-// activate URL doesn't end with /activate (e.g. a dev override with a custom
-// path), we append /refresh to the base path — keeps weird overrides at least
-// roundtrippable.
-function getRefreshUrl() {
-  const url = getActivateUrl();
-  if (url.endsWith("/activate")) return url.slice(0, -"/activate".length) + "/refresh";
-  return url.replace(/\/?$/, "/refresh");
-}
+// activate/refresh URL resolution now lives in the central config module
+// (env > settings > dev-bundle > prod default). Re-exported below so
+// signin.js keeps consuming licenseActivation.getActivateUrl unchanged.
+const { getActivateUrl, getRefreshUrl } = require("./config");
 
 /**
  * Rotate an existing license JWT through the Lambda's /refresh endpoint.
