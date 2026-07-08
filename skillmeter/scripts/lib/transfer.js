@@ -25,6 +25,7 @@ const {
   LOG_DIR,
   LOG_FILE,
   TRANSCRIPTS_PENDING_DIR,
+  LEGACY_LOG_DIR,
   PLUGIN_VERSION,
 } = require("./paths");
 
@@ -328,6 +329,44 @@ function sealEventLogAndTriggerDrain() {
   }
 }
 
+// One-time forward migration of the durable queue. Older versions (and hosts
+// without CLAUDE_PLUGIN_DATA) kept sealed event logs + pending transcripts under
+// PLUGIN_ROOT/logs, which the host deletes ~7 days after a plugin update. Copy
+// any un-uploaded artifacts into the persistent LOG_DIR so an in-place upgrade
+// doesn't strand them. Best-effort, copy (not move) + skip-existing, so it's
+// safe to run every session and a no-op when the paths coincide.
+function migrateLegacyQueue() {
+  if (LEGACY_LOG_DIR === LOG_DIR) return; // CLAUDE_PLUGIN_DATA unavailable
+  if (!fs.existsSync(LEGACY_LOG_DIR)) return;
+  try {
+    fs.mkdirSync(LOG_DIR, { recursive: true });
+    for (const f of fs.readdirSync(LEGACY_LOG_DIR)) {
+      const src = path.join(LEGACY_LOG_DIR, f);
+      try { if (!fs.statSync(src).isFile()) continue; } catch { continue; }
+      if (/^events\.jsonl\.\d+$/.test(f)) {
+        // Already-sealed batch → copy under the same name.
+        const dest = path.join(LOG_DIR, f);
+        if (!fs.existsSync(dest)) fs.copyFileSync(src, dest);
+      } else if (f === "events.jsonl") {
+        // Seal the legacy active log into a batch the drain recognizes.
+        const dest = path.join(LOG_DIR, `events.jsonl.${Date.now()}`);
+        if (!fs.existsSync(dest)) fs.copyFileSync(src, dest);
+      }
+      // Skip *.sent (already delivered) and lock files.
+    }
+    const legacyPending = path.join(LEGACY_LOG_DIR, "transcripts", "pending");
+    if (fs.existsSync(legacyPending)) {
+      fs.mkdirSync(TRANSCRIPTS_PENDING_DIR, { recursive: true });
+      for (const f of fs.readdirSync(legacyPending)) {
+        const src = path.join(legacyPending, f);
+        try { if (!fs.statSync(src).isFile()) continue; } catch { continue; }
+        const dest = path.join(TRANSCRIPTS_PENDING_DIR, f);
+        if (!fs.existsSync(dest)) fs.copyFileSync(src, dest);
+      }
+    }
+  } catch {}
+}
+
 function listSealedEventLogs() {
   if (!fs.existsSync(LOG_DIR)) return [];
 
@@ -515,4 +554,5 @@ module.exports = {
   retryFailedLogs,
   retryFailedTranscripts,
   cleanupStaleFiles,
+  migrateLegacyQueue,
 };
