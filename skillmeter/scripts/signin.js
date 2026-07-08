@@ -19,10 +19,8 @@
 
 const credstore = require("./credstore.js");
 const licenseActivation = require("./lib/license-activation");
-const { fetchUserGitHubOrgs } = require("./lib/github-api");
 const { welcomeBanner } = require("./lib/banner.js");
 const { startSpinner } = require("./lib/spinner.js");
-const { resolveOrgScope, narrowOrgsToScope } = require("./lib/org-scope");
 const { getRepoScopeDecision } = require("./lib/repo-scope");
 const { STATE_DIR } = require("./lib/paths");
 const {
@@ -58,56 +56,6 @@ function log(msg) {
 
 function say(msg) {
   process.stdout.write(msg + "\n");
-}
-
-// Parse `--org skillbench-ai`, `--org=a,b`, repeated `--org` flags, or the
-// `--orgs` alias, into a normalized list. Lets the user scope sign-in to
-// specific GitHub orgs (e.g. only @skillbench-ai) instead of enrolling every
-// org their account belongs to.
-function parseOrgArgs(argv) {
-  const orgs = [];
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === "--org" || a === "--orgs") {
-      const v = argv[i + 1];
-      if (v && !v.startsWith("--")) {
-        orgs.push(...v.split(/[,\s]+/).filter(Boolean));
-        i++;
-      } else {
-        log(`Error: ${a} requires a value (e.g., ${a} skillbench-ai)`);
-        process.exit(1);
-      }
-    } else if (a.startsWith("--org=") || a.startsWith("--orgs=")) {
-      const value = a.slice(a.indexOf("=") + 1);
-      if (!value.trim()) {
-        log(`Error: ${a.split("=")[0]}= requires a value (e.g., ${a.split("=")[0]}=skillbench-ai)`);
-        process.exit(1);
-      }
-      orgs.push(...value.split(/[,\s]+/).filter(Boolean));
-    }
-  }
-  return orgs;
-}
-
-// Narrow the fetched memberships to the configured scope (CLI > env > setting)
-// and persist atomically. Logs what was kept/excluded so the user can see the
-// scope took effect. Returns the kept org list (for the welcome banner).
-function scopeAndCommit(licenseJwt, orgs, cliOrgs, { sayFn = log } = {}) {
-  const scope = resolveOrgScope({ cliOrgs });
-  const { orgs: scopedOrgs, excluded, applied } = narrowOrgsToScope(orgs, scope);
-  if (applied) {
-    sayFn(
-      `Org scope applied: keeping [${scopedOrgs.join(", ") || "none"}]` +
-        (excluded.length ? `, excluded ${excluded.length} org(s)` : "")
-    );
-    if (scopedOrgs.length === 0) {
-      sayFn(
-        "WARNING: the org scope matched none of your memberships — no repos will be in scope."
-      );
-    }
-  }
-  const committed = credstore.commitSignin({ jwt: licenseJwt, orgs: scopedOrgs });
-  return { committed, scopedOrgs };
 }
 
 // copyToClipboard tries platform-native clipboard tools. Returns true on
@@ -210,12 +158,11 @@ async function exchangeForLicense(githubToken, deviceId) {
 }
 
 // Background phase: invoked when the script is re-spawned with
-// `--background-poll`. Polls GitHub for the access token, exchanges it for
-// a license, fetches the user's GitHub identities, and persists everything
-// in credstore. Output goes to BACKGROUND_LOG (already redirected by the
-// parent's spawn() stdio config) so it can be inspected if activation
-// silently fails.
-async function runBackgroundPoll(deviceId, deviceCode, interval, cliOrgs) {
+// `--background-poll`. Polls GitHub for the access token, exchanges it for a
+// license, and persists it. The validated org lives in the JWT, so there's no
+// GitHub org fetch. Output goes to BACKGROUND_LOG (redirected by the parent's
+// spawn() stdio) so it can be inspected if activation silently fails.
+async function runBackgroundPoll(deviceId, deviceCode, interval) {
   log(`[${new Date().toISOString()}] background poll started (device_id=${deviceId})`);
   try {
     const githubToken = await pollForToken(deviceCode, interval);
@@ -224,19 +171,15 @@ async function runBackgroundPoll(deviceId, deviceCode, interval, cliOrgs) {
     const licenseJwt = await exchangeForLicense(githubToken, deviceId);
     log(`[${new Date().toISOString()}] license issued`);
 
-    const orgs = await fetchUserGitHubOrgs(githubToken);
-    log(`[${new Date().toISOString()}] orgs fetched: ${orgs.join(", ") || "(none)"}`);
-
-    const { committed, scopedOrgs } = scopeAndCommit(licenseJwt, orgs, cliOrgs);
-    if (!committed) {
+    if (!credstore.commitSignin({ jwt: licenseJwt })) {
       log(`[${new Date().toISOString()}] sign-in discarded: signed out during poll`);
       credstore.writeSigninResult({ status: "discarded" });
       process.exit(0);
     }
-    log(`[${new Date().toISOString()}] activation complete (orgs: ${scopedOrgs.join(", ") || "none"})`);
+    log(`[${new Date().toISOString()}] activation complete`);
     // Record success so the in-session FileChanged notifier can surface the
     // welcome banner without the user re-running /skillmeter:signin.
-    credstore.writeSigninResult({ status: "success", orgs: scopedOrgs });
+    credstore.writeSigninResult({ status: "success" });
     process.exit(0);
   } catch (err) {
     log(`[${new Date().toISOString()}] background poll failed: ${err.message}`);
@@ -245,15 +188,12 @@ async function runBackgroundPoll(deviceId, deviceCode, interval, cliOrgs) {
   }
 }
 
-function spawnBackgroundPoll(deviceId, deviceCode, interval, cliOrgs) {
+function spawnBackgroundPoll(deviceId, deviceCode, interval) {
   fs.mkdirSync(path.dirname(BACKGROUND_LOG), { recursive: true, mode: 0o700 });
   const logFd = fs.openSync(BACKGROUND_LOG, "a");
-  // Forward the explicit --org selection to the detached child (env/setting
-  // scope is inherited via process.env). "-" means no CLI orgs.
-  const orgArg = cliOrgs && cliOrgs.length ? cliOrgs.join(",") : "-";
   const child = spawn(
     process.execPath,
-    [__filename, "--background-poll", deviceId, deviceCode, String(interval), orgArg],
+    [__filename, "--background-poll", deviceId, deviceCode, String(interval)],
     {
       detached: true,
       stdio: ["ignore", logFd, logFd],
@@ -264,8 +204,6 @@ function spawnBackgroundPoll(deviceId, deviceCode, interval, cliOrgs) {
 }
 
 async function main() {
-  const cliOrgs = parseOrgArgs(process.argv.slice(2));
-
   // An explicit /skillmeter:signin re-arms everything in one atomic
   // write: clears the signed-out sentinel and the gh-fallback cooldown
   // so a user who just fixed their `gh auth` scopes or who signed out
@@ -273,37 +211,13 @@ async function main() {
   credstore.markEngaged();
 
   const existingToken = credstore.getLicenseToken();
-  const existingOrgs = credstore.getAllowedGitHubOrgs();
-  if (
-    existingToken &&
-    !credstore.isLicenseTokenExpired(existingToken) &&
-    existingOrgs.length > 0
-  ) {
-    // Already signed in. An explicit `--org` lets the user re-scope the stored
-    // org list in place (intersection with what's already there) without a full
-    // re-auth — the fast fix for "gh logged me into all my orgs". Re-expanding
-    // beyond the stored set requires signout + signin (which re-fetches).
-    if (cliOrgs.length > 0) {
-      const scope = resolveOrgScope({ cliOrgs });
-      const { orgs: scopedOrgs, excluded, applied } = narrowOrgsToScope(existingOrgs, scope);
-      if (applied && excluded.length) {
-        if (scopedOrgs.length === 0) {
-          log(`Error: org scope [${scope.join(", ")}] matched none of your signed-in orgs [${existingOrgs.join(", ")}].`);
-          log("To re-expand scope, run /skillmeter:signout then /skillmeter:signin again.");
-          process.exit(1);
-        }
-        if (credstore.commitSignin({ jwt: existingToken, orgs: scopedOrgs })) {
-          log(`Re-scoped existing sign-in: keeping [${scopedOrgs.join(", ") || "none"}], excluded ${excluded.length} org(s)`);
-          say(welcomeBanner(getRepoScopeDecision(process.cwd())));
-          return;
-        }
-      }
-    }
+  if (existingToken && !credstore.isLicenseTokenExpired(existingToken)) {
+    // Already signed in — the license (and its validated org) is current.
     say(welcomeBanner(getRepoScopeDecision(process.cwd())));
     return;
   }
   if (existingToken) {
-    log("License expired or orgs missing — refreshing...");
+    log("License expired — refreshing...");
   }
 
   const deviceId = credstore.getDeviceId();
@@ -313,7 +227,7 @@ async function main() {
   }
 
   log("Trying gh CLI first...");
-  const silentJwt = await licenseActivation.trySilentGhActivate(deviceId, { orgScope: cliOrgs });
+  const silentJwt = await licenseActivation.trySilentGhActivate(deviceId);
   if (silentJwt) {
     say(welcomeBanner(getRepoScopeDecision(process.cwd())));
     return;
@@ -349,24 +263,22 @@ async function main() {
   // detached background poll and let the user re-invoke /skillmeter:signin
   // to confirm.
   if (process.stdout.isTTY) {
-    await runForegroundPoll(deviceId, device, cliOrgs);
+    await runForegroundPoll(deviceId, device);
   } else {
-    spawnBackgroundPoll(deviceId, device.device_code, device.interval || 5, cliOrgs);
+    spawnBackgroundPoll(deviceId, device.device_code, device.interval || 5);
     say("Polling for approval in the background.");
     say("After approving on GitHub, run /skillmeter:signin again to confirm.");
     say(`(background log: ${BACKGROUND_LOG})`);
   }
 }
 
-async function runForegroundPoll(deviceId, device, cliOrgs) {
+async function runForegroundPoll(deviceId, device) {
   const stop = startSpinner("Waiting for GitHub approval");
   try {
     const githubToken = await pollForToken(device.device_code, device.interval || 5);
     const licenseJwt = await exchangeForLicense(githubToken, deviceId);
-    const orgs = await fetchUserGitHubOrgs(githubToken);
     stop();
-    const { committed, scopedOrgs } = scopeAndCommit(licenseJwt, orgs, cliOrgs, { sayFn: say });
-    if (!committed) {
+    if (!credstore.commitSignin({ jwt: licenseJwt })) {
       say("Sign-in discarded: signed out during issuance.");
       process.exit(0);
     }
@@ -382,9 +294,7 @@ if (process.argv[2] === "--background-poll") {
   const deviceId = process.argv[3];
   const deviceCode = process.argv[4];
   const interval = Number(process.argv[5]) || 5;
-  const orgArg = process.argv[6];
-  const cliOrgs = orgArg && orgArg !== "-" ? orgArg.split(/[,\s]+/) : [];
-  runBackgroundPoll(deviceId, deviceCode, interval, cliOrgs);
+  runBackgroundPoll(deviceId, deviceCode, interval);
 } else {
   main().catch((err) => {
     say(`Activation failed: ${err.message}`);

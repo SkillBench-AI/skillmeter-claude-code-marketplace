@@ -37,12 +37,12 @@ const DEV_GITHUB_CLIENT_ID = "__FILL_DEV_OAUTH_CLIENT_ID__"; // TODO: set the de
 const DEV_STATE_DIRNAME = ".skillbench-dev";
 const PROD_STATE_DIRNAME = ".skillbench";
 
-// --- GitHub OAuth / API constants (moved here from signin.js / github-api.js) ---
+// --- GitHub OAuth device-flow constants ---
 const GITHUB_DEVICE_CODE_URL = "https://github.com/login/device/code"; // signin.js:56
 const GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"; // signin.js:57
-const GITHUB_OAUTH_SCOPE = "read:user read:org"; // signin.js:58
-const GITHUB_API_USER_URL = "https://api.github.com/user"; // github-api.js:23
-const GITHUB_API_ORGS_URL = "https://api.github.com/user/orgs?per_page=100"; // github-api.js:33
+// `read:org` is still requested so the activator can resolve the licensed org
+// from the gh token server-side (the client no longer reads GitHub orgs itself).
+const GITHUB_OAUTH_SCOPE = "read:user read:org";
 
 /**
  * Generic string resolver implementing the precedence rule above.
@@ -120,6 +120,4 @@ module.exports = {
   GITHUB_DEVICE_CODE_URL,
   GITHUB_TOKEN_URL,
   GITHUB_OAUTH_SCOPE,
-  GITHUB_API_USER_URL,
-  GITHUB_API_ORGS_URL,
 };

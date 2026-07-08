@@ -1,10 +1,9 @@
 /**
  * License activation orchestrator.
  *
- * Owns the silent `gh auth token` fallback path and the activation-endpoint
- * URL resolution. Storage lives in credstore (license JWT, allowed orgs,
- * gh-fallback cooldown); HTTP lives in lib/github-api (org lookup). This
- * module wires the two together.
+ * Owns the silent `gh auth token` fallback path: it exchanges the gh token for
+ * a license JWT at the activation endpoint and stores it via credstore. The
+ * validated org is minted into the JWT by the activator (no client org lookup).
  *
  * The exported surface (`getActivateUrl`, `trySilentGhActivate`) is what
  * sign-in entrypoints and the hook-runtime refresh path consume.
@@ -14,8 +13,6 @@ const fs = require("fs");
 const path = require("path");
 const { execSync } = require("child_process");
 const credstore = require("../credstore");
-const { fetchUserGitHubOrgs } = require("./github-api");
-const { resolveOrgScope, narrowOrgsToScope } = require("./org-scope");
 const { LOG_DIR } = require("./paths");
 // activate/refresh URL resolution now lives in the central config module
 // (env > settings > dev-bundle > prod default). Re-exported below so
@@ -103,12 +100,10 @@ async function refreshExpiredJwt(jwt, deviceId) {
  * here just returns null; the caller leaves the on-disk queue for the
  * next session to drain.
  *
- * `options.orgScope` (an explicit org allow-list, e.g. from `signin --org`)
- * narrows which fetched memberships are persisted. When omitted, the scope is
- * resolved from SKILLMETER_REPO_SCOPE_ORGS / the project setting so even the
- * hook-triggered silent refresh stays narrowed.
+ * The validated org is minted into the JWT by the activator, so this path
+ * neither fetches nor narrows GitHub org memberships — it just stores the JWT.
  */
-async function trySilentGhActivate(deviceId, options = {}) {
+async function trySilentGhActivate(deviceId) {
   if (credstore.getSignedOut()) {
     console.error("[skillmeter] gh activation skipped: signed out (run /skillmeter:signin to re-enable)");
     return null;
@@ -167,40 +162,12 @@ async function trySilentGhActivate(deviceId, options = {}) {
     return null;
   }
 
-  // Fetch the user's GitHub identities BEFORE persisting the license so
-  // license + orgs land atomically. If the gh CLI's token lacks the
-  // `read:org` scope the fetch fails — we treat that as silent-path
-  // failure and let the device-flow path run, which always requests the
-  // right scopes.
-  let orgs;
-  try {
-    orgs = await fetchUserGitHubOrgs(ghToken);
-  } catch (err) {
-    console.error(`[skillmeter] gh activation failed: cannot fetch GitHub orgs (${err.message})`);
-    return null;
-  }
-
-  // Narrow the captured memberships to the configured org scope (CLI > env >
-  // project setting). This is what stops the silent path from enrolling every
-  // org the user belongs to.
-  const scope = resolveOrgScope({ cliOrgs: options.orgScope });
-  const { orgs: scopedOrgs, excluded, applied } = narrowOrgsToScope(orgs, scope);
-  if (applied) {
-    console.error(
-      `[skillmeter] gh activation: org scope ${JSON.stringify(scope)} applied — keeping [${scopedOrgs.join(", ") || "none"}], excluded ${excluded.length} org(s)`
-    );
-    if (scopedOrgs.length === 0) {
-      console.error(
-        `[skillmeter] gh activation: WARNING — scope matched none of your memberships; no repos will be in scope`
-      );
-    }
-  }
-
-  if (!credstore.commitSignin({ jwt, orgs: scopedOrgs })) {
+  // The validated org is carried in the JWT; just persist the license.
+  if (!credstore.commitSignin({ jwt })) {
     console.error("[skillmeter] gh activation discarded: signed out during issuance");
     return null;
   }
-  console.error(`[skillmeter] gh activation succeeded (allowed orgs: ${scopedOrgs.join(", ") || "none"})`);
+  console.error("[skillmeter] gh activation succeeded");
   return jwt;
 }
 
