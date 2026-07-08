@@ -15,7 +15,7 @@
 const {
   getTelemetryOptIn,
   saveTelemetryOptIn,
-} = require("./logger.js");
+} = require("./lib/settings");
 const {
   getAllowedGitHubOrgs,
   getLicenseToken,

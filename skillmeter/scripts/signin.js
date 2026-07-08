@@ -22,12 +22,18 @@ const licenseActivation = require("./lib/license-activation");
 const { fetchUserGitHubOrgs } = require("./lib/github-api");
 const { welcomeBanner } = require("./lib/banner.js");
 const { startSpinner } = require("./lib/spinner.js");
-const { getSkillmeterStringSetting } = require("./lib/settings");
 const { resolveOrgScope, narrowOrgsToScope } = require("./lib/org-scope");
+const { getRepoScopeDecision } = require("./lib/repo-scope");
+const { STATE_DIR } = require("./lib/paths");
+const {
+  getGitHubClientId,
+  GITHUB_DEVICE_CODE_URL,
+  GITHUB_TOKEN_URL,
+  GITHUB_OAUTH_SCOPE,
+} = require("./lib/config");
 const { spawnSync, spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
-const os = require("os");
 
 // On POSIX, stdout/stderr writes to a pipe (e.g. when Claude Code's `!`
 // runner captures us) are async and block-buffered. Forcing the streams
@@ -41,23 +47,10 @@ for (const stream of [process.stdout, process.stderr]) {
   } catch {}
 }
 
-// Default points at the prod SkillMeter GitHub OAuth App (registered under
-// the SkillBench-AI org). Devs/agents override via SKILLMETER_GITHUB_CLIENT_ID
-// (e.g. the dev OAuth App's client_id) or a `skillmeter.github_client_id`
-// entry in the project's .claude/settings.local.json.
-const DEFAULT_GITHUB_CLIENT_ID = "Ov23liHsxZ4tVUN5WePE";
+// GitHub OAuth client id + device-flow URLs/scope resolve centrally in
+// lib/config (env > settings > dev-bundle > prod default).
 
-function getGitHubClientId() {
-  if (process.env.SKILLMETER_GITHUB_CLIENT_ID) return process.env.SKILLMETER_GITHUB_CLIENT_ID;
-  const fromSettings = getSkillmeterStringSetting(process.cwd(), "github_client_id");
-  if (fromSettings) return fromSettings;
-  return DEFAULT_GITHUB_CLIENT_ID;
-}
-const DEVICE_CODE_URL = "https://github.com/login/device/code";
-const TOKEN_URL = "https://github.com/login/oauth/access_token";
-const SCOPE = "read:user read:org";
-
-const BACKGROUND_LOG = path.join(os.homedir(), ".skillbench", "activate-poll.log");
+const BACKGROUND_LOG = path.join(STATE_DIR, "activate-poll.log");
 
 function log(msg) {
   process.stderr.write(msg + "\n");
@@ -160,7 +153,7 @@ async function postForm(url, params) {
 }
 
 async function requestDeviceCode() {
-  return postForm(DEVICE_CODE_URL, { client_id: getGitHubClientId(), scope: SCOPE });
+  return postForm(GITHUB_DEVICE_CODE_URL, { client_id: getGitHubClientId(), scope: GITHUB_OAUTH_SCOPE });
 }
 
 async function pollForToken(deviceCode, initialInterval) {
@@ -168,7 +161,7 @@ async function pollForToken(deviceCode, initialInterval) {
   while (true) {
     await new Promise((r) => setTimeout(r, interval * 1000));
 
-    const payload = await postForm(TOKEN_URL, {
+    const payload = await postForm(GITHUB_TOKEN_URL, {
       client_id: getGitHubClientId(),
       device_code: deviceCode,
       grant_type: "urn:ietf:params:oauth:grant-type:device_code",
@@ -237,12 +230,17 @@ async function runBackgroundPoll(deviceId, deviceCode, interval, cliOrgs) {
     const { committed, scopedOrgs } = scopeAndCommit(licenseJwt, orgs, cliOrgs);
     if (!committed) {
       log(`[${new Date().toISOString()}] sign-in discarded: signed out during poll`);
+      credstore.writeSigninResult({ status: "discarded" });
       process.exit(0);
     }
     log(`[${new Date().toISOString()}] activation complete (orgs: ${scopedOrgs.join(", ") || "none"})`);
+    // Record success so the in-session FileChanged notifier can surface the
+    // welcome banner without the user re-running /skillmeter:signin.
+    credstore.writeSigninResult({ status: "success", orgs: scopedOrgs });
     process.exit(0);
   } catch (err) {
     log(`[${new Date().toISOString()}] background poll failed: ${err.message}`);
+    credstore.writeSigninResult({ status: "failure", error: err.message });
     process.exit(1);
   }
 }
@@ -296,12 +294,12 @@ async function main() {
         }
         if (credstore.commitSignin({ jwt: existingToken, orgs: scopedOrgs })) {
           log(`Re-scoped existing sign-in: keeping [${scopedOrgs.join(", ") || "none"}], excluded ${excluded.length} org(s)`);
-          say(welcomeBanner(scopedOrgs));
+          say(welcomeBanner(getRepoScopeDecision(process.cwd())));
           return;
         }
       }
     }
-    say(welcomeBanner(existingOrgs));
+    say(welcomeBanner(getRepoScopeDecision(process.cwd())));
     return;
   }
   if (existingToken) {
@@ -317,7 +315,7 @@ async function main() {
   log("Trying gh CLI first...");
   const silentJwt = await licenseActivation.trySilentGhActivate(deviceId, { orgScope: cliOrgs });
   if (silentJwt) {
-    say(welcomeBanner(credstore.getAllowedGitHubOrgs()));
+    say(welcomeBanner(getRepoScopeDecision(process.cwd())));
     return;
   }
 
@@ -372,7 +370,7 @@ async function runForegroundPoll(deviceId, device, cliOrgs) {
       say("Sign-in discarded: signed out during issuance.");
       process.exit(0);
     }
-    say(welcomeBanner(scopedOrgs));
+    say(welcomeBanner(getRepoScopeDecision(process.cwd())));
   } catch (err) {
     stop();
     say(`Sign-in failed: ${err.message}`);

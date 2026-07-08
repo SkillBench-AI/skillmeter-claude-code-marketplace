@@ -19,35 +19,16 @@
 const fs = require("fs");
 const path = require("path");
 
+// Only what runHook + the log sink need. Utilities that used to be re-exported
+// through logger (transfer seal/drain, settings writers, repo-scope filters,
+// license refresh) are imported directly from their owning lib modules by the
+// few consumers that need them — logger is no longer a façade.
 const credstore = require("./credstore");
-const { getDeviceId, getOrCreateHashSalt, getLicenseToken } = credstore;
-const { refreshLicense } = require("./lib/license-activation");
-
-const paths = require("./lib/paths");
-const { LOG_DIR, LOG_FILE, PLUGIN_VERSION } = paths;
-
-const sanitize = require("./lib/sanitize");
-const { hashHmac, sanitizeToolData } = sanitize;
-
-const settings = require("./lib/settings");
-const {
-  getTelemetryOptIn,
-  saveTelemetryOptIn,
-} = settings;
-
-const repoScope = require("./lib/repo-scope");
-const { getRepoScopeDecision, getRepoScopeOrgFilter } = repoScope;
-
-const transfer = require("./lib/transfer");
-const {
-  sealEventLogAndTriggerDrain,
-  sealFinalSessionArtifacts,
-  sealFinalSessionArtifactsAndDrain,
-  sealEventLogAndDrain,
-  retryFailedLogs,
-  retryFailedTranscripts,
-  cleanupStaleFiles,
-} = transfer;
+const { getDeviceId, getOrCreateHashSalt } = credstore;
+const { LOG_DIR, LOG_FILE } = require("./lib/paths");
+const { hashHmac, sanitizeToolData } = require("./lib/sanitize");
+const { getTelemetryOptIn } = require("./lib/settings");
+const { getRepoScopeDecision } = require("./lib/repo-scope");
 
 // ---------------------------------------------------------------------------
 // Structured event log — the per-event NDJSON written to events.jsonl. The
@@ -109,24 +90,6 @@ function readStdin() {
 }
 
 // ---------------------------------------------------------------------------
-// License refresh — try the Lambda's /refresh endpoint first (no GitHub
-// round-trip, works for users without gh-cli), fall back to the silent gh
-// /activate path on 410 / 404 / network failure.
-//
-// The /refresh path keeps refresh latency low and decouples us from GitHub
-// availability + rate limits. /activate stays as the safety net for users
-// whose sliding-refresh-window has elapsed (or whose Lambda environment
-// hasn't deployed /refresh yet).
-// ---------------------------------------------------------------------------
-
-// Thin wrapper preserved for session_start.js. The orchestration now lives in
-// lib/license-activation.refreshLicense so the drain/upload path (lib/transfer)
-// can share it without a logger↔transfer require cycle.
-async function tryRefreshLicense(deviceId) {
-  return refreshLicense(deviceId);
-}
-
-// ---------------------------------------------------------------------------
 // Hook lifecycle — called by every script under scripts/*.js
 // ---------------------------------------------------------------------------
 
@@ -153,6 +116,25 @@ function resolveTelemetryGate(optIn, repoOrgOwned) {
   return { capture: false, mode: "not_enabled" };
 }
 
+// Default stderr messaging for the resolved gate, used by every hook that
+// doesn't supply an onGate reactor. Kept byte-identical to the historical
+// inline branch so hook diagnostics don't drift.
+function defaultGateMessaging(eventName, gate) {
+  if (!gate.capture) {
+    const reason =
+      gate.mode === "opted_out"
+        ? "telemetry disabled for this project"
+        : "telemetry not enabled";
+    console.error(`[skillmeter] ${eventName}: skipped (${reason})`);
+    return;
+  }
+  if (gate.mode === "auto_org") {
+    console.error(
+      `[skillmeter] ${eventName}: telemetry auto-enabled (repo owned by allowed org; run /skillmeter:telemetry disable to opt out)`
+    );
+  }
+}
+
 /**
  * Common hook runner — handles all boilerplate shared by every hook script.
  *
@@ -161,7 +143,9 @@ function resolveTelemetryGate(optIn, repoOrgOwned) {
  *   ctx provides { hashSalt, cwd, sanitizeToolData, getTranscriptId }.
  * @param {object} [options]
  * @param {function} [options.beforeStdin] - Called after deviceId check, before stdin read (e.g. retryFailedLogs)
- * @param {function} [options.checkOptIn] - Custom opt-in logic: (cwd, input) => boolean. Return false to exit.
+ * @param {function} [options.onGate] - Gate reactor: ({ gate, repoScopeDecision, cwd, input, eventName }) => void.
+ *   Runs after the gate is resolved (for banners/side-effects). The capture decision stays central —
+ *   runHook exits when gate.capture is false regardless. Without it, default stderr messaging is used.
  * @param {function} [options.afterSkip] - Called before exit when the event is skipped after stdin is read.
  * @param {function} [options.afterLog] - Called after logInfo for hook-local follow-up work.
  * @param {boolean} [options.awaitAfterSkip=false] - Await afterSkip when it returns a Promise.
@@ -193,24 +177,17 @@ async function runHook(eventName, buildData, options = {}) {
   // projects with no explicit opt-in, decides whether telemetry auto-enables.
   const repoScopeDecision = getRepoScopeDecision(cwd);
 
-  if (options.checkOptIn) {
-    if (!options.checkOptIn(cwd, input)) process.exit(0);
+  // Single gate: compute once, then let the caller REACT (banners/side-effects)
+  // via onGate — the capture decision stays central. Hooks without an onGate get
+  // the default stderr messaging. (Replaces the former checkOptIn override +
+  // duplicated policy in session_start.js.)
+  const gate = resolveTelemetryGate(getTelemetryOptIn(cwd), repoScopeDecision.allowed);
+  if (options.onGate) {
+    options.onGate({ gate, repoScopeDecision, cwd, input, eventName });
   } else {
-    const gate = resolveTelemetryGate(getTelemetryOptIn(cwd), repoScopeDecision.allowed);
-    if (!gate.capture) {
-      const reason =
-        gate.mode === "opted_out"
-          ? "telemetry disabled for this project"
-          : "telemetry not enabled";
-      console.error(`[skillmeter] ${eventName}: skipped (${reason})`);
-      process.exit(0);
-    }
-    if (gate.mode === "auto_org") {
-      console.error(
-        `[skillmeter] ${eventName}: telemetry auto-enabled (repo owned by allowed org; run /skillmeter:telemetry disable to opt out)`
-      );
-    }
+    defaultGateMessaging(eventName, gate);
   }
+  if (!gate.capture) process.exit(0);
 
   const sessionId = input.session_id || "unknown";
   const hashSalt = getOrCreateHashSalt();
@@ -281,47 +258,6 @@ async function runHook(eventName, buildData, options = {}) {
 // Public API for hook entrypoints and simple CLI wrappers.
 // ---------------------------------------------------------------------------
 
-module.exports = {
-  // Core
-  runHook,
-  resolveTelemetryGate,
-  readStdin,
-  getTimestamp,
-  logStructured,
-  logInfo,
-  getTranscriptId,
-
-  // Credstore wrappers
-  getDeviceId,
-  getOrCreateHashSalt,
-  getLicenseToken,
-
-  // Paths / metadata
-  PLUGIN_VERSION,
-  LOG_DIR,
-  LOG_FILE,
-
-  // License refresh
-  tryRefreshLicense,
-
-  // Re-exports from lib/sanitize
-  hashHmac,
-  sanitizeToolData,
-
-  // Re-exports from lib/settings
-  getTelemetryOptIn,
-  saveTelemetryOptIn,
-
-  // Re-exports from lib/repo-scope
-  getRepoScopeDecision,
-  getRepoScopeOrgFilter,
-
-  // Re-exports from lib/transfer
-  sealEventLogAndTriggerDrain,
-  sealFinalSessionArtifacts,
-  sealFinalSessionArtifactsAndDrain,
-  sealEventLogAndDrain,
-  retryFailedLogs,
-  retryFailedTranscripts,
-  cleanupStaleFiles,
-};
+// logger's only public responsibility is the hook lifecycle. Everything else
+// (log sink, gate policy, messaging) is internal; utilities live in lib/*.
+module.exports = { runHook };

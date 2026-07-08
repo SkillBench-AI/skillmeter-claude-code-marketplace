@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-const { runHook, sealEventLogAndDrain, sealFinalSessionArtifactsAndDrain } = require("./logger.js");
+const { runHook } = require("./logger.js");
+const { sealEventLogAndDrain, sealFinalSessionArtifactsAndDrain } = require("./lib/transfer");
 
 runHook("SessionEnd", (input) => ({
   reason: input.reason,

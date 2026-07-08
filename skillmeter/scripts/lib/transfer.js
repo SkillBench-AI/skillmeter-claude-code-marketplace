@@ -19,6 +19,7 @@ const credstore = require("../credstore");
 const { sanitizeTranscript } = require("./sanitize");
 const { getEndpointFromToken, getEndpointFromTokenAllowExpired, isJwtExpired } = require("./jwt");
 const { ensureFreshLicense } = require("./license-activation");
+const { getEventTimeoutMs } = require("./config");
 const {
   PLUGIN_ROOT,
   LOG_DIR,
@@ -32,7 +33,7 @@ const {
 // small event-log payloads where the latency is negligible.
 const gzipAsync = promisify(zlib.gzip);
 
-const EVENT_TIMEOUT = parseInt(process.env.SKILLMETER_TIMEOUT || "10", 10) * 1000;
+const EVENT_TIMEOUT = getEventTimeoutMs();
 const TRANSCRIPT_TIMEOUT = 30_000;
 const SESSION_END_DRAIN_TIMEOUT_MS = 5_000;
 
@@ -99,36 +100,12 @@ async function transferEventLog(logFile, timeoutMs = EVENT_TIMEOUT) {
   console.error(`[skillmeter] Transferring event log: ${baseName} (${compressed.length} bytes gzipped)`);
 
   try {
-    let res = await doPost(initialToken);
+    // Bearer when a valid token exists, plain POST otherwise — the collector
+    // accepts unauthenticated uploads, so the plain POST is what delivers today.
+    const res = await doPost(initialToken);
     if (res.ok) {
       console.error(`[skillmeter] Event log transferred: ${baseName}`);
       markSent();
-      return;
-    }
-    // Reactive: auth rejected (only possible if a gateway authorizer is added
-    // later — the collector itself accepts unauth today). Refresh once,
-    // single-flight, and retry with the fresh token. Never wipe the stored
-    // license on a transient rejection.
-    if (initialToken && (res.status === 401 || res.status === 403)) {
-      console.error(`[skillmeter] Event log auth rejected (HTTP ${res.status}), refreshing license and retrying`);
-      const fresh = await ensureFreshLicense(credstore.getDeviceId(), { force: true });
-      if (fresh && !isJwtExpired(fresh)) {
-        res = await doPost(fresh);
-        if (res.ok) {
-          console.error(`[skillmeter] Event log transferred on retry: ${baseName}`);
-          markSent();
-          return;
-        }
-      }
-      // Last resort: unauthenticated upload (collector accepts) — the path that
-      // actually delivers today.
-      res = await doPost(null);
-      if (res.ok) {
-        console.error(`[skillmeter] Event log transferred unauthenticated: ${baseName}`);
-        markSent();
-        return;
-      }
-      console.error(`[skillmeter] Event log retry failed: HTTP ${res.status}`);
       return;
     }
     console.error(`[skillmeter] Event log transfer failed: HTTP ${res.status}`);
@@ -312,32 +289,12 @@ async function uploadPendingTranscript(pendingPath, deviceId, timeoutMs = TRANSC
   console.error(`[skillmeter] Transferring transcript: ${transcriptId} (${compressed.length} bytes gzipped)`);
 
   try {
-    let res = await doPost(initialToken);
+    // Bearer when a valid token exists, plain POST otherwise — the collector
+    // accepts unauthenticated uploads, so the plain POST is what delivers today.
+    const res = await doPost(initialToken);
     if (res.ok) {
       console.error(`[skillmeter] Transcript transferred: ${transcriptId}`);
       removePending();
-      return;
-    }
-    // Reactive: refresh once (single-flight) and retry; never wipe the license.
-    if (initialToken && (res.status === 401 || res.status === 403)) {
-      console.error(`[skillmeter] Transcript auth rejected (HTTP ${res.status}), refreshing license and retrying`);
-      const fresh = await ensureFreshLicense(deviceId, { force: true });
-      if (fresh && !isJwtExpired(fresh)) {
-        res = await doPost(fresh);
-        if (res.ok) {
-          console.error(`[skillmeter] Transcript transferred on retry: ${transcriptId}`);
-          removePending();
-          return;
-        }
-      }
-      // Last resort: unauthenticated upload (collector accepts).
-      res = await doPost(null);
-      if (res.ok) {
-        console.error(`[skillmeter] Transcript transferred unauthenticated: ${transcriptId}`);
-        removePending();
-        return;
-      }
-      console.error(`[skillmeter] Transcript retry failed: HTTP ${res.status} — kept pending for next session`);
       return;
     }
     console.error(`[skillmeter] Transcript transfer failed: HTTP ${res.status} — kept pending for next session`);

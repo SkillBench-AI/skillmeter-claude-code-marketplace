@@ -12,6 +12,8 @@
  * `commitSignin`. Throws on any HTTP/network failure so the caller can
  * decide whether to abort.
  */
+const { GITHUB_API_USER_URL, GITHUB_API_ORGS_URL } = require("./config");
+
 async function fetchUserGitHubOrgs(githubToken) {
   const headers = {
     "Authorization": `Bearer ${githubToken}`,
@@ -20,7 +22,7 @@ async function fetchUserGitHubOrgs(githubToken) {
     "User-Agent": "skillmeter-cli",
   };
 
-  const userRes = await fetch("https://api.github.com/user", {
+  const userRes = await fetch(GITHUB_API_USER_URL, {
     headers,
     signal: AbortSignal.timeout(10_000),
   });
@@ -30,7 +32,7 @@ async function fetchUserGitHubOrgs(githubToken) {
   const userBody = await userRes.json();
   const userLogin = typeof userBody?.login === "string" ? userBody.login : "";
 
-  const orgsRes = await fetch("https://api.github.com/user/orgs?per_page=100", {
+  const orgsRes = await fetch(GITHUB_API_ORGS_URL, {
     headers,
     signal: AbortSignal.timeout(10_000),
   });
