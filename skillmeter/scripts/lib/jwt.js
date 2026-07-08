@@ -46,9 +46,9 @@ function isJwtExpired(token) {
  * entirely for local development / integration tests.
  *
  * No expiry gate: the endpoint is routing info (the per-tenant meter hostname),
- * still valid when the token has aged out — and the collector accepts
- * unauthenticated uploads, so a drain can still deliver while a refresh is
- * pending or failing. Never used for an auth decision; only to recover the URL.
+ * still readable from an aged-out token. It is never an auth decision — callers
+ * enforce a valid bearer separately (the backend rejects unauthenticated
+ * telemetry); this only recovers the destination URL.
  *
  * @param {string} token - License JWT (raw, as stored in the credstore)
  * @returns {string|null} Base URL with no trailing slash, or null when no
