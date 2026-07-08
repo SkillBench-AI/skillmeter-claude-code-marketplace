@@ -2,20 +2,20 @@
 
 /**
  * Unit tests for Level 1 harness detection — SBEE-166 (Phase 1) implementation
- * of the flat SBEE-164 harness-metadata contract, with the SBEE-165
- * sanitization integration.
+ * of the flat harness-metadata contract, updated for the v2.0 raw-identifier
+ * schema (SBEE-170).
  * Run with:  node --test skillmeter/test/harness.test.js
  *
  * detectHarness is pure filesystem inspection, so each test builds a throwaway
  * project tree (and a fake $HOME) and asserts on the emitted metadata shape.
- * The contract under test (spec/harness-metadata-contract.v1.json):
- *   - flat field set under data.harness; presence/shape metadata only, never
- *     raw file contents, hook command strings, or MCP env;
+ * The contract under test (spec/harness-metadata-contract.v1.json, v2.0):
+ *   - flat field set under data.harness; presence/shape metadata + RAW
+ *     identifiers (skill/subagent/command/MCP/plugin names) and permission
+ *     rules; never raw file CONTENT, hook command strings, or MCP env;
  *   - Level 2 (external_orchestration / multi_agent) is always "unknown";
  *   - detection never throws and degrades to safe defaults;
- *   - tier2_business names (skill/subagent/command/MCP/private plugin) are
- *     HMAC-hashed; public-marketplace plugin names stay raw;
- *   - Tier 1 fail-closed name scanning + redaction bookkeeping;
+ *   - identifiers are emitted RAW (no HMAC hashing); a name embedding a Tier 1
+ *     secret is still DROPPED fail-closed and tallied in `redactions`;
  *   - the emitted block survives the sanitizeEventData boundary.
  */
 
@@ -65,8 +65,6 @@ function addSkill(root, namespaceOrName, maybeName) {
   write(path.join(root, rel), "# skill\n");
 }
 
-const HASH12 = /^[0-9a-f]{12}$/;
-
 // ---------------------------------------------------------------------------
 
 test("bare project: flat defaults, Level 2 unknown, no raw content", () => {
@@ -75,8 +73,9 @@ test("bare project: flat defaults, Level 2 unknown, no raw content", () => {
 
   const h = detectHarness(root, { homeDir: home, repoRoot: root, hashSalt: SALT });
 
-  assert.equal(h.harness_schema_version, "1.0");
+  assert.equal(h.harness_schema_version, "2.0");
   assert.equal(h.agent_type, "claude-code");
+  assert.equal(h.agent_version, "");
   // instructions
   assert.equal(h.has_claude_md, false);
   assert.equal(h.has_claude_local_md, false);
@@ -89,13 +88,22 @@ test("bare project: flat defaults, Level 2 unknown, no raw content", () => {
   assert.equal(h.skills_present, false);
   assert.equal(h.skills_count, 0);
   assert.deepEqual(h.skill_source_counts, { project: 0, user: 0, plugin: 0 });
-  assert.deepEqual(h.skill_names_hashed, []);
+  assert.deepEqual(h.skill_names, []);
   assert.equal(h.subagents_present, false);
   assert.equal(h.subagents_count, 0);
+  assert.deepEqual(h.subagent_names, []);
   assert.equal(h.subagent_used, false);
   assert.equal(h.commands_present, false);
+  assert.deepEqual(h.command_names, []);
   assert.equal(h.has_mcp_config, false);
   assert.equal(h.mcp_servers_count, 0);
+  assert.deepEqual(h.mcp_server_names, []);
+  // permissions / sandbox
+  assert.equal(h.permission_default_mode, "");
+  assert.deepEqual(h.permission_allow, []);
+  assert.deepEqual(h.permission_deny, []);
+  assert.deepEqual(h.permission_ask, []);
+  assert.equal(h.permission_additional_directories_count, 0);
   // hooks
   assert.deepEqual(h.hooks_enabled, []);
   assert.equal(h.hooks_count, 0);
@@ -110,27 +118,31 @@ test("bare project: flat defaults, Level 2 unknown, no raw content", () => {
   // sanitization bookkeeping
   assert.equal(h.policy_version, sanitizer.POLICY_VERSION);
   assert.deepEqual(h.redactions, { hashed_count: 0, dropped_count: 0, by_type: {} });
+  // no legacy hashed fields
+  assert.equal(h.skill_names_hashed, undefined);
 });
 
 test("harness_schema_version matches the exported contract version", () => {
   const root = makeProject();
   const h = detectHarness(root, { homeDir: makeHome(), repoRoot: root, hashSalt: SALT });
   assert.equal(h.harness_schema_version, HARNESS_SCHEMA_VERSION);
-  assert.equal(h.harness_schema_version, "1.0");
+  assert.equal(h.harness_schema_version, "2.0");
 });
 
-test("carries runtime fields (agent_type, model, session_source, plugin_version)", () => {
+test("carries runtime fields (agent_type, agent_version, model, session_source, plugin_version)", () => {
   const root = makeProject();
   const h = detectHarness(root, {
     homeDir: makeHome(),
     repoRoot: root,
     hashSalt: SALT,
     agentType: "claude-code-1.0",
+    agentVersion: "2.3.4",
     model: "claude-sonnet-4",
     sessionSource: "startup",
     pluginVersion: "0.16.2",
   });
   assert.equal(h.agent_type, "claude-code-1.0");
+  assert.equal(h.agent_version, "2.3.4");
   assert.equal(h.model, "claude-sonnet-4");
   assert.equal(h.session_source, "startup");
   assert.equal(h.plugin_version, "0.16.2");
@@ -186,7 +198,7 @@ test("size bucket helper boundaries", () => {
   assert.equal(sizeBucket(200000), "xl");
 });
 
-test("skills: count, per-source counts, hashed names; skips hidden .system", () => {
+test("skills: count, per-source counts, RAW names; skips hidden .system", () => {
   const root = makeProject();
   const home = makeHome();
   addSkill(root, "deploy");
@@ -199,33 +211,25 @@ test("skills: count, per-source counts, hashed names; skips hidden .system", () 
   assert.equal(h.skills_present, true);
   assert.equal(h.skills_count, 3);
   assert.deepEqual(h.skill_source_counts, { project: 2, user: 1, plugin: 0 });
-  assert.equal(h.skill_names_hashed.length, 3);
-  for (const t of h.skill_names_hashed) assert.match(t, HASH12);
-  assert.equal(h.redactions.hashed_count, 3);
-  assert.deepEqual(h.redactions.by_type, { skill_name: 3 });
+  // v2.0: names emitted raw, sorted, nothing hashed or dropped.
+  assert.deepEqual(h.skill_names, ["deploy", "review-pr", "signin"]);
+  assert.equal(h.redactions.hashed_count, 0);
+  assert.equal(h.redactions.dropped_count, 0);
+  assert.deepEqual(h.redactions.by_type, {});
 });
 
-test("skill names are never emitted in plaintext", () => {
+test("skill names are emitted raw (v2.0), even without a hash salt", () => {
   const root = makeProject();
   const home = makeHome();
-  addSkill(root, "secret-internal-workflow");
-  const h = detectHarness(root, { homeDir: home, repoRoot: root, hashSalt: SALT });
-  assert.equal(h.skill_names, undefined);
-  assert.equal(h.skill_names_hashed.length, 1);
-  assert.notEqual(h.skill_names_hashed[0], "secret-internal-workflow");
+  addSkill(root, "internal-workflow");
+  // No salt passed: identifiers no longer depend on a salt.
+  const h = detectHarness(root, { homeDir: home, repoRoot: root });
+  assert.equal(h.skills_count, 1);
+  assert.deepEqual(h.skill_names, ["internal-workflow"]);
+  assert.equal(h.redactions.dropped_count, 0);
 });
 
-test("without a hash salt, tier2 names are dropped, not leaked", () => {
-  const root = makeProject();
-  const home = makeHome();
-  addSkill(root, "deploy");
-  const h = detectHarness(root, { homeDir: home, repoRoot: root }); // no salt
-  assert.equal(h.skills_count, 1); // count is still exact
-  assert.deepEqual(h.skill_names_hashed, []);
-  assert.equal(h.redactions.dropped_count, 1);
-});
-
-test("Tier 1 fail-closed: a skill name embedding a secret is dropped, not hashed", () => {
+test("Tier 1 fail-closed: a skill name embedding a secret is dropped, not emitted", () => {
   const root = makeProject();
   const home = makeHome();
   addSkill(root, "deploy");
@@ -234,13 +238,15 @@ test("Tier 1 fail-closed: a skill name embedding a secret is dropped, not hashed
   const h = detectHarness(root, { homeDir: home, repoRoot: root, hashSalt: SALT });
 
   assert.equal(h.skills_count, 2); // true on-disk total
-  assert.equal(h.skill_names_hashed.length, 1); // secret-bearing name excluded
+  assert.deepEqual(h.skill_names, ["deploy"]); // secret-bearing name excluded
+  assert.equal(h.redactions.hashed_count, 0);
   assert.equal(h.redactions.dropped_count, 1);
-  assert.equal(h.redactions.hashed_count, 1);
-  assert.deepEqual(h.redactions.by_type, { skill_name: 2 });
+  assert.deepEqual(h.redactions.by_type, { skill_name: 1 });
+  // The secret must not appear anywhere in the payload.
+  assert.ok(!JSON.stringify(h).includes("AKIAIOSFODNN7EXAMPLE"));
 });
 
-test("subagents: .claude/agents/*.md detected, counted, hashed", () => {
+test("subagents: .claude/agents/*.md detected, counted, raw names", () => {
   const root = makeProject();
   const home = makeHome();
   write(path.join(root, ".claude", "agents", "reviewer.md"), "# reviewer\n");
@@ -250,13 +256,11 @@ test("subagents: .claude/agents/*.md detected, counted, hashed", () => {
 
   assert.equal(h.subagents_present, true);
   assert.equal(h.subagents_count, 2);
-  assert.equal(h.subagent_names_hashed.length, 2);
-  for (const t of h.subagent_names_hashed) assert.match(t, HASH12);
+  assert.deepEqual(h.subagent_names, ["planner", "reviewer"]);
   assert.equal(h.subagent_used, false);
-  assert.equal(h.redactions.by_type.subagent_name, 2);
 });
 
-test("slash commands: .claude/commands/**/*.md detected with namespacing", () => {
+test("slash commands: .claude/commands/**/*.md detected with namespacing, raw names", () => {
   const root = makeProject();
   const home = makeHome();
   write(path.join(root, ".claude", "commands", "deploy.md"), "# deploy\n");
@@ -266,7 +270,7 @@ test("slash commands: .claude/commands/**/*.md detected with namespacing", () =>
 
   assert.equal(h.commands_present, true);
   assert.equal(h.commands_count, 2);
-  assert.equal(h.command_names_hashed.length, 2);
+  assert.deepEqual(h.command_names, ["deploy", "git:sync"]);
 });
 
 test("hooks: allow-listed event names, total entry count, and per-source counts", () => {
@@ -298,7 +302,38 @@ test("hooks: allow-listed event names, total entry count, and per-source counts"
   assert.equal(h.hooks_source_counts.user, 0);
 });
 
-test("MCP: .mcp.json servers detected and hashed; values never read", () => {
+test("permissions: defaultMode + raw allow/deny/ask rules, additionalDirectories counted", () => {
+  const root = makeProject();
+  const home = makeHome();
+  // User-level default mode; project rules override / add.
+  write(
+    path.join(home, ".claude", "settings.json"),
+    JSON.stringify({ permissions: { defaultMode: "default", allow: ["Read(src/**)"] } })
+  );
+  write(
+    path.join(root, ".claude", "settings.json"),
+    JSON.stringify({
+      permissions: {
+        defaultMode: "acceptEdits",
+        allow: ["Bash(npm run test:*)"],
+        deny: ["Bash(rm:*)"],
+        ask: ["WebFetch"],
+        additionalDirectories: ["../shared", "/tmp/scratch"],
+      },
+    })
+  );
+
+  const h = detectHarness(root, { homeDir: home, repoRoot: root, hashSalt: SALT });
+
+  // local > project > user precedence: project's acceptEdits wins over user default.
+  assert.equal(h.permission_default_mode, "acceptEdits");
+  assert.deepEqual([...h.permission_allow].sort(), ["Bash(npm run test:*)", "Read(src/**)"]);
+  assert.deepEqual(h.permission_deny, ["Bash(rm:*)"]);
+  assert.deepEqual(h.permission_ask, ["WebFetch"]);
+  assert.equal(h.permission_additional_directories_count, 2);
+});
+
+test("MCP: .mcp.json servers detected with RAW names; command/env never read", () => {
   const root = makeProject();
   const home = makeHome();
   write(
@@ -315,15 +350,14 @@ test("MCP: .mcp.json servers detected and hashed; values never read", () => {
 
   assert.equal(h.has_mcp_config, true);
   assert.equal(h.mcp_servers_count, 2);
-  assert.equal(h.mcp_server_names_hashed.length, 2);
-  for (const t of h.mcp_server_names_hashed) assert.match(t, HASH12);
-  // The hashed tokens must not be the raw names, and no command/env leaks.
+  assert.deepEqual(h.mcp_server_names, ["github", "sentry"]); // raw
+  // Server config (command / args / env) must NOT leak.
   const blob = JSON.stringify(h);
   assert.ok(!blob.includes("ghp_secret"));
   assert.ok(!blob.includes("npx"));
 });
 
-test("plugins/marketplaces: public names raw, private names hashed", () => {
+test("plugins/marketplaces: names raw, marketplace + public flag retained", () => {
   const root = makeProject();
   const home = makeHome();
   const pluginsDir = path.join(home, ".claude", "plugins");
@@ -333,7 +367,7 @@ test("plugins/marketplaces: public names raw, private names hashed", () => {
       version: 2,
       plugins: {
         "skillmeter@skillbench": [{ scope: "user", version: "0.16.2", installPath: "/x" }],
-        "secret-tool@acme-private": [{ scope: "user", version: "1.0.0", installPath: "/y" }],
+        "inhouse-tool@acme-private": [{ scope: "user", version: "1.0.0", installPath: "/y" }],
       },
     })
   );
@@ -346,24 +380,55 @@ test("plugins/marketplaces: public names raw, private names hashed", () => {
 
   assert.equal(h.plugins_count, 2);
   assert.equal(h.marketplaces_count, 2);
-  const skillmeter = h.plugins.find((p) => p.name === "skillmeter");
-  assert.ok(skillmeter, "public-marketplace plugin name kept raw");
-  assert.equal(skillmeter.version, "0.16.2");
-  const priv = h.plugins.find((p) => p.name_hashed);
-  assert.ok(priv, "private plugin name hashed");
-  assert.match(priv.name_hashed, HASH12);
+
+  const pub = h.plugins.find((p) => p.name === "skillmeter");
+  assert.ok(pub, "public-marketplace plugin name kept raw");
+  assert.equal(pub.version, "0.16.2");
+  assert.equal(pub.marketplace, "skillbench");
+  assert.equal(pub.public, true);
+
+  const priv = h.plugins.find((p) => p.name === "inhouse-tool");
+  assert.ok(priv, "private plugin name also raw (v2.0)");
   assert.equal(priv.version, "1.0.0");
-  const blob = JSON.stringify(h.plugins);
-  assert.ok(!blob.includes("secret-tool"));
+  assert.equal(priv.marketplace, "acme-private");
+  assert.equal(priv.public, false);
+  // No legacy name_hashed field.
+  assert.ok(h.plugins.every((p) => p.name_hashed === undefined));
+});
+
+test("Tier 1 fail-closed: a plugin name embedding a secret is dropped", () => {
+  const root = makeProject();
+  const home = makeHome();
+  const pluginsDir = path.join(home, ".claude", "plugins");
+  write(
+    path.join(pluginsDir, "installed_plugins.json"),
+    JSON.stringify({
+      version: 2,
+      plugins: {
+        "ok-tool@skillbench": [{ scope: "user", version: "1.0.0", installPath: "/x" }],
+        "AWS_SECRET_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE@acme": [
+          { scope: "user", version: "1.0.0", installPath: "/y" },
+        ],
+      },
+    })
+  );
+
+  const h = detectHarness(root, { homeDir: home, repoRoot: root, hashSalt: SALT });
+
+  assert.equal(h.plugins_count, 2); // true on-disk total
+  assert.equal(h.plugins.length, 1); // secret-bearing entry dropped
+  assert.equal(h.plugins[0].name, "ok-tool");
+  assert.equal(h.redactions.by_type.plugin_name, 1);
+  assert.ok(!JSON.stringify(h).includes("AKIAIOSFODNN7EXAMPLE"));
 });
 
 test("never throws on a bogus cwd; returns safe defaults", () => {
-  const h = detectHarness("/nonexistent/path/ bad", {
+  const h = detectHarness("/nonexistent/path/ bad", {
     homeDir: "/also/nonexistent",
     repoRoot: "",
     hashSalt: SALT,
   });
-  assert.equal(h.harness_schema_version, "1.0");
+  assert.equal(h.harness_schema_version, "2.0");
   assert.equal(h.skills_count, 0);
   assert.deepEqual(h.hooks_enabled, []);
   assert.equal(h.multi_agent, "unknown");
@@ -392,7 +457,7 @@ test("emitted harness object survives the sanitizeEventData boundary", () => {
   assert.equal(meta.tier1, 0);
   assert.equal(value.harness.has_claude_md, true);
   assert.equal(value.harness.skills_count, 1);
-  assert.equal(value.harness.skill_names_hashed.length, 1);
+  assert.deepEqual(value.harness.skill_names, ["deploy"]);
 });
 
 test("findRepoRoot walks up to the .git marker", () => {
