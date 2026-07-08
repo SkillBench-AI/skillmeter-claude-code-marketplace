@@ -273,7 +273,7 @@ Resolution order is env var → settings file → built-in default. Typically yo
 
 ## Repo-Scoped Filtering
 
-Telemetry is gated to repositories owned by GitHub identities captured and persisted during `/skillmeter:signin`. The allowed list includes the signed-in user's own login plus every org returned by `GET /user/orgs` at sign-in time, stored in `~/.skillbench/credentials.json` next to the device ID and license JWT. Only repositories matching an identity in this persisted allow-list are eligible for telemetry.
+Telemetry is gated to repositories owned by the GitHub org your license was validated for. That org is decided by the license activator and carried in the license JWT's `org` claim (read via `getAllowedGitHubOrgs` → `getLicenseOrgs`); the client does not fetch or persist a GitHub org list. Only repositories whose GitHub remote owner matches the licensed org are eligible for telemetry.
 
 Events are dropped — even in workdirs where the user ran `/skillmeter:telemetry enable` — for:
 

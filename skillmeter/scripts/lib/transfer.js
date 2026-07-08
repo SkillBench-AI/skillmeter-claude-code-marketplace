@@ -17,7 +17,7 @@ const { spawn } = require("child_process");
 
 const credstore = require("../credstore");
 const { sanitizeTranscript } = require("./sanitize");
-const { getEndpointFromToken, getEndpointFromTokenAllowExpired, isJwtExpired } = require("./jwt");
+const { getEndpointFromTokenAllowExpired, isJwtExpired } = require("./jwt");
 const { ensureFreshLicense } = require("./license-activation");
 const { getEventTimeoutMs } = require("./config");
 const {
@@ -66,7 +66,7 @@ async function transferEventLog(logFile, timeoutMs = EVENT_TIMEOUT) {
   // Endpoint is routing info — resolvable even from an expired token. The
   // collector accepts unauthenticated uploads, so a drain still delivers while
   // a refresh is pending/failing.
-  const endpoint = getEndpointFromToken(storedToken) || getEndpointFromTokenAllowExpired(storedToken);
+  const endpoint = getEndpointFromTokenAllowExpired(storedToken);
   if (!endpoint) {
     console.error(`[skillmeter] Event log: no telemetry endpoint resolvable from license JWT — leaving for retry`);
     return;
@@ -246,7 +246,7 @@ async function uploadPendingTranscript(pendingPath, deviceId, timeoutMs = TRANSC
     console.error(`[skillmeter] Transcript: dropping expired license JWT before send`);
   }
 
-  const endpoint = getEndpointFromToken(storedToken) || getEndpointFromTokenAllowExpired(storedToken);
+  const endpoint = getEndpointFromTokenAllowExpired(storedToken);
   if (!endpoint) {
     console.error(`[skillmeter] Transcript: no telemetry endpoint resolvable from license JWT — leaving for retry`);
     return;

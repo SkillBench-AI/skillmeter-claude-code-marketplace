@@ -200,12 +200,14 @@ function setTelemetryDisabled(value) {
   _cache = store;
 }
 
-// Drop license + org list atomically. Preserves device_id and hash_salt
-// so the machine identity survives a sign-out / sign-in cycle.
+// Drop the license JWT atomically (the validated org lives in the JWT, so
+// nothing else needs clearing). Also removes the obsolete allowed_github_orgs
+// key left by pre-JWT-org versions. Preserves device_id and hash_salt so the
+// machine identity survives a sign-out / sign-in cycle.
 function signOut() {
   const store = readStore();
   delete store.license_jwt;
-  delete store.allowed_github_orgs;
+  delete store.allowed_github_orgs; // legacy-key cleanup
   store.signed_out = true;
   writeStore(store);
   _cache = store;
