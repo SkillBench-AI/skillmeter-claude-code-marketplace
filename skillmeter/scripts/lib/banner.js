@@ -46,4 +46,25 @@ function telemetryActiveBanner(org) {
   return box([brandLine("✓"), org ? `Telemetry active · @${org}` : "Telemetry active"]);
 }
 
-module.exports = { welcomeBanner, signInRequiredBanner, telemetryActiveBanner };
+// One-line notice shown at SessionStart after a drain uploaded telemetry.
+// Plain text (systemMessage renders ANSI literally); ✓ and · are plain Unicode.
+function telemetrySentNotice(events, transcripts) {
+  const parts = [];
+  if (events > 0) parts.push(`${events} event${events === 1 ? "" : "s"}`);
+  if (transcripts > 0) parts.push(`${transcripts} transcript${transcripts === 1 ? "" : "s"}`);
+  const what = parts.length ? ` · ${parts.join(", ")}` : "";
+  return `✓ SkillMeter · telemetry sent${what}`;
+}
+
+// One-line notice shown at SessionStart when the last drain failed to transmit.
+function telemetryFailedNotice(error) {
+  return `✗ SkillMeter · telemetry send failed${error ? ` · ${error}` : ""}`;
+}
+
+module.exports = {
+  welcomeBanner,
+  signInRequiredBanner,
+  telemetryActiveBanner,
+  telemetrySentNotice,
+  telemetryFailedNotice,
+};

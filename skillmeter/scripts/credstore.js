@@ -89,6 +89,41 @@ function ensureSigninResultFile() {
 }
 
 // ---------------------------------------------------------------------------
+// Upload result sentinel — records the outcome of a successful telemetry drain
+// (which runs in a detached process that can't print to the session). The next
+// SessionStart reads it and shows a one-line "telemetry sent" notice, then
+// marks it notified so it isn't repeated. Written only when a drain uploaded
+// something.
+// ---------------------------------------------------------------------------
+
+const UPLOAD_RESULT_FILE = path.join(path.dirname(CRED_FILE), "upload-result.json");
+
+// Record a drain outcome — success counts (events/transcripts) or a transmission
+// `error`. `notified:false` so the next SessionStart surfaces it exactly once.
+// Best-effort; a missing sentinel just means no notice.
+function writeUploadResult({ events = 0, transcripts = 0, error = null } = {}) {
+  try {
+    atomicWriteJson(UPLOAD_RESULT_FILE, { events, transcripts, error, ts: Date.now(), notified: false });
+  } catch {}
+}
+
+function readUploadResult() {
+  try {
+    return JSON.parse(fs.readFileSync(UPLOAD_RESULT_FILE, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+// Flag the current result as shown, so it isn't surfaced again next session.
+function markUploadNotified() {
+  try {
+    const cur = readUploadResult();
+    if (cur && !cur.notified) atomicWriteJson(UPLOAD_RESULT_FILE, { ...cur, notified: true });
+  } catch {}
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -270,4 +305,9 @@ module.exports = {
   writeSigninResult,
   readSigninResult,
   ensureSigninResultFile,
+  // Upload result sentinel (for the SessionStart "telemetry sent" notice)
+  UPLOAD_RESULT_FILE,
+  writeUploadResult,
+  readUploadResult,
+  markUploadNotified,
 };
