@@ -39,36 +39,21 @@ function isJwtExpired(token) {
 }
 
 /**
- * Resolve the telemetry endpoint for the current license. The activation
- * Lambda mints a `telemetry_endpoint` claim into every JWT (resolved against
- * the tenant slug at issuance), so each tenant's traffic routes to its own
- * meter hostname without per-tenant plugin builds.
+ * Resolve the telemetry endpoint for the current license. The activation Lambda
+ * mints a `telemetry_endpoint` claim into every JWT (resolved against the tenant
+ * slug at issuance), so each tenant's traffic routes to its own meter hostname
+ * without per-tenant plugin builds. `SKILLMETER_BACKEND_URL` bypasses the JWT
+ * entirely for local development / integration tests.
  *
- * `SKILLMETER_BACKEND_URL` bypasses the JWT entirely for local development
- * and integration tests — point it at a fake server without minting a token.
+ * No expiry gate: the endpoint is routing info (the per-tenant meter hostname),
+ * still valid when the token has aged out — and the collector accepts
+ * unauthenticated uploads, so a drain can still deliver while a refresh is
+ * pending or failing. Never used for an auth decision; only to recover the URL.
  *
  * @param {string} token - License JWT (raw, as stored in the credstore)
  * @returns {string|null} Base URL with no trailing slash, or null when no
  *   endpoint can be resolved. Callers must skip the upload on null and leave
  *   the on-disk file for retry once a fresh JWT is available.
- */
-function getEndpointFromToken(token) {
-  const override = getBackendUrlOverride();
-  if (override) return override;
-  if (!token) return null;
-  if (isJwtExpired(token)) return null;
-  const payload = decodeJwtPayload(token);
-  if (!payload) return null;
-  if (typeof payload.telemetry_endpoint !== "string") return null;
-  return payload.telemetry_endpoint;
-}
-
-/**
- * Like getEndpointFromToken but WITHOUT the expiry gate. The telemetry
- * endpoint is routing info (the per-tenant meter hostname), still valid when
- * the token has aged out — and the collector accepts unauthenticated uploads,
- * so a drain can still deliver while a refresh is pending or failing. Never
- * used for an auth decision; only to recover the destination URL.
  */
 function getEndpointFromTokenAllowExpired(token) {
   const override = getBackendUrlOverride();
@@ -105,7 +90,6 @@ module.exports = {
   JWT_EXPIRY_GRACE_SECONDS,
   decodeJwtPayload,
   isJwtExpired,
-  getEndpointFromToken,
   getEndpointFromTokenAllowExpired,
   getLicenseOrgs,
 };

@@ -1,8 +1,8 @@
 /**
- * Decide whether an event originating in `cwd` should be captured, based on
- * the GitHub org/user of the repo's remote(s) and the signed-in user's
- * GitHub identities (their own login + org memberships, captured at
- * `/skillmeter:signin` time).
+ * Decide whether an event originating in `cwd` should be captured, by matching
+ * the GitHub org of the repo's remote(s) against the org the license was
+ * validated for (the JWT `org` claim, surfaced via
+ * credstore.getAllowedGitHubOrgs).
  *
  * Nothing here shells out to `git`; the plugin walks `.git/config` directly
  * so hooks don't pay a fork-per-event cost.

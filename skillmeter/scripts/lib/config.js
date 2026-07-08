@@ -102,9 +102,6 @@ function getEventTimeoutMs() {
 function getRetryDaemonIntervalMs() {
   return parseInt(process.env.SKILLMETER_RETRY_DAEMON_INTERVAL_MS || "", 10) || 120_000; // retry_daemon.js:28
 }
-function isColorEnabled() {
-  return !process.env.NO_COLOR; // banner.js:45
-}
 
 module.exports = {
   IS_DEV,
@@ -116,7 +113,6 @@ module.exports = {
   getBackendUrlOverride,
   getEventTimeoutMs,
   getRetryDaemonIntervalMs,
-  isColorEnabled,
   GITHUB_DEVICE_CODE_URL,
   GITHUB_TOKEN_URL,
   GITHUB_OAUTH_SCOPE,

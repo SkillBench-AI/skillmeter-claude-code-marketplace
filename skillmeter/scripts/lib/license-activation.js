@@ -182,36 +182,29 @@ async function trySilentGhActivate(deviceId) {
 // ---------------------------------------------------------------------------
 
 const LICENSE_REFRESH_LOCK_FILE = path.join(LOG_DIR, ".license-refresh.lock");
-// Don't retry a refresh within this window of the last attempt (non-force).
+// Don't retry a refresh within this window of the last attempt. Also serves as
+// the in-flight single-flight window: a lock younger than this means another
+// process is mid-refresh (or just finished), so we skip.
 const LICENSE_REFRESH_COOLDOWN_MS = 60_000;
-// A lock younger than this is assumed held by a live, in-flight refresh
-// (worst case ~13s: 5s /refresh + 5s gh-activate fetch + 3s `gh auth token`).
-// Older locks are reclaimable, so a crashed holder can't wedge refresh.
-const LICENSE_REFRESH_STALE_MS = 15_000;
 
 /**
- * Pure single-flight + cooldown decision (no I/O — unit-testable).
+ * Pure single-flight + cooldown decision (no I/O — unit-testable). All callers
+ * are best-effort/proactive (there's no reactive force path), so a lock younger
+ * than the cooldown simply means "someone else has it / just refreshed" → skip.
  * @param {boolean} tokenFresh   - current token exists and is not near expiry
- * @param {boolean} force        - reactive path (e.g. a 401); ignores cooldown
  * @param {number|null} lockMtimeMs - mtime of the lock file, or null if absent
  * @param {number} now           - Date.now()
  * @returns {"return_current"|"acquire_and_refresh"|"skip_locked"}
  */
 function shouldRefresh(
   tokenFresh,
-  force,
   lockMtimeMs,
   now,
-  cooldownMs = LICENSE_REFRESH_COOLDOWN_MS,
-  staleMs = LICENSE_REFRESH_STALE_MS
+  cooldownMs = LICENSE_REFRESH_COOLDOWN_MS
 ) {
-  if (tokenFresh && !force) return "return_current";
+  if (tokenFresh) return "return_current";
   const lockAge = lockMtimeMs == null ? Infinity : now - lockMtimeMs;
-  // A live in-flight holder — never stampede, even on force.
-  if (lockAge < staleMs) return "skip_locked";
-  // Non-force also honors the cooldown so we don't hammer /refresh; force
-  // (a real auth rejection) bypasses cooldown but respected the lock above.
-  if (!force && lockAge < cooldownMs) return "skip_locked";
+  if (lockAge < cooldownMs) return "skip_locked";
   return "acquire_and_refresh";
 }
 
@@ -244,7 +237,7 @@ async function refreshLicense(deviceId) {
  * every drain/upload — cheap no-op when the token is already fresh, and
  * non-blocking when another process holds the refresh lock.
  */
-async function ensureFreshLicense(deviceId, { force = false } = {}) {
+async function ensureFreshLicense(deviceId) {
   if (!deviceId) return null;
   if (credstore.getSignedOut()) return null;
 
@@ -258,7 +251,7 @@ async function ensureFreshLicense(deviceId, { force = false } = {}) {
     // lock absent
   }
 
-  const action = shouldRefresh(tokenFresh, force, lockMtimeMs, Date.now());
+  const action = shouldRefresh(tokenFresh, lockMtimeMs, Date.now());
   // return_current or skip_locked: hand back what we have without blocking.
   if (action !== "acquire_and_refresh") return current;
 
@@ -289,5 +282,4 @@ module.exports = {
   refreshLicense,
   ensureFreshLicense,
   LICENSE_REFRESH_COOLDOWN_MS,
-  LICENSE_REFRESH_STALE_MS,
 };
