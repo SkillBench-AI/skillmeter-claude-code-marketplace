@@ -18,6 +18,7 @@ const { LOG_DIR } = require("./paths");
 // (env > settings > dev-bundle > prod default). Re-exported below so
 // signin.js keeps consuming licenseActivation.getActivateUrl unchanged.
 const { getActivateUrl, getRefreshUrl } = require("./config");
+const { postBearerJson } = require("./http");
 
 /**
  * Rotate an existing license JWT through the Lambda's /refresh endpoint.
@@ -39,15 +40,7 @@ async function refreshExpiredJwt(jwt, deviceId) {
 
   let res;
   try {
-    res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${jwt}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ device_id: deviceId }),
-      signal: AbortSignal.timeout(5000),
-    });
+    res = await postBearerJson(url, jwt, { device_id: deviceId }, { timeoutMs: 5000 });
   } catch (err) {
     console.error(`[skillmeter] license refresh failed: network error (${err.message})`);
     return null;
@@ -129,15 +122,7 @@ async function trySilentGhActivate(deviceId) {
 
   let res;
   try {
-    res = await fetch(getActivateUrl(), {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${ghToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ device_id: deviceId }),
-      signal: AbortSignal.timeout(5000),
-    });
+    res = await postBearerJson(getActivateUrl(), ghToken, { device_id: deviceId }, { timeoutMs: 5000 });
   } catch (err) {
     console.error(`[skillmeter] gh activation failed: network error (${err.message})`);
     return null;

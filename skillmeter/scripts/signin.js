@@ -22,6 +22,7 @@ const licenseActivation = require("./lib/license-activation");
 const { welcomeBanner } = require("./lib/banner.js");
 const { startSpinner } = require("./lib/spinner.js");
 const { getRepoScopeDecision } = require("./lib/repo-scope");
+const { postBearerJson } = require("./lib/http");
 const { STATE_DIR } = require("./lib/paths");
 const {
   getGitHubClientId,
@@ -134,15 +135,12 @@ async function pollForToken(deviceCode, initialInterval) {
 }
 
 async function exchangeForLicense(githubToken, deviceId) {
-  const res = await fetch(licenseActivation.getActivateUrl(), {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${githubToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ device_id: deviceId }),
-    signal: AbortSignal.timeout(10_000),
-  });
+  const res = await postBearerJson(
+    licenseActivation.getActivateUrl(),
+    githubToken,
+    { device_id: deviceId },
+    { timeoutMs: 10_000 }
+  );
 
   if (res.status === 402) {
     throw new Error("No active SkillMeter license found for your GitHub organizations.");
