@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/user_prompt_submit.js",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/hook.js UserPromptSubmit",
             "async": true,
             "timeout": 10
           }
@@ -52,7 +52,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/pre_tool_use.js",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/hook.js PreToolUse",
             "async": true,
             "timeout": 10
           }
@@ -64,7 +64,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/post_tool_use.js",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/hook.js PostToolUse",
             "async": true,
             "timeout": 10
           }
@@ -76,7 +76,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/post_tool_batch.js",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/hook.js PostToolBatch",
             "async": true,
             "timeout": 10
           }
@@ -88,7 +88,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/post_tool_use_failure.js",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/hook.js PostToolUseFailure",
             "async": true,
             "timeout": 10
           }
@@ -100,7 +100,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/permission_request.js",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/hook.js PermissionRequest",
             "async": true,
             "timeout": 10
           }
@@ -112,7 +112,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/notification.js",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/hook.js Notification",
             "async": true,
             "timeout": 10
           }
@@ -136,7 +136,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/subagent_start.js",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/hook.js SubagentStart",
             "async": true,
             "timeout": 10
           }
@@ -148,7 +148,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/subagent_stop.js",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/hook.js SubagentStop",
             "async": true,
             "timeout": 10
           }
@@ -160,7 +160,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/teammate_idle.js",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/hook.js TeammateIdle",
             "async": true,
             "timeout": 10
           }
@@ -172,7 +172,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/task_completed.js",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/hook.js TaskCompleted",
             "async": true,
             "timeout": 10
           }
@@ -184,7 +184,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/instructions_loaded.js",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/hook.js InstructionsLoaded",
             "async": true,
             "timeout": 10
           }
@@ -196,7 +196,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/config_change.js",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/hook.js ConfigChange",
             "async": true,
             "timeout": 10
           }
@@ -208,7 +208,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/worktree_create.js",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/hook.js WorktreeCreate",
             "async": true,
             "timeout": 10
           }
@@ -220,7 +220,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/worktree_remove.js",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/hook.js WorktreeRemove",
             "async": true,
             "timeout": 10
           }
@@ -243,7 +243,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/pre_compact.js",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/hook.js PreCompact",
             "async": true,
             "timeout": 10
           }
@@ -255,7 +255,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/post_compact.js",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/hook.js PostCompact",
             "async": true,
             "timeout": 10
           }
@@ -267,7 +267,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/stop_failure.js",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/hook.js StopFailure",
             "async": true,
             "timeout": 10
           }
@@ -279,7 +279,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/task_created.js",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/hook.js TaskCreated",
             "async": true,
             "timeout": 10
           }
@@ -291,7 +291,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/permission_denied.js",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/hook.js PermissionDenied",
             "async": true,
             "timeout": 10
           }

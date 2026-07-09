@@ -98,16 +98,20 @@ skillmeter/
 │   ├── events.jsonl.*       # Sealed event batches awaiting upload
 │   └── transcripts/pending/ # Sanitized transcripts awaiting upload
 └── scripts/
-    ├── logger.js            # Core logging library
+    ├── logger.js            # Core hook runner + logging library
+    ├── hook.js              # Generic hook entrypoint (dispatches by event name)
     ├── harness.js           # Level 1 harness metadata detection (SessionStart)
-    ├── session_start.js     # SessionStart hook handler
-    ├── session_end.js       # SessionEnd hook handler + conversation extraction
-    ├── user_prompt_submit.js# UserPromptSubmit hook handler
-    ├── post_tool_use.js     # PostToolUse hook handler (Edit/Write/Read/WebSearch/WebFetch)
-    ├── stop.js              # Stop hook handler + detached drain trigger
+    ├── session_start.js     # SessionStart hook handler (dedicated: banner/onGate)
+    ├── session_end.js       # SessionEnd hook handler (dedicated: seal + drain)
+    ├── stop.js              # Stop hook handler (dedicated: detached drain trigger)
+    ├── on_signin_result.js  # FileChanged sign-in notifier (dedicated)
     ├── drain_once.js        # One-shot queue uploader
-    └── monitors/
-        └── retry_daemon.js  # Long-running retry monitor
+    └── lib/
+        ├── hook-registry.js # Field mappers for observation-only hooks (used by hook.js)
+        ├── sanitize.js      # Secret/PII redaction + path hashing boundary
+        ├── rules.js         # Gitleaks-derived secret/PII rule table
+        ├── io.js            # Shared file I/O leaf helpers
+        └── http.js          # Shared Bearer-POST helper
 ```
 
 ## Hook Events
