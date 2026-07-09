@@ -88,3 +88,43 @@ test("isJwtExpired honors skewSeconds", () => {
 test("isJwtExpired: a long-lived token is never expired", () => {
   assert.equal(isJwtExpired(mkJwt(3600)), false);
 });
+
+// --- hook dispatch registry ↔ hooks.json contract --------------------------
+
+test("every hook.js-dispatched event has a matching registry mapper", () => {
+  const registry = require("../scripts/lib/hook-registry");
+  const hooks = require("../hooks/hooks.json").hooks;
+
+  const dispatched = [];
+  for (const [event, entries] of Object.entries(hooks)) {
+    const cmd = entries[0].hooks[0].command;
+    const m = cmd.match(/hook\.js (\w+)/);
+    if (m) dispatched.push([event, m[1]]);
+  }
+
+  assert.ok(dispatched.length >= 15, "expected many events routed through hook.js");
+  for (const [event, arg] of dispatched) {
+    assert.equal(event, arg, `hooks.json event ${event} must pass its own name`);
+    assert.equal(
+      typeof registry[arg],
+      "function",
+      `registry is missing a mapper for ${arg}`
+    );
+  }
+
+  // No orphan registry entries (every mapper is wired in hooks.json).
+  const referenced = new Set(dispatched.map((d) => d[1]));
+  for (const key of Object.keys(registry)) {
+    assert.ok(referenced.has(key), `registry mapper ${key} is not wired in hooks.json`);
+  }
+});
+
+test("registry mappers return an object and can use ctx", () => {
+  const registry = require("../scripts/lib/hook-registry");
+  const ctx = { getTranscriptId: (p) => (p ? require("path").basename(p) : "") };
+  assert.deepEqual(registry.WorktreeCreate({ name: "wt" }), { name: "wt" });
+  assert.equal(
+    registry.SubagentStop({ agent_transcript_path: "/x/y-uuid.jsonl" }, ctx).agent_transcript_path,
+    "y-uuid.jsonl"
+  );
+});
