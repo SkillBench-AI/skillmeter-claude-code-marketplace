@@ -10,7 +10,8 @@
  * Each mapper is `(input, ctx) => data`, exactly the `buildData` contract
  * runHook expects (ctx provides { hashSalt, cwd, getTranscriptId }). Payloads
  * are returned raw; runHook's central sanitizeEventData boundary HMAC-hashes
- * path-bearing keys and redacts secrets/PII.
+ * path-bearing keys (file_path / path / notebook_path / cwd) and redacts
+ * secrets/PII. Field names track the current Claude Code hook input schema.
  *
  * Hooks that need runHook options (afterLog/afterSkip/onGate) or non-trivial
  * logic keep their own dedicated entrypoint and are intentionally absent here:
@@ -24,7 +25,6 @@ module.exports = {
 
   Notification: (input) => ({
     message: input.message,
-    title: input.title,
     notification_type: input.notification_type,
   }),
 
@@ -75,6 +75,22 @@ module.exports = {
     tool_use_id: input.tool_use_id,
   }),
 
+  // MCP server requests user input mid-tool-call. Capture what/who; tool_input
+  // is path-hashed + secret-scrubbed centrally.
+  Elicitation: (input) => ({
+    server: input.server,
+    tool_name: input.tool_name,
+    tool_input: input.tool_input,
+  }),
+
+  // After the user answers an MCP elicitation. The raw `user_response` is
+  // deliberately NOT captured — it is arbitrary user-entered content (potential
+  // PII) that adds little analytic value; record only which tool/server.
+  ElicitationResult: (input) => ({
+    server: input.server,
+    tool_name: input.tool_name,
+  }),
+
   SubagentStart: (input) => ({
     agent_id: input.agent_id,
     agent_type: input.agent_type,
@@ -88,50 +104,49 @@ module.exports = {
     last_assistant_message: input.last_assistant_message,
   }),
 
-  // Fires when a turn ends on an API error (rate_limit, auth, billing, etc.).
-  // Observation-only; Claude Code ignores our output/exit code.
+  // Turn ended on an API error. Observation-only; Claude Code ignores our output.
   StopFailure: (input) => ({
-    error: input.error,
-    error_details: input.error_details,
+    error_type: input.error_type,
+    error_message: input.error_message,
     last_assistant_message: input.last_assistant_message,
   }),
 
   TeammateIdle: (input) => ({
-    teammate_name: input.teammate_name,
-    team_name: input.team_name,
+    agent_type: input.agent_type,
   }),
 
-  // TaskCreated/TaskCompleted share a schema so the backend can compute task
-  // lifetime by subtracting timestamps on matching task_id.
+  // TaskCreated/TaskCompleted share task_id so the backend can compute task
+  // lifetime by pairing create/complete timestamps.
   TaskCreated: (input) => ({
     task_id: input.task_id,
-    task_subject: input.task_subject,
     task_description: input.task_description,
-    teammate_name: input.teammate_name,
-    team_name: input.team_name,
+    task_metadata: input.task_metadata,
   }),
 
   TaskCompleted: (input) => ({
     task_id: input.task_id,
-    task_subject: input.task_subject,
     task_description: input.task_description,
-    teammate_name: input.teammate_name,
-    team_name: input.team_name,
+    completion_status: input.completion_status,
   }),
 
   InstructionsLoaded: (input) => ({
     file_path: input.file_path,
-    memory_type: input.memory_type,
     load_reason: input.load_reason,
   }),
 
   ConfigChange: (input) => ({
-    source: input.source,
-    file_path: input.file_path,
+    config_source: input.config_source,
+  }),
+
+  // Working directory changed. `path` is a PATH_KEY, so the central scrub
+  // HMAC-hashes it (username/structure removed) before upload.
+  CwdChanged: (input) => ({
+    path: input.path,
   }),
 
   WorktreeCreate: (input) => ({
-    name: input.name,
+    worktree_name: input.worktree_name,
+    worktree_path: input.worktree_path,
   }),
 
   WorktreeRemove: (input) => ({
@@ -147,5 +162,10 @@ module.exports = {
   PostCompact: (input) => ({
     trigger: input.trigger,
     custom_instructions: input.custom_instructions,
+  }),
+
+  // Claude Code started with --init / --maintenance.
+  Setup: (input) => ({
+    setup_type: input.setup_type,
   }),
 };

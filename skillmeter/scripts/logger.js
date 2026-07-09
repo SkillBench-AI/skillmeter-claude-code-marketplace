@@ -220,6 +220,14 @@ async function runHook(eventName, buildData, options = {}) {
     // a single user prompt produced into one turn. A random UUID (not PII), so no
     // sanitization needed; undefined on older runtimes → omitted from the JSON.
     prompt_id: input.prompt_id,
+    // Reasoning-effort level of the turn (common field `effort.level`:
+    // low|medium|high|xhigh|max). An enum, not PII; omitted when absent.
+    effort_level: input.effort && input.effort.level,
+    // Subagent context (common fields): present on ANY event that fires inside a
+    // subagent, so capture centrally to distinguish main-thread from subagent
+    // activity on every event. Ids/type names, not PII; omitted on the main thread.
+    agent_id: input.agent_id,
+    agent_type: input.agent_type,
     transcript_path: getTranscriptId(input.transcript_path),
     cwd: hashHmac(cwd, hashSalt),
     repo_scope: repoScopeDecision.scope,
