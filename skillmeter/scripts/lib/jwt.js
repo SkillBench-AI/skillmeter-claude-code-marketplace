@@ -47,10 +47,15 @@ function isJwtExpired(token, {
 
 /**
  * Resolve the telemetry endpoint for the current license. The activation Lambda
- * mints a `telemetry_endpoint` claim into every JWT (resolved against the tenant
- * slug at issuance), so each tenant's traffic routes to its own meter hostname
- * without per-tenant plugin builds. `SKILLMETER_BACKEND_URL` bypasses the JWT
- * entirely for local development / integration tests.
+ * mints the tenant's meter URL into the standard JWT `aud` (audience) claim —
+ * the token's intended recipient IS the tenant's meter host — so each tenant's
+ * traffic routes to its own hostname without per-tenant plugin builds.
+ * `SKILLMETER_BACKEND_URL` bypasses the JWT entirely for local development /
+ * integration tests.
+ *
+ * `aud` may be a string or an array of strings (RFC 7519); we take the first
+ * `http(s)` URL. No other claim is consulted — the token must carry the endpoint
+ * in `aud`.
  *
  * No expiry gate: the endpoint is routing info (the per-tenant meter hostname),
  * still readable from an aged-out token. It is never an auth decision — callers
@@ -67,8 +72,11 @@ function getEndpointFromTokenAllowExpired(token) {
   if (override) return override;
   if (!token) return null;
   const payload = decodeJwtPayload(token);
-  if (!payload || typeof payload.telemetry_endpoint !== "string") return null;
-  return payload.telemetry_endpoint;
+  if (!payload) return null;
+
+  const auds = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
+  const audUrl = auds.find((a) => typeof a === "string" && /^https?:\/\//.test(a));
+  return audUrl || null;
 }
 
 /**
