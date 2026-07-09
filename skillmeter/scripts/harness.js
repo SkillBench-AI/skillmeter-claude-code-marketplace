@@ -32,12 +32,12 @@
  *   - tier3_safe values (presence/counts/buckets/enums/versions) are collected
  *     raw.
  *   - Harness identifiers (skill / subagent / command / MCP / plugin names) are
- *     collected raw in v2.0. Names/permission rules that embed a Tier 1 secret
+ *     collected raw in v2.0. Names/permission rules that embed a secret
  *     are STILL dropped fail-closed — "raw names" never means "leak a
  *     credential" (epic Guiding Principle #1). Every string in the block is also
- *     routed through the central `sanitizeEventData` Tier-1/Tier-2 boundary by
+ *     routed through the central `sanitizeEventData` secret/PII boundary by
  *     the caller as a catch-all before egress.
- *   - tier1_secret material (hook commands, MCP command/args/env) is never
+ *   - Secret material (hook commands, MCP command/args/env) is never
  *     collected: those fields hold API keys/tokens directly, so they stay out
  *     regardless of the identifier policy.
  * Every fail-closed drop is tallied in the `redactions` bookkeeping (counts/
@@ -48,7 +48,8 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const { containsTier1, POLICY_VERSION } = require("./lib/sanitize");
+const { containsSecret, POLICY_VERSION } = require("./lib/sanitize");
+const { safeReadJson, findGitRoot } = require("./lib/io");
 
 // Version of the emitted harness metadata contract this payload conforms to.
 // String to match the contract's `harness_schema_version` field (the machine
@@ -136,7 +137,7 @@ function sizeBucket(bytes) {
 
 // Record a single sanitization action against the harness redaction bookkeeping
 // (contract `redactions`). `kind` is "hashed" (an HMAC token replaced a raw
-// Tier 2 name) or "dropped" (a Tier 1 fail-closed removal). Only counts and a
+// name) or "dropped" (a secret fail-closed removal). Only counts and a
 // coarse field `type` are tracked — never the original name/value — so the
 // bookkeeping is itself tier3_safe.
 function recordRedaction(redactions, kind, type) {
@@ -169,46 +170,22 @@ function safeReadDir(p) {
   }
 }
 
-function safeReadJson(p) {
-  try {
-    return JSON.parse(fs.readFileSync(p, "utf8"));
-  } catch {
-    return null;
-  }
-}
-
-// Walk up from `startPath` looking for a `.git` marker. Returns "" when the
-// path isn't inside a git repo. Mirrors logger's git-root walk but is kept
-// local so harness detection stays self-contained and unit-testable.
-function findRepoRoot(startPath) {
-  if (!startPath || typeof startPath !== "string") return "";
-  let current;
-  try {
-    current = fs.statSync(startPath).isDirectory()
-      ? path.resolve(startPath)
-      : path.dirname(path.resolve(startPath));
-  } catch {
-    return "";
-  }
-  while (true) {
-    if (fs.existsSync(path.join(current, ".git"))) return current;
-    const parent = path.dirname(current);
-    if (parent === current) return "";
-    current = parent;
-  }
-}
+// Git-root discovery is shared via the leaf lib/io module (fs/path only, so
+// harness stays self-contained and unit-testable). Kept under the local name
+// `findRepoRoot` for the exported/test surface.
+const findRepoRoot = findGitRoot;
 
 /**
  * Collect harness identifier names for emission. As of schema v2.0 names are
  * emitted RAW (the analysis side joins them to the catalog / reads them
- * semantically). Fail-closed remains: a name embedding a Tier 1 secret is
+ * semantically). Fail-closed remains: a name embedding a secret is
  * dropped outright and tallied in `redactions` — the raw-name policy never
  * permits leaking a credential that happens to be baked into a name.
  */
 function collectNames(names, type, redactions) {
   const out = [];
   for (const name of names.slice(0, NAMES_LIMIT)) {
-    if (containsTier1(name)) {
+    if (containsSecret(name)) {
       recordRedaction(redactions, "dropped", type);
       continue;
     }
@@ -221,7 +198,7 @@ function collectNames(names, type, redactions) {
 // `permission_*`). Returns the allow/deny/ask rule arrays, defaultMode, and the
 // additionalDirectories list, or null when the file has no permissions object.
 // Rule strings are emitted raw (they describe the user's trust boundary) but,
-// like names, still pass through the central Tier-1/Tier-2 boundary before
+// like names, still pass through the central secret/PII boundary before
 // egress so a stray secret in a rule can't leak.
 function readPermissions(settingsFilePath) {
   const parsed = safeReadJson(settingsFilePath);
@@ -607,7 +584,7 @@ function detectHarness(cwd, options = {}) {
     harness.mcp_servers_count = mcpNames.size;
     // Server NAMES are emitted raw (v2.0). The server *config* (command / args /
     // env / url) is deliberately NOT collected: env holds literal API keys and
-    // args/urls can embed tokens, so it stays tier1-out regardless of the
+    // args/urls can embed tokens, so it stays secret-out regardless of the
     // identifier policy.
     harness.mcp_server_names = collectNames(
       [...mcpNames].sort(),
@@ -631,7 +608,7 @@ function detectHarness(cwd, options = {}) {
  * Read installed plugin + marketplace metadata from ~/.claude/plugins.
  * As of schema v2.0 all plugin names are emitted raw (with the source
  * marketplace, so downstream can still tell public from private); names that
- * embed a Tier 1 secret are dropped fail-closed. Returns counts, the emittable
+ * embed a secret are dropped fail-closed. Returns counts, the emittable
  * `plugins` array, and the install paths (used by the caller to scan
  * plugin-bundled skills).
  */
@@ -656,7 +633,7 @@ function detectPlugins(userClaudeDir, redactions) {
         result.installPaths.push(entry.installPath);
       }
 
-      if (containsTier1(name)) {
+      if (containsSecret(name)) {
         recordRedaction(redactions, "dropped", "plugin_name");
         continue;
       }

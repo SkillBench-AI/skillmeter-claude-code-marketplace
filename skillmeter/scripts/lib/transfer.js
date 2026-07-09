@@ -213,10 +213,11 @@ function stageTranscriptForUpload(transcriptPath) {
   const pendingPath = path.join(TRANSCRIPTS_PENDING_DIR, transcriptId);
 
   try {
+    // Always run content sanitization (secret/PII redaction). A missing salt
+    // only disables home-path hashing inside sanitizeTranscript — it never
+    // stages a raw transcript. getOrCreateHashSalt normally returns a salt.
     const hashSalt = credstore.getOrCreateHashSalt();
-    const sanitized = hashSalt
-      ? sanitizeTranscript(transcriptPath, hashSalt)
-      : fs.readFileSync(transcriptPath);
+    const sanitized = sanitizeTranscript(transcriptPath, hashSalt);
     // Overwrite previous snapshots of the same transcript — a long session
     // re-stages on every Stop and we always want the latest lines.
     fs.writeFileSync(pendingPath, sanitized);

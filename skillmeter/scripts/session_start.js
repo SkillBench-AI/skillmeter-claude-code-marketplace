@@ -4,7 +4,6 @@ const { retryFailedLogs, retryFailedTranscripts, cleanupStaleFiles, migrateLegac
 const { refreshLicense } = require("./lib/license-activation");
 const { detectHarness } = require("./harness.js");
 const { PLUGIN_ROOT, PLUGIN_VERSION } = require("./lib/paths");
-const { sanitizeEventData } = require("./lib/sanitize");
 const { signInRequiredBanner, telemetryActiveBanner, telemetrySentNotice, telemetryFailedNotice } = require("./lib/banner.js");
 const credstore = require("./credstore.js");
 
@@ -43,23 +42,15 @@ function runSessionStartHook() {
       sessionSource: input.source,
     });
 
-    // Phase 2 (SBEE-165): route the harness block through the deterministic
-    // Tier-1/Tier-2 sanitization boundary as a catch-all on top of harness.js's
-    // own fail-closed name handling, so any residual secret/email in a probed
-    // value is scrubbed before the event is logged or uploaded.
-    const { value: sanitizedHarness, meta } = sanitizeEventData(harness);
-    if (meta.tier1 > 0 || meta.tier2 > 0) {
-      sanitizedHarness._sanitization = meta;
-      process.stderr.write(
-        `[skillmeter] SessionStart: redacted ${meta.tier1} secret(s) and ${meta.tier2} identifier(s) from harness metadata before upload\n`
-      );
-    }
-
+    // The harness block is returned raw here; runHook's central sanitizeEventData
+    // boundary scrubs it (secret/PII + path hashing) as a catch-all on top of
+    // harness.js's own fail-closed name handling, and records the redaction tally
+    // in the event's `_sanitization` field.
     return {
       source: input.source,
       model: input.model,
       agent_type: input.agent_type,
-      harness: sanitizedHarness,
+      harness,
     };
   }, {
     // React to the gate runHook already resolved (capture decision stays central).

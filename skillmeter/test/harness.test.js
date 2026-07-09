@@ -14,7 +14,7 @@
  *     rules; never raw file CONTENT, hook command strings, or MCP env;
  *   - Level 2 (external_orchestration / multi_agent) is always "unknown";
  *   - detection never throws and degrades to safe defaults;
- *   - identifiers are emitted RAW (no HMAC hashing); a name embedding a Tier 1
+ *   - identifiers are emitted RAW (no HMAC hashing); a name embedding a
  *     secret is still DROPPED fail-closed and tallied in `redactions`;
  *   - the emitted block survives the sanitizeEventData boundary.
  */
@@ -229,7 +229,7 @@ test("skill names are emitted raw (v2.0), even without a hash salt", () => {
   assert.equal(h.redactions.dropped_count, 0);
 });
 
-test("Tier 1 fail-closed: a skill name embedding a secret is dropped, not emitted", () => {
+test("fail-closed: a skill name embedding a secret is dropped, not emitted", () => {
   const root = makeProject();
   const home = makeHome();
   addSkill(root, "deploy");
@@ -396,7 +396,7 @@ test("plugins/marketplaces: names raw, marketplace + public flag retained", () =
   assert.ok(h.plugins.every((p) => p.name_hashed === undefined));
 });
 
-test("Tier 1 fail-closed: a plugin name embedding a secret is dropped", () => {
+test("fail-closed: a plugin name embedding a secret is dropped", () => {
   const root = makeProject();
   const home = makeHome();
   const pluginsDir = path.join(home, ".claude", "plugins");
@@ -454,7 +454,7 @@ test("emitted harness object survives the sanitizeEventData boundary", () => {
   const h = detectHarness(root, { homeDir: home, repoRoot: root, hashSalt: SALT });
   const { value, meta } = sanitizer.sanitizeEventData({ harness: h });
 
-  assert.equal(meta.tier1, 0);
+  assert.equal(meta.secrets, 0);
   assert.equal(value.harness.has_claude_md, true);
   assert.equal(value.harness.skills_count, 1);
   assert.deepEqual(value.harness.skill_names, ["deploy"]);

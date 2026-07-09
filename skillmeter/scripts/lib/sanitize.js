@@ -1,126 +1,71 @@
 /**
- * Sanitisation primitives for logs and transcripts. Consolidates the
- * previously-separate sanitizer.js module plus the tool-data path hashing
- * that used to live inline in logger.js.
+ * Sanitisation primitives for logs and transcripts.
+ *
+ * Two orthogonal protections, applied together by the scrub helpers:
+ *   1. Content redaction — secrets (credentials) and PII (emails) are matched by
+ *      the unified rule table in ./rules.js and replaced with placeholders.
+ *   2. Path hashing — the user's home-directory prefix (which carries the OS
+ *      username) is HMAC-hashed everywhere it appears, and known path-bearing
+ *      tool fields are hashed wholesale.
+ *
+ * Design rules:
+ *   - Fail-closed: when a value looks like a secret we redact it. Over-redacting
+ *     is acceptable; leaking is not.
+ *   - We never store or log an original secret value — only its detector id,
+ *     category, and the action taken.
+ *   - Detection is deterministic regex + Shannon-entropy gating, with a small
+ *     stopword allow-list to limit false positives without weakening recall.
  */
 
 const crypto = require("crypto");
 const fs = require("fs");
+const os = require("os");
+
+const { RULES, STOPWORDS, SECRET_PLACEHOLDER } = require("./rules");
+
+// Bump when the detection policy (rules, entropy gating, path hashing) changes
+// in a way analysis consumers should be able to distinguish.
+const POLICY_VERSION = "2.0.0";
 
 // ---------------------------------------------------------------------------
-// Deterministic Tier 1 / Tier 2 content sanitization (SANITIZATION_EPIC.md,
-// 3-tier policy). Mirrors the SkillMeter Codex collector's detector library so
-// both client surfaces scrub secrets identically. The harness-metadata feature
-// (SBEE-165, Phase 2) routes its collected block through this boundary, and the
-// `containsTier1` helper backs harness.js's fail-closed name scanning.
-//
-// Design rules drawn from the epic:
-//   - Tier 1 is fail-closed: when a value looks like a secret we redact it.
-//     Over-redacting is acceptable; leaking is not.
-//   - We never store or log the original secret value — only its detector type,
-//     tier, and the action taken.
-//   - Detection is deterministic regex, with a small allow-list for obvious
-//     placeholders to limit false positives without weakening recall.
+// Content redaction
 // ---------------------------------------------------------------------------
 
-const POLICY_VERSION = "1.0.0";
+/**
+ * Shannon entropy (bits per character) of a string. Used to reject low-entropy
+ * false positives for rules that opt in via a numeric `entropy` floor.
+ */
+function shannonEntropy(str) {
+  if (!str) return 0;
+  const freq = Object.create(null);
+  for (const ch of str) freq[ch] = (freq[ch] || 0) + 1;
+  let entropy = 0;
+  const len = str.length;
+  for (const ch in freq) {
+    const p = freq[ch] / len;
+    entropy -= p * Math.log2(p);
+  }
+  return entropy;
+}
 
-const SECRET_PLACEHOLDER = "[REDACTED_SECRET]";
-const EMAIL_PLACEHOLDER = "[EMAIL]";
-
-// Obvious non-secret stand-ins. A matched value that is exactly one of these
-// (case-insensitive) is left in place so example/doc text and fixtures don't
-// get needlessly redacted. Kept deliberately small — anything ambiguous errs
-// toward redaction.
-const PLACEHOLDER_ALLOWLIST = new Set([
-  "example",
-  "examples",
-  "dummy",
-  "test",
-  "test-token",
-  "testtoken",
-  "placeholder",
-  "redacted",
-  "changeme",
-  "your-token",
-  "your-api-key",
-  "your_api_key",
-  "xxx",
-  "xxxx",
-  "xxxxxxxx",
-  "none",
-  "null",
-  "undefined",
-  "true",
-  "false",
-]);
-
-function isPlaceholderValue(value) {
+/**
+ * True for obvious non-secret stand-ins: a stopword, an all-mask string
+ * (xxxx / ****), or empty. Such captures are left in place.
+ */
+function isStopword(value) {
   if (!value) return true;
   const trimmed = String(value).trim().toLowerCase();
   if (!trimmed) return true;
-  if (PLACEHOLDER_ALLOWLIST.has(trimmed)) return true;
-  // All-x / all-asterisk masks like "xxxxxxxxxxxx" or "************".
+  if (STOPWORDS.has(trimmed)) return true;
   if (/^[x*•]+$/i.test(trimmed)) return true;
   return false;
 }
 
-// Tier 1 detectors. `value` describes which capture group holds the sensitive
-// token: `whole` redacts the entire match; a number keeps the surrounding
-// structure and redacts only that group (so `KEY=value` / `Authorization:`
-// keep the field name/scheme while the credential is removed).
-const TIER1_DETECTORS = [
-  {
-    type: "private_key",
-    re: /-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z0-9 ]+ )?PRIVATE KEY-----/g,
-    value: "whole",
-  },
-  { type: "github_token", re: /\bgithub_pat_[A-Za-z0-9_]{22,255}\b/g, value: "whole" },
-  { type: "github_token", re: /\bgh[pousr]_[A-Za-z0-9]{36,255}\b/g, value: "whole" },
-  { type: "api_key", re: /\bsk-(?:proj-|ant-)?[A-Za-z0-9_-]{16,}\b/g, value: "whole" },
-  { type: "api_key", re: /\bAIza[0-9A-Za-z_-]{35}\b/g, value: "whole" },
-  { type: "aws_access_key", re: /\bA(?:KIA|SIA|IDA|GPA|ROA|NPA|NVA)[A-Z0-9]{16}\b/g, value: "whole" },
-  { type: "slack_token", re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, value: "whole" },
-  {
-    type: "jwt",
-    re: /\beyJ[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\b/g,
-    value: "whole",
-  },
-  {
-    type: "database_url",
-    re: /\b(?:postgres|postgresql|mysql|mongodb(?:\+srv)?|redis|rediss|amqp|amqps):\/\/[^\s:/@]+:[^\s:/@]+@[^\s'"]+/g,
-    value: "whole",
-  },
-  {
-    type: "auth_header",
-    re: /\b(Authorization|Proxy-Authorization)\s*[:=]\s*(?:Bearer|Basic|Token)\s+([A-Za-z0-9._~+/=-]{8,})/gi,
-    value: 2,
-  },
-  {
-    type: "env_secret",
-    re: /\b([A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|PWD|CREDENTIALS?|ACCESS[_-]?KEY|API[_-]?KEY))\s*[:=]\s*["']?([^\s"'`]{4,})["']?/gi,
-    value: 2,
-  },
-];
-
-// Tier 2 detectors (identity). Intentionally conservative: only emails, which
-// are reliably detectable. Names / customer dictionaries are out of scope here.
-const TIER2_DETECTORS = [
-  {
-    type: "email",
-    tier: "tier2",
-    placeholder: EMAIL_PLACEHOLDER,
-    re: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g,
-    value: "whole",
-  },
-];
-
 /**
- * Scan a single string and redact every Tier 1 secret then Tier 2 identifier.
- * Returns `{ value, redactions }` where `redactions` is an array of
- * `{ type, tier, action }` events. Tier 1 runs first so a secret is removed
- * before the broader Tier 2 email pass can ever see it. No original secret
- * value is ever returned, logged, or stored.
+ * Scan a single string against every rule and redact matches. Rules run in
+ * table order (secrets before the broad email pass). Returns `{ value,
+ * redactions }` where each redaction is `{ id, category, action:"redacted" }`.
+ * No original secret value is ever returned, logged, or stored.
  */
 function redactString(input) {
   if (typeof input !== "string" || input.length === 0) {
@@ -129,39 +74,47 @@ function redactString(input) {
 
   let value = input;
   const redactions = [];
+  const lower = input.toLowerCase();
 
-  const runDetector = ({ type, re, value: group, placeholder, tier }) => {
-    const replacement = placeholder || SECRET_PLACEHOLDER;
-    re.lastIndex = 0;
-    value = value.replace(re, (match, ...groups) => {
+  for (const rule of RULES) {
+    // Cheap keyword pre-filter: skip a rule whose trigger substrings are absent.
+    if (rule.keywords && !rule.keywords.some((k) => lower.includes(k))) continue;
+
+    rule.re.lastIndex = 0;
+    value = value.replace(rule.re, (match, ...groups) => {
       const captures = groups.slice(0, -2);
-      const candidate = group === "whole" ? match : captures[group - 1];
-      if (isPlaceholderValue(candidate)) return match;
+      const candidate = rule.group ? captures[rule.group - 1] : match;
+      if (candidate == null) return match;
+      if (isStopword(candidate)) return match;
+      if (rule.entropy && shannonEntropy(candidate) < rule.entropy) return match;
 
-      redactions.push({ type, tier: tier || "tier1", action: "redacted" });
+      redactions.push({ id: rule.id, category: rule.category, action: "redacted" });
 
-      if (group === "whole") return replacement;
+      if (!rule.group) return rule.replacement;
       const idx = match.lastIndexOf(candidate);
-      if (idx === -1) return replacement;
-      return match.slice(0, idx) + replacement + match.slice(idx + candidate.length);
+      if (idx === -1) return rule.replacement;
+      return (
+        match.slice(0, idx) + rule.replacement + match.slice(idx + candidate.length)
+      );
     });
-  };
-
-  for (const detector of TIER1_DETECTORS) runDetector(detector);
-  for (const detector of TIER2_DETECTORS) runDetector(detector);
+  }
 
   return { value, redactions };
 }
 
 /**
- * True when a string contains at least one Tier 1 secret. Convenience wrapper
- * around redactString for fail-closed checks (used by harness name scanning).
+ * True when a string contains at least one secret (not just PII).
+ * Convenience wrapper around redactString for fail-closed checks (used by
+ * harness.js name scanning to drop identifiers that embed a credential).
  */
-function containsTier1(input) {
-  return redactString(input).redactions.some((r) => r.tier === "tier1");
+function containsSecret(input) {
+  return redactString(input).redactions.some((r) => r.category === "secret");
 }
 
-// Secret-labeled field names that should force Tier 1 redaction on their values.
+// Field names that should force secret redaction on their string values, even
+// when the value doesn't match a pattern (context from structured JSON such as
+// MCP env blocks or tool inputs). Precise and low false-positive in the
+// object-key position, so retained as a complement to the pattern rules.
 const SECRET_KEY_PATTERNS = [
   /api[_-]?key/i,
   /token/i,
@@ -169,7 +122,9 @@ const SECRET_KEY_PATTERNS = [
   /passwd/i,
   /secret/i,
   /credentials?/i,
-  /auth/i,
+  // Anchored so "author"/"authored_by"/"author_email" are NOT force-redacted;
+  // still matches "auth", "authToken", and "authorization"/"authorize".
+  /\bauth(?:\b|oriz)/i,
   /bearer/i,
   /access[_-]?key/i,
 ];
@@ -178,32 +133,101 @@ function isSecretKey(key) {
   return SECRET_KEY_PATTERNS.some((pattern) => pattern.test(key));
 }
 
+// ---------------------------------------------------------------------------
+// Path hashing
+// ---------------------------------------------------------------------------
+
 /**
- * Recursively walk any value (string / array / object) and redact every string
- * leaf, accumulating redaction metadata. When processing object fields, uses
- * the key name as context: if the key suggests a secret (e.g., api_key, token,
- * password), forces Tier 1 redaction on string values even if they don't match
- * secret patterns. Keys themselves are structural and never scanned; non-string
- * scalars pass through untouched.
+ * Hash a string using HMAC-SHA256 with salt (first 12 hex chars). Matches the
+ * VS Code extension's HashingService.hash() so the same salt + input yields the
+ * same token across client surfaces.
  */
-function redactDeep(value, redactions = [], parentKey = null) {
+function hashHmac(str, salt) {
+  if (!str || !salt) return "";
+  return crypto.createHmac("sha256", salt).update(str).digest("hex").slice(0, 12);
+}
+
+function escapeRegExp(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Keys whose string values are paths and are HMAC-hashed WHOLESALE (structure
+// removed) wherever they appear — including nested occurrences, since scrubDeep
+// applies this at every depth. `command` is deliberately NOT here: it is scrubbed
+// as content instead, so command shape is preserved while secrets are redacted.
+const PATH_KEYS = new Set(["file_path", "filePath", "path", "notebook_path", "cwd"]);
+
+// Precompute the home-directory prefix matcher once. The OS home path carries
+// the username and appears throughout transcript content, tool commands, and
+// file paths — hashing the prefix removes the identity while keeping the
+// relative structure below it intact for analysis.
+const HOME_DIR = os.homedir();
+const HOME_DIR_RE =
+  HOME_DIR && HOME_DIR !== "/" ? new RegExp(escapeRegExp(HOME_DIR), "g") : null;
+
+// Memoize the home-dir HMAC per salt — the home dir is constant per process, so
+// this avoids re-hashing it for every string leaf of a large transcript.
+let homeHashMemo = { salt: null, hash: "" };
+
+/**
+ * Replace every occurrence of the user's home-directory prefix with its HMAC
+ * hash. No-op when no salt is available (redaction still runs; only the
+ * path-identity hashing is skipped).
+ */
+function hashHomePaths(str, hashSalt) {
+  if (!hashSalt || !HOME_DIR_RE || typeof str !== "string") return str;
+  if (!str.includes(HOME_DIR)) return str;
+  if (homeHashMemo.salt !== hashSalt) {
+    homeHashMemo = { salt: hashSalt, hash: hashHmac(HOME_DIR, hashSalt) };
+  }
+  return str.replace(HOME_DIR_RE, homeHashMemo.hash);
+}
+
+// ---------------------------------------------------------------------------
+// Combined content-scrub (redaction + home-path hashing)
+// ---------------------------------------------------------------------------
+
+/**
+ * The single string-scrub primitive: redact secrets/PII, then hash the home
+ * path. Used by every upload path (event log, transcript, harness metadata).
+ */
+function scrubString(str, hashSalt, redactions) {
+  if (typeof str !== "string" || str.length === 0) return str;
+  const res = redactString(str);
+  if (redactions) for (const r of res.redactions) redactions.push(r);
+  return hashHomePaths(res.value, hashSalt);
+}
+
+/**
+ * Recursively walk any value and scrub every string leaf. Object keys provide
+ * context: a secret-labelled key forces redaction of its string value even if
+ * the value matches no pattern. Non-string scalars pass through untouched.
+ */
+function scrubDeep(value, hashSalt, redactions = [], parentKey = null) {
   if (typeof value === "string") {
-    // If the parent key suggests a secret, force redaction unless it's a known placeholder
-    if (parentKey && isSecretKey(parentKey) && !isPlaceholderValue(value)) {
-      redactions.push({ type: "env_secret", tier: "tier1", action: "redacted" });
+    // Secret-labelled key → force redaction regardless of the value's content.
+    if (parentKey && isSecretKey(parentKey) && !isStopword(value)) {
+      redactions.push({ id: "labelled-secret", category: "secret", action: "redacted" });
       return SECRET_PLACEHOLDER;
     }
-    const res = redactString(value);
-    for (const r of res.redactions) redactions.push(r);
-    return res.value;
+    // Path-bearing key → HMAC-hash the whole value (covers nested paths too).
+    if (parentKey && PATH_KEYS.has(parentKey)) {
+      return hashHmac(value, hashSalt);
+    }
+    return scrubString(value, hashSalt, redactions);
   }
   if (Array.isArray(value)) {
-    return value.map((item) => redactDeep(item, redactions, parentKey));
+    return value.map((item) => scrubDeep(item, hashSalt, redactions, parentKey));
   }
   if (value && typeof value === "object") {
     const out = {};
     for (const [key, val] of Object.entries(value)) {
-      out[key] = redactDeep(val, redactions, key);
+      // Keys can themselves be sensitive — some transcript entries use absolute
+      // file paths as map keys, which carry the home-dir/username. Scrub the key
+      // (redact + home-path hash) but decide `isSecretKey` value-forcing from the
+      // ORIGINAL key name.
+      const scrubbedKey = scrubString(key, hashSalt);
+      out[scrubbedKey] = scrubDeep(val, hashSalt, redactions, key);
     }
     return out;
   }
@@ -211,70 +235,42 @@ function redactDeep(value, redactions = [], parentKey = null) {
 }
 
 /**
- * Sanitize an event-data object before it is logged/uploaded. Returns the
- * sanitized clone plus a compact metadata summary (`{ policyVersion, tier1,
- * tier2, types }`) — counts and detector types only, never original values.
+ * Scrub an event-data object before it is logged/uploaded. Returns the scrubbed
+ * clone plus a compact metadata summary (`{ policyVersion, secrets, pii, ids }`)
+ * — counts and detector ids only, never original values.
  */
-function sanitizeEventData(data) {
+function sanitizeEventData(data, hashSalt) {
   const redactions = [];
-  const value = redactDeep(data, redactions);
-  const tier1 = redactions.filter((r) => r.tier === "tier1").length;
-  const tier2 = redactions.filter((r) => r.tier === "tier2").length;
-  const types = [...new Set(redactions.map((r) => r.type))].sort();
+  const value = scrubDeep(data, hashSalt, redactions);
+  const secrets = redactions.filter((r) => r.category === "secret").length;
+  const pii = redactions.filter((r) => r.category === "pii").length;
+  const ids = [...new Set(redactions.map((r) => r.id))].sort();
   return {
     value,
     redactions,
-    meta: { policyVersion: POLICY_VERSION, tier1, tier2, types },
+    meta: { policyVersion: POLICY_VERSION, secrets, pii, ids },
   };
 }
 
-/**
- * Hash a string using HMAC-SHA256 with salt (first 12 chars).
- * Matches the VS Code extension's HashingService.hash() so the same input
- * salt + string produces the same token across client surfaces.
- */
-function hashHmac(str, salt) {
-  if (!str || !salt) return "";
-  return crypto.createHmac("sha256", salt).update(str).digest("hex").slice(0, 12);
-}
-
-// Keys in tool_input / tool_response whose values contain sensitive paths
-// and should be HMAC-hashed before the event ships off the machine.
-const PATH_KEYS = new Set(["file_path", "filePath", "path", "command"]);
+// ---------------------------------------------------------------------------
+// Transcript helper
+// ---------------------------------------------------------------------------
 
 /**
- * Sanitize a tool object by hashing path values.
- * Leaves non-path keys and non-string values untouched.
- */
-function sanitizeToolData(obj, hashSalt) {
-  if (!obj || typeof obj !== "object") return obj;
-
-  const result = {};
-  for (const [key, val] of Object.entries(obj)) {
-    if (PATH_KEYS.has(key) && typeof val === "string") {
-      result[key] = hashHmac(val, hashSalt);
-    } else {
-      result[key] = val;
-    }
-  }
-  return result;
-}
-
-/**
- * Sanitize a single parsed transcript line by hashing the cwd field.
+ * Sanitize a single parsed transcript line by scrubbing the whole object:
+ * secret/PII redaction + home-path hashing on content, and wholesale HMAC of
+ * path-bearing keys (incl. `cwd`) via scrubDeep's PATH_KEYS branch. Returns a
+ * scrubbed copy; the input is not mutated.
  */
 function sanitizeLine(obj, hashSalt) {
-  if (obj.cwd && typeof obj.cwd === "string") {
-    obj.cwd = hashHmac(obj.cwd, hashSalt);
-  }
-  return obj;
+  return scrubDeep(obj, hashSalt);
 }
 
 /**
  * Sanitize a JSONL transcript file, returning the sanitized content as a
- * Buffer. Malformed lines are skipped individually so a single corrupt
- * entry (e.g. trailing partial line from a crashed writer) doesn't abort
- * the whole upload.
+ * Buffer. Malformed lines are skipped individually so a single corrupt entry
+ * (e.g. a trailing partial line from a crashed writer) doesn't abort the whole
+ * upload.
  */
 function sanitizeTranscript(transcriptPath, hashSalt) {
   const raw = fs.readFileSync(transcriptPath, "utf8");
@@ -302,16 +298,13 @@ function sanitizeTranscript(transcriptPath, hashSalt) {
 }
 
 module.exports = {
-  PATH_KEYS,
   POLICY_VERSION,
-  SECRET_PLACEHOLDER,
-  EMAIL_PLACEHOLDER,
   hashHmac,
   redactString,
-  containsTier1,
-  redactDeep,
+  containsSecret,
+  scrubString,
+  scrubDeep,
   sanitizeEventData,
-  sanitizeToolData,
   sanitizeLine,
   sanitizeTranscript,
 };
