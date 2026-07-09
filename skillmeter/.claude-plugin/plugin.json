@@ -1,7 +1,8 @@
 {
     "name": "skillmeter",
-    "version": "0.21.0",
+    "version": "0.22.0",
     "description": "Tracks Claude Code session activity and sends privacy-scoped telemetry (secrets & emails redacted via Gitleaks-derived rules, paths & username hashed, opt-in + repo-scope gated) to the SkillBench platform for developer skill analytics.",
+    "defaultEnabled": false,
     "homepage": "https://skillbench.com",
     "repository": "https://github.com/SkillBench-AI/skillmeter-claude-code-marketplace",
     "author": {
