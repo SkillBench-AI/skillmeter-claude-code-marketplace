@@ -26,7 +26,8 @@ const path = require("path");
 const credstore = require("./credstore");
 const { getDeviceId, getOrCreateHashSalt } = credstore;
 const { LOG_DIR, LOG_FILE } = require("./lib/paths");
-const { hashHmac, sanitizeToolData } = require("./lib/sanitize");
+const { hashHmac, sanitizeEventData } = require("./lib/sanitize");
+const { readStdinJson } = require("./lib/io");
 const { getTelemetryOptIn } = require("./lib/settings");
 const { getRepoScopeDecision } = require("./lib/repo-scope");
 
@@ -68,26 +69,9 @@ const logInfo = (event, sessionId, data, deviceId) =>
 // Hook I/O
 // ---------------------------------------------------------------------------
 
-function readStdin() {
-  return new Promise((resolve, reject) => {
-    if (process.stdin.isTTY) {
-      resolve(null);
-      return;
-    }
-
-    let data = "";
-    process.stdin.setEncoding("utf8");
-    process.stdin.on("data", (chunk) => (data += chunk));
-    process.stdin.on("end", () => {
-      try {
-        resolve(data ? JSON.parse(data) : null);
-      } catch (e) {
-        reject(e);
-      }
-    });
-    process.stdin.on("error", reject);
-  });
-}
+// TTY (no piped input) and empty stdin both resolve to null — the hook runner
+// treats a null input as "nothing to do".
+const readStdin = () => readStdinJson({ tty: null, empty: null });
 
 // ---------------------------------------------------------------------------
 // Hook lifecycle — called by every script under scripts/*.js
@@ -140,7 +124,8 @@ function defaultGateMessaging(eventName, gate) {
  *
  * @param {string} eventName - Hook event name (e.g. "SessionStart")
  * @param {function} buildData - (input, ctx) => object with event-specific fields.
- *   ctx provides { hashSalt, cwd, sanitizeToolData, getTranscriptId }.
+ *   ctx provides { hashSalt, cwd, getTranscriptId }. Returned fields are raw;
+ *   runHook scrubs them centrally via sanitizeEventData.
  * @param {object} [options]
  * @param {function} [options.beforeStdin] - Called after deviceId check, before stdin read (e.g. retryFailedLogs)
  * @param {function} [options.onGate] - Gate reactor: ({ gate, repoScopeDecision, cwd, input, eventName }) => void.
@@ -217,10 +202,20 @@ async function runHook(eventName, buildData, options = {}) {
     process.exit(0);
   }
 
-  const ctx = { hashSalt, cwd, sanitizeToolData, getTranscriptId };
+  const ctx = { hashSalt, cwd, getTranscriptId };
   const eventData = buildData ? buildData(input, ctx) : {};
 
+  // Central sanitization catch-all: every hook's payload (prompt,
+  // last_assistant_message, notification message, tool fields, etc.) passes
+  // through the single secret/PII + path-hashing boundary here, so no hook can
+  // ship raw content and future hooks are covered automatically. `meta` carries
+  // the redaction tally + policy version for downstream visibility.
+  const { value: scrubbedEventData, meta } = sanitizeEventData(eventData, hashSalt);
+
   const data = {
+    // Event data first so the authoritative fixed fields below always win a
+    // key collision (a hook returning e.g. `cwd` can't clobber the hashed one).
+    ...scrubbedEventData,
     transcript_path: getTranscriptId(input.transcript_path),
     cwd: hashHmac(cwd, hashSalt),
     repo_scope: repoScopeDecision.scope,
@@ -232,8 +227,8 @@ async function runHook(eventName, buildData, options = {}) {
       ? hashHmac(repoScopeDecision.remoteOrg, hashSalt)
       : undefined,
     permission_mode: input.permission_mode,
-    ...eventData,
   };
+  if (meta.secrets > 0 || meta.pii > 0) data._sanitization = meta;
 
   logInfo(eventName, sessionId, data, deviceId);
   console.error(`[skillmeter] ${eventName}: logged (session=${sessionId.slice(0, 8)}…)`);

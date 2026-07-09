@@ -197,8 +197,8 @@ Sanitization integration (SBEE-165, Phase 2):
 - The whole `harness` block is routed through the deterministic
   `sanitizeEventData` boundary (`lib/sanitize.js`) before upload, so a skill or
   hook name that happens to embed a secret/email is still scrubbed.
-- **Tier 1 fail-closed at the harness boundary:** before any skill name is
-  hashed or emitted it is scanned for Tier 1 secrets, and a name that embeds one
+- **Fail-closed at the harness boundary:** before any skill name is
+  hashed or emitted it is scanned for secrets, and a name that embeds one
   is **dropped** outright (the hashing step would otherwise hide it from the
   downstream scrubber). Every hash and drop is tallied in the `redactions`
   block — counts and field types only, never the original values.
@@ -213,10 +213,22 @@ Sanitization integration (SBEE-165, Phase 2):
 
 ## Privacy
 
-- **File paths** are SHA-256 hashed (truncated to 16 hex chars) before logging -- actual paths never leave the machine.
-- **Conversation content** is filtered to only include `text` and `thinking` blocks -- tool results, images, and other content types are stripped.
+Every event payload and every transcript line is scrubbed before it leaves the
+machine, by one shared boundary (`lib/sanitize.js`):
+
+- **Secrets** are redacted to `[REDACTED_SECRET]` using a curated rule table
+  ported from the [Gitleaks](https://github.com/gitleaks/gitleaks) default
+  ruleset (MIT — see `NOTICE`), gated by Shannon entropy and a stopword
+  allow-list to limit false positives. Field names that denote secrets
+  (`api_key`, `token`, `password`, …) force redaction of their values too.
+- **Emails** are redacted to `[EMAIL]`.
+- **The home-directory prefix** (which carries the OS username) is HMAC-hashed
+  everywhere it appears — in message content, tool commands, and file paths —
+  so the username never leaves the machine while relative structure is kept.
+- **Path-bearing tool fields** (`file_path`, `path`, `command`, …) and the
+  `cwd` / `repo_root` / `repo_remote_org` fields are HMAC-hashed wholesale.
 - **Device ID** is a random UUID stored in `~/.skillbench/credentials.json`, not derived from hardware.
-- **Harness metadata** (`SessionStart`) is presence/shape only and runs through the Tier-1/Tier-2 sanitizer; see [Harness Metadata](#harness-metadata).
+- **Harness metadata** (`SessionStart`) is presence/shape only and runs through the same sanitizer; see [Harness Metadata](#harness-metadata).
 
 ## Log Transfer
 
