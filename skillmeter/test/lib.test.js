@@ -11,7 +11,7 @@ const os = require("os");
 const path = require("path");
 
 const io = require("../scripts/lib/io");
-const { isJwtExpired } = require("../scripts/lib/jwt");
+const { isJwtExpired, getEndpointFromTokenAllowExpired } = require("../scripts/lib/jwt");
 
 function tmp() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "skm-lib-"));
@@ -87,6 +87,38 @@ test("isJwtExpired honors skewSeconds", () => {
 
 test("isJwtExpired: a long-lived token is never expired", () => {
   assert.equal(isJwtExpired(mkJwt(3600)), false);
+});
+
+// --- endpoint resolution from JWT `aud` ------------------------------------
+
+const mkTok = (payload) =>
+  "h." + Buffer.from(JSON.stringify(payload)).toString("base64") + ".s";
+
+test("getEndpointFromTokenAllowExpired reads the `aud` claim (string)", () => {
+  assert.equal(
+    getEndpointFromTokenAllowExpired(mkTok({ aud: "https://x.meter.skillbench.ai" })),
+    "https://x.meter.skillbench.ai"
+  );
+});
+
+test("`aud` may be an array; the first http(s) URL wins", () => {
+  assert.equal(
+    getEndpointFromTokenAllowExpired(mkTok({ aud: ["skillbench", "https://x.meter.ai"] })),
+    "https://x.meter.ai"
+  );
+});
+
+test("ignores the legacy telemetry_endpoint claim — `aud` only", () => {
+  // No aud URL → null even when a legacy telemetry_endpoint is present.
+  assert.equal(
+    getEndpointFromTokenAllowExpired(mkTok({ aud: "just-an-audience", telemetry_endpoint: "https://legacy.meter.ai" })),
+    null
+  );
+});
+
+test("returns null when no `aud` URL is present", () => {
+  assert.equal(getEndpointFromTokenAllowExpired(mkTok({ sub: "x" })), null);
+  assert.equal(getEndpointFromTokenAllowExpired(null), null);
 });
 
 // --- hook dispatch registry ↔ hooks.json contract --------------------------

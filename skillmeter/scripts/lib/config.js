@@ -82,9 +82,9 @@ function getGitHubClientId() {
   );
 }
 
-// Hard bypass of the JWT's telemetry_endpoint claim (see jwt.js). Explicit-only:
+// Hard bypass of the JWT's `aud` endpoint claim (see jwt.js). Explicit-only:
 // NOT bundled into the dev switch, because dev keeps the real sign-in flow and
-// the dev-minted JWT already carries a dev telemetry_endpoint.
+// the dev-minted JWT already carries a dev endpoint in `aud`.
 function getBackendUrlOverride() {
   return process.env.SKILLMETER_BACKEND_URL || null;
 }
