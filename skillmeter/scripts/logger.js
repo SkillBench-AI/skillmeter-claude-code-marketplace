@@ -205,6 +205,13 @@ async function runHook(eventName, buildData, options = {}) {
   const ctx = { hashSalt, cwd, getTranscriptId };
   const eventData = buildData ? buildData(input, ctx) : {};
 
+  // A mapper may return null to opt OUT of logging this occurrence (e.g. a
+  // high-frequency streaming event that only records its final chunk). The hook
+  // process still ran, but nothing is written.
+  if (eventData === null) {
+    process.exit(0);
+  }
+
   // Central sanitization catch-all: every hook's payload (prompt,
   // last_assistant_message, notification message, tool fields, etc.) passes
   // through the single secret/PII + path-hashing boundary here, so no hook can
@@ -220,6 +227,9 @@ async function runHook(eventName, buildData, options = {}) {
     // a single user prompt produced into one turn. A random UUID (not PII), so no
     // sanitization needed; undefined on older runtimes → omitted from the JSON.
     prompt_id: input.prompt_id,
+    // Turn correlation id: groups every event within one assistant turn. Random
+    // UUID (not PII); undefined on runtimes that don't send it → omitted.
+    turn_id: input.turn_id,
     transcript_path: getTranscriptId(input.transcript_path),
     cwd: hashHmac(cwd, hashSalt),
     repo_scope: repoScopeDecision.scope,

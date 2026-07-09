@@ -28,12 +28,13 @@ module.exports = {
     notification_type: input.notification_type,
   }),
 
-  // While assistant message text is displayed. The full text already lives in
-  // the transcript, so record only the length here (a metric) to avoid
-  // duplicating content and to keep this high-frequency event cheap.
-  MessageDisplay: (input) => ({
-    message_length: typeof input.message === "string" ? input.message.length : undefined,
-  }),
+  // Fires per streaming CHUNK (delta), so it can fire hundreds of times per
+  // assistant message. We capture NO content (`delta` is dropped — it's in the
+  // transcript) and log ONLY the final chunk: one lightweight record per message
+  // carrying the message_id, with turn_id supplied by the central fields. Returns
+  // null for non-final chunks so runHook skips logging them.
+  MessageDisplay: (input) =>
+    input.final ? { message_id: input.message_id } : null,
 
   PreToolUse: (input) => ({
     tool_name: input.tool_name,

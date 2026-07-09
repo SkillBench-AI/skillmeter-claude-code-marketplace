@@ -168,10 +168,22 @@ test("newly added events map their documented fields", () => {
   const registry = require("../scripts/lib/hook-registry");
   assert.deepEqual(registry.Setup({ setup_type: "init" }), { setup_type: "init" });
   assert.deepEqual(registry.CwdChanged({ path: "/a/b" }), { path: "/a/b" });
-  assert.equal(registry.MessageDisplay({ message: "hello" }).message_length, 5);
   assert.equal(registry.Elicitation({ server: "s", tool_name: "t", tool_input: {} }).server, "s");
   // user_response must NOT be captured (privacy)
   assert.ok(!("user_response" in registry.ElicitationResult({ server: "s", user_response: { x: 1 } })));
+});
+
+test("MessageDisplay logs only the final chunk, ids only (no delta)", () => {
+  const registry = require("../scripts/lib/hook-registry");
+  // non-final chunk → null → runHook skips logging
+  assert.equal(
+    registry.MessageDisplay({ turn_id: "t", message_id: "m", index: 0, final: false, delta: "hi" }),
+    null
+  );
+  // final chunk → message_id only; delta/index/turn_id not in the mapper output
+  // (turn_id is added by logger's central fields)
+  const out = registry.MessageDisplay({ turn_id: "t", message_id: "m", index: 3, final: true, delta: "x" });
+  assert.deepEqual(out, { message_id: "m" });
 });
 
 test("corrected field names match the current hook schema", () => {
