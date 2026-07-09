@@ -12,6 +12,8 @@
  * and markers, not color.
  */
 
+const { PLUGIN_VERSION } = require("./paths");
+
 // Content-sized box (1-space padding each side). ✓/✗/·/box glyphs are all
 // single-column, so [...l].length measures the visible width correctly.
 function box(lines) {
@@ -21,9 +23,11 @@ function box(lines) {
   return ["", `╭${rule}╮`, ...body, `╰${rule}╯`, ""].join("\n");
 }
 
-// Brand line: <marker>  SkillMeter · skillbench
+// Brand line: <marker>  SkillMeter v<version> · skillbench. The running plugin
+// version is shown so a stale session (hooks loaded from an older cached version
+// than the one installed) is immediately visible.
 function brandLine(marker) {
-  return `${marker}  SkillMeter · skillbench`;
+  return `${marker}  SkillMeter v${PLUGIN_VERSION} · skillbench`;
 }
 
 // Shown on /skillmeter:signin success. `scope` is a getRepoScopeDecision(cwd)
