@@ -154,9 +154,30 @@ test("every hook.js-dispatched event has a matching registry mapper", () => {
 test("registry mappers return an object and can use ctx", () => {
   const registry = require("../scripts/lib/hook-registry");
   const ctx = { getTranscriptId: (p) => (p ? require("path").basename(p) : "") };
-  assert.deepEqual(registry.WorktreeCreate({ name: "wt" }), { name: "wt" });
+  assert.deepEqual(
+    registry.WorktreeCreate({ worktree_name: "wt", worktree_path: "/p" }),
+    { worktree_name: "wt", worktree_path: "/p" }
+  );
   assert.equal(
     registry.SubagentStop({ agent_transcript_path: "/x/y-uuid.jsonl" }, ctx).agent_transcript_path,
     "y-uuid.jsonl"
   );
+});
+
+test("newly added events map their documented fields", () => {
+  const registry = require("../scripts/lib/hook-registry");
+  assert.deepEqual(registry.Setup({ setup_type: "init" }), { setup_type: "init" });
+  assert.deepEqual(registry.CwdChanged({ path: "/a/b" }), { path: "/a/b" });
+  assert.equal(registry.MessageDisplay({ message: "hello" }).message_length, 5);
+  assert.equal(registry.Elicitation({ server: "s", tool_name: "t", tool_input: {} }).server, "s");
+  // user_response must NOT be captured (privacy)
+  assert.ok(!("user_response" in registry.ElicitationResult({ server: "s", user_response: { x: 1 } })));
+});
+
+test("corrected field names match the current hook schema", () => {
+  const registry = require("../scripts/lib/hook-registry");
+  assert.equal(registry.StopFailure({ error_type: "rate_limit" }).error_type, "rate_limit");
+  assert.equal(registry.TeammateIdle({ agent_type: "Explore" }).agent_type, "Explore");
+  assert.equal(registry.ConfigChange({ config_source: "user_settings" }).config_source, "user_settings");
+  assert.equal(registry.TaskCompleted({ completion_status: "done" }).completion_status, "done");
 });

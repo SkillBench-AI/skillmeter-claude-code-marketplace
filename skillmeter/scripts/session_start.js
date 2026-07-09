@@ -50,6 +50,7 @@ function runSessionStartHook() {
       source: input.source,
       model: input.model,
       agent_type: input.agent_type,
+      session_title: input.session_title,
       harness,
     };
   }, {
