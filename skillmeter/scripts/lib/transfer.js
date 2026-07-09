@@ -36,7 +36,6 @@ const gzipAsync = promisify(zlib.gzip);
 
 const EVENT_TIMEOUT = getEventTimeoutMs();
 const TRANSCRIPT_TIMEOUT = 30_000;
-const SESSION_END_DRAIN_TIMEOUT_MS = 5_000;
 
 // How long we keep uploaded `.sent` event logs and pending transcripts
 // before the SessionStart sweep deletes them. 30 days is long enough to
@@ -459,43 +458,6 @@ async function drainQueuesOnce(timeoutMs) {
   return { events, transcripts, errors };
 }
 
-function withTimeout(promise, timeoutMs, label) {
-  return Promise.race([
-    promise,
-    new Promise((resolve) => {
-      setTimeout(() => {
-        console.error(`[skillmeter] ${label} timed out after ${timeoutMs} ms`);
-        resolve();
-      }, timeoutMs);
-    }),
-  ]);
-}
-
-// NOTE: these are wired directly as runHook `afterLog` / `afterSkip`, which are
-// invoked as `(input, deviceId)`. They therefore take `(input)` and use the
-// fixed SESSION_END_DRAIN_TIMEOUT_MS internally — never a caller-supplied
-// timeout. (Previously the second param was `timeoutMs`, so it received the
-// deviceId string and AbortSignal.timeout(deviceId) threw, silently failing
-// every SessionEnd upload.)
-async function sealFinalSessionArtifactsAndDrain(input) {
-  sealEventLog();
-
-  if (input && input.transcript_path && fs.existsSync(input.transcript_path)) {
-    stageTranscriptForUpload(input.transcript_path);
-  } else {
-    console.error(`[skillmeter] No transcript to stage`);
-  }
-
-  const t = SESSION_END_DRAIN_TIMEOUT_MS;
-  await withTimeout(drainQueuesOnce(t), t, "SessionEnd drain");
-}
-
-async function sealEventLogAndDrain() {
-  sealEventLog();
-  const t = SESSION_END_DRAIN_TIMEOUT_MS;
-  await withTimeout(drainFailedLogs(t), t, "SessionEnd event-log drain");
-}
-
 /**
  * Retry failed event log transfers. Matches files under LOG_DIR named
  * `events.jsonl.<timestamp>` (the pre-`.sent` state) and fires
@@ -569,7 +531,6 @@ module.exports = {
   EVENT_TIMEOUT,
   TRANSCRIPT_TIMEOUT,
   CLEANUP_MAX_AGE_MS,
-  SESSION_END_DRAIN_TIMEOUT_MS,
   DRAIN_ONCE_LOCK_FILE,
   DRAIN_ONCE_LOCK_STALE_MS,
   transferEventLog,
@@ -578,8 +539,6 @@ module.exports = {
   stageTranscriptForUpload,
   uploadPendingTranscript,
   sealFinalSessionArtifacts,
-  sealFinalSessionArtifactsAndDrain,
-  sealEventLogAndDrain,
   spawnDetachedDrain,
   clearDrainOnceLock,
   drainFailedLogs,
