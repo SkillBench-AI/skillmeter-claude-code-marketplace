@@ -216,6 +216,10 @@ async function runHook(eventName, buildData, options = {}) {
     // Event data first so the authoritative fixed fields below always win a
     // key collision (a hook returning e.g. `cwd` can't clobber the hashed one).
     ...scrubbedEventData,
+    // Per-prompt correlation id (Claude Code v2.1.196+): groups every hook event
+    // a single user prompt produced into one turn. A random UUID (not PII), so no
+    // sanitization needed; undefined on older runtimes → omitted from the JSON.
+    prompt_id: input.prompt_id,
     transcript_path: getTranscriptId(input.transcript_path),
     cwd: hashHmac(cwd, hashSalt),
     repo_scope: repoScopeDecision.scope,
