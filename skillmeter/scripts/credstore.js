@@ -8,44 +8,16 @@ const { CRED_FILE } = require("./lib/paths");
 // Canonical JWT helpers. The validated org(s) for telemetry are read straight
 // from the license JWT (the activator's decision) — the client no longer stores
 // or narrows a GitHub org list.
-const { decodeJwtPayload, getLicenseOrgs } = require("./lib/jwt");
+const { isJwtExpired, getLicenseOrgs } = require("./lib/jwt");
+// Shared low-level file I/O (safe read, atomic write) — leaf module, no cycle.
+const { safeReadJson, atomicWriteJson } = require("./lib/io");
 
 // ---------------------------------------------------------------------------
 // Low-level file helpers
 // ---------------------------------------------------------------------------
 
 function readStore() {
-  try {
-    return JSON.parse(fs.readFileSync(CRED_FILE, "utf8"));
-  } catch {
-    return {};
-  }
-}
-
-// Atomic write: write payload to a sibling tempfile, fsync, then rename into
-// place. POSIX rename within the same filesystem is atomic — readers see either
-// the old file or the new file, never a partial write. Concurrent writers can
-// still lose updates; eliminating that requires a file lock (separate follow-up).
-function atomicWriteJson(file, data) {
-  const dir = path.dirname(file);
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-
-  const tempPath = `${file}.tmp.${process.pid}.${Date.now()}`;
-  let fd;
-  try {
-    fd = fs.openSync(tempPath, "w", 0o600);
-    fs.writeSync(fd, JSON.stringify(data, null, 2) + "\n");
-    fs.fsyncSync(fd);
-    fs.closeSync(fd);
-    fd = undefined;
-    fs.renameSync(tempPath, file);
-  } catch (err) {
-    if (fd !== undefined) {
-      try { fs.closeSync(fd); } catch {}
-    }
-    try { fs.unlinkSync(tempPath); } catch {}
-    throw err;
-  }
+  return safeReadJson(CRED_FILE, {});
 }
 
 function writeStore(data) {
@@ -71,11 +43,7 @@ function writeSigninResult(result) {
 }
 
 function readSigninResult() {
-  try {
-    return JSON.parse(fs.readFileSync(SIGNIN_RESULT_FILE, "utf8"));
-  } catch {
-    return null;
-  }
+  return safeReadJson(SIGNIN_RESULT_FILE, null);
 }
 
 // Pre-create the sentinel so SessionStart `watchPaths` can register it before
@@ -108,11 +76,7 @@ function writeUploadResult({ events = 0, transcripts = 0, error = null } = {}) {
 }
 
 function readUploadResult() {
-  try {
-    return JSON.parse(fs.readFileSync(UPLOAD_RESULT_FILE, "utf8"));
-  } catch {
-    return null;
-  }
+  return safeReadJson(UPLOAD_RESULT_FILE, null);
 }
 
 // Flag the current result as shown, so it isn't surfaced again next session.
@@ -190,10 +154,7 @@ const LICENSE_EXPIRY_SKEW_SECONDS = 5 * 60;
  * treated as expired so callers don't need to double-check.
  */
 function isLicenseTokenExpired(token, skewSeconds = LICENSE_EXPIRY_SKEW_SECONDS) {
-  if (!token) return true;
-  const payload = decodeJwtPayload(token);
-  if (!payload || typeof payload.exp !== "number") return true;
-  return payload.exp <= Math.floor(Date.now() / 1000) + skewSeconds;
+  return isJwtExpired(token, { skewSeconds, treatMissingAsExpired: true });
 }
 
 // True when a non-expired license JWT is present on disk. Reads uncached so a

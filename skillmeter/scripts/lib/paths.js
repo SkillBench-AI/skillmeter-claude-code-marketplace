@@ -10,9 +10,9 @@
  * from paths. Dependency direction is one-way: paths → config.
  */
 
-const fs = require("fs");
 const path = require("path");
 const { STATE_DIR, CRED_FILE } = require("./config");
+const { safeReadJson } = require("./io");
 
 const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, "..", "..");
 
@@ -31,16 +31,9 @@ const TRANSCRIPTS_PENDING_DIR = path.join(LOG_DIR, "transcripts", "pending");
 // Pre-0.17 / no-CLAUDE_PLUGIN_DATA location, for one-time forward migration.
 const LEGACY_LOG_DIR = path.join(PLUGIN_ROOT, "logs");
 
-const PLUGIN_VERSION = (() => {
-  try {
-    const pkg = JSON.parse(
-      fs.readFileSync(path.join(PLUGIN_ROOT, ".claude-plugin", "plugin.json"), "utf8")
-    );
-    return pkg.version || "unknown";
-  } catch {
-    return "unknown";
-  }
-})();
+const PLUGIN_VERSION =
+  (safeReadJson(path.join(PLUGIN_ROOT, ".claude-plugin", "plugin.json"), {})).version ||
+  "unknown";
 
 module.exports = {
   PLUGIN_ROOT,

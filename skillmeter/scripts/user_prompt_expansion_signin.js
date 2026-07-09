@@ -12,6 +12,7 @@ const credstore = require("./credstore.js");
 const { trySilentGhActivate } = require("./lib/license-activation");
 const { welcomeBanner } = require("./lib/banner.js");
 const { getRepoScopeDecision } = require("./lib/repo-scope");
+const { readStdinJson } = require("./lib/io");
 const path = require("path");
 
 const SIGNIN_COMMAND = path.join(__dirname, "..", "bin", "signin");
@@ -28,21 +29,9 @@ const RUN_INSTRUCTION =
   `3. Once GitHub shows the success page, run \`/skillmeter:signin\` again ` +
   `to confirm the license and see the welcome banner.`;
 
-function readStdin() {
-  return new Promise((resolve, reject) => {
-    let data = "";
-    process.stdin.setEncoding("utf8");
-    process.stdin.on("data", (chunk) => (data += chunk));
-    process.stdin.on("end", () => {
-      try {
-        resolve(data ? JSON.parse(data) : {});
-      } catch (err) {
-        reject(err);
-      }
-    });
-    process.stdin.on("error", reject);
-  });
-}
+// This hook has no TTY guard and defaults empty input to {} (its isSigninCommand
+// check tolerates an empty object).
+const readStdin = () => readStdinJson({ tty: {}, empty: {} });
 
 function addContext(message) {
   process.stdout.write(JSON.stringify({

@@ -5,8 +5,8 @@
  * credstore (see `lib/repo-scope.js`).
  */
 
-const fs = require("fs");
 const path = require("path");
+const { safeReadJson, atomicWriteJson } = require("./io");
 
 function settingsPathFor(cwd) {
   return path.join(cwd, ".claude", "settings.local.json");
@@ -16,13 +16,7 @@ function settingsPathFor(cwd) {
  * Read the project's settings file, or null when missing/corrupt.
  */
 function readSettingsFile(cwd) {
-  try {
-    const p = settingsPathFor(cwd);
-    if (!fs.existsSync(p)) return null;
-    return JSON.parse(fs.readFileSync(p, "utf8"));
-  } catch {
-    return null;
-  }
+  return safeReadJson(settingsPathFor(cwd), null);
 }
 
 /**
@@ -63,17 +57,9 @@ function getSkillmeterStringSetting(cwd, key) {
  */
 function saveTelemetryOptIn(cwd, value) {
   const p = settingsPathFor(cwd);
-  let content = {};
-  try {
-    if (fs.existsSync(p)) {
-      content = JSON.parse(fs.readFileSync(p, "utf8"));
-    }
-  } catch {
-    content = {};
-  }
+  const content = safeReadJson(p, {});
   content.skillmeter = { ...content.skillmeter, telemetry: value };
-  fs.mkdirSync(path.join(cwd, ".claude"), { recursive: true });
-  fs.writeFileSync(p, JSON.stringify(content, null, 2) + "\n");
+  atomicWriteJson(p, content);
 }
 
 module.exports = {

@@ -27,15 +27,22 @@ function decodeJwtPayload(token) {
 }
 
 /**
- * Return true when the token's `exp` claim is already past (with a small
- * grace window). A missing/undecodable token is treated as NOT expired —
- * callers already guard on token presence.
+ * Return true when the token's `exp` claim is already past (with a skew window).
+ * @param {string} token
+ * @param {object} [opts]
+ * @param {number}  [opts.skewSeconds=JWT_EXPIRY_GRACE_SECONDS] grace/proactive window
+ * @param {boolean} [opts.treatMissingAsExpired=false] whether a missing token or
+ *   missing/undecodable `exp` counts as expired. Default false (callers guard on
+ *   token presence themselves); the license check passes true.
  */
-function isJwtExpired(token) {
-  if (!token) return false;
+function isJwtExpired(token, {
+  skewSeconds = JWT_EXPIRY_GRACE_SECONDS,
+  treatMissingAsExpired = false,
+} = {}) {
+  if (!token) return treatMissingAsExpired;
   const payload = decodeJwtPayload(token);
-  if (!payload || typeof payload.exp !== "number") return false;
-  return payload.exp < Math.floor(Date.now() / 1000) + JWT_EXPIRY_GRACE_SECONDS;
+  if (!payload || typeof payload.exp !== "number") return treatMissingAsExpired;
+  return payload.exp < Math.floor(Date.now() / 1000) + skewSeconds;
 }
 
 /**

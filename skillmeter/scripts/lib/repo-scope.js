@@ -11,6 +11,7 @@
 const fs = require("fs");
 const path = require("path");
 const { getAllowedGitHubOrgs } = require("../credstore");
+const { findGitRoot } = require("./io");
 
 /**
  * Extract the GitHub org from a remote URL. Handles:
@@ -40,32 +41,6 @@ function extractGitHubOrgFromRemote(remoteUrl) {
     return (url.pathname.split("/").filter(Boolean)[0] || "").toLowerCase();
   } catch {
     return "";
-  }
-}
-
-/**
- * Walk up from `startPath` until we find a dir containing `.git`.
- * Returns "" when not inside a repo.
- */
-function findGitRoot(startPath) {
-  if (!startPath || typeof startPath !== "string") return "";
-
-  let currentPath = path.resolve(startPath);
-  try {
-    if (!fs.statSync(currentPath).isDirectory()) {
-      currentPath = path.dirname(currentPath);
-    }
-  } catch {
-    currentPath = path.dirname(currentPath);
-  }
-
-  while (true) {
-    const gitPath = path.join(currentPath, ".git");
-    if (fs.existsSync(gitPath)) return currentPath;
-
-    const parent = path.dirname(currentPath);
-    if (parent === currentPath) return "";
-    currentPath = parent;
   }
 }
 
