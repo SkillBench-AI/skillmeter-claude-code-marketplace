@@ -73,7 +73,7 @@ test("bare project: flat defaults, Level 2 unknown, no raw content", () => {
 
   const h = detectHarness(root, { homeDir: home, repoRoot: root, hashSalt: SALT });
 
-  assert.equal(h.harness_schema_version, "2.0");
+  assert.equal(h.harness_schema_version, "2.1");
   assert.equal(h.agent_type, "claude-code");
   assert.equal(h.agent_version, "");
   // instructions
@@ -89,6 +89,7 @@ test("bare project: flat defaults, Level 2 unknown, no raw content", () => {
   assert.equal(h.skills_count, 0);
   assert.deepEqual(h.skill_source_counts, { project: 0, user: 0, plugin: 0 });
   assert.deepEqual(h.skill_names, []);
+  assert.deepEqual(h.skill_contents, []);
   assert.equal(h.subagents_present, false);
   assert.equal(h.subagents_count, 0);
   assert.deepEqual(h.subagent_names, []);
@@ -126,7 +127,7 @@ test("harness_schema_version matches the exported contract version", () => {
   const root = makeProject();
   const h = detectHarness(root, { homeDir: makeHome(), repoRoot: root, hashSalt: SALT });
   assert.equal(h.harness_schema_version, HARNESS_SCHEMA_VERSION);
-  assert.equal(h.harness_schema_version, "2.0");
+  assert.equal(h.harness_schema_version, "2.1");
 });
 
 test("carries runtime fields (agent_type, agent_version, model, session_source, plugin_version)", () => {
@@ -242,8 +243,60 @@ test("fail-closed: a skill name embedding a secret is dropped, not emitted", () 
   assert.equal(h.redactions.hashed_count, 0);
   assert.equal(h.redactions.dropped_count, 1);
   assert.deepEqual(h.redactions.by_type, { skill_name: 1 });
+  // A skill dropped for a secret in its NAME must not have its body read either.
+  assert.deepEqual(h.skill_contents.map((c) => c.name), ["deploy"]);
   // The secret must not appear anywhere in the payload.
   assert.ok(!JSON.stringify(h).includes("AKIAIOSFODNN7EXAMPLE"));
+});
+
+test("skill_contents: custom (project/user) skill body collected; plugin skills name-only", () => {
+  const root = makeProject();
+  const home = makeHome();
+  write(
+    path.join(root, ".claude", "skills", "deploy", "SKILL.md"),
+    "---\nname: deploy\ndescription: Ship the app\n---\n1. run tests\n2. deploy\n"
+  );
+  const pluginsDir = path.join(home, ".claude", "plugins");
+  write(
+    path.join(pluginsDir, "installed_plugins.json"),
+    JSON.stringify({
+      version: 2,
+      plugins: {
+        "toolkit@skillbench": [
+          { scope: "user", version: "1.0.0", installPath: path.join(pluginsDir, "installed", "toolkit") },
+        ],
+      },
+    })
+  );
+  write(
+    path.join(pluginsDir, "installed", "toolkit", "skills", "bundled", "SKILL.md"),
+    "---\ndescription: nope\n---\nplugin skill body\n"
+  );
+
+  const h = detectHarness(root, { homeDir: home, repoRoot: root, hashSalt: SALT });
+
+  assert.deepEqual([...h.skill_names].sort(), ["bundled", "deploy"]);
+  assert.equal(h.skill_contents.length, 1);
+  const c = h.skill_contents[0];
+  assert.equal(c.name, "deploy");
+  assert.equal(c.description, "Ship the app");
+  assert.match(c.body, /run tests/);
+  assert.equal(c.truncated, false);
+  assert.ok(!JSON.stringify(h.skill_contents).includes("plugin skill body"));
+});
+
+test("skill_contents: oversized body is truncated, original byte size preserved", () => {
+  const root = makeProject();
+  const home = makeHome();
+  const big = "x".repeat(6000);
+  write(path.join(root, ".claude", "skills", "big", "SKILL.md"), `---\ndescription: d\n---\n${big}`);
+
+  const h = detectHarness(root, { homeDir: home, repoRoot: root, hashSalt: SALT });
+  const c = h.skill_contents.find((s) => s.name === "big");
+  assert.ok(c, "custom skill body present");
+  assert.equal(c.truncated, true);
+  assert.ok(c.body.length <= 4096, "body capped");
+  assert.ok(c.bytes > 4096, "original size preserved");
 });
 
 test("subagents: .claude/agents/*.md detected, counted, raw names", () => {
@@ -428,7 +481,7 @@ test("never throws on a bogus cwd; returns safe defaults", () => {
     repoRoot: "",
     hashSalt: SALT,
   });
-  assert.equal(h.harness_schema_version, "2.0");
+  assert.equal(h.harness_schema_version, "2.1");
   assert.equal(h.skills_count, 0);
   assert.deepEqual(h.hooks_enabled, []);
   assert.equal(h.multi_agent, "unknown");
