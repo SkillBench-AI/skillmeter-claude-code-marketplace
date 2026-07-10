@@ -15,10 +15,12 @@
  * schema v2.0 (SBEE-170, analysis-side request) it carries harness identifiers
  * — skill / subagent / command / MCP server / plugin names — as **raw** values
  * so the analysis pipeline can do semantic work (e.g. join public skill names to
- * the catalog) that opaque hashes made impossible. It still never emits raw
- * harness file CONTENT (SKILL.md / CLAUDE.md bodies — Phase 4 / SBEE-169), hook
- * command strings, or MCP command/args/env (those carry literal secrets; see
- * below). It is deterministic, filesystem-only, and must never throw: detection
+ * the catalog) that opaque hashes made impossible. As of schema v2.1 (SBEE-169)
+ * it also emits the SKILL.md body of CUSTOM (project/user) skills — which have no
+ * public catalog to join against — size-capped and secret-scrubbed. It still
+ * never emits CLAUDE.md/AGENTS.md bodies, hook command strings, or MCP
+ * command/args/env (those carry literal secrets; see below). It is
+ * deterministic, filesystem-only, and must never throw: detection
  * runs inside the SessionStart hook and a failure here must not break the
  * session, so every probe is wrapped and falls back to a safe default.
  *
@@ -53,10 +55,10 @@ const { safeReadJson, findGitRoot } = require("./lib/io");
 
 // Version of the emitted harness metadata contract this payload conforms to.
 // String to match the contract's `harness_schema_version` field (the machine
-// spec is at spec/harness-metadata-contract.v1.json). Bumped to 2.0 when
-// identifier fields switched from `*_names_hashed` (HMAC tokens) to raw
-// `*_names`; downstream otel_logs queries must select the new field names.
-const HARNESS_SCHEMA_VERSION = "2.0";
+// spec is at spec/harness-metadata-contract.v1.json). 2.0: identifier fields
+// switched from `*_names_hashed` (HMAC tokens) to raw `*_names`. 2.1 (additive):
+// added `skill_contents` — the body of custom (project/user) skills.
+const HARNESS_SCHEMA_VERSION = "2.1";
 
 // Standard lifecycle hook event names. We only ever report event names from
 // this allow-list (contract `hooks_enabled` action: enum) so an arbitrary
@@ -123,6 +125,14 @@ const SKIP_DIRS = new Set([
 // Cap the number of names we enumerate per surface; counts stay exact, but the
 // name lists are bounded so a huge library can't bloat the event.
 const NAMES_LIMIT = 64;
+// Custom-skill CONTENT collection (SBEE-169): for developer-authored skills
+// (project/user scope) with no public catalog to join against, we emit the
+// SKILL.md body so the analysis side can do semantic work on custom skills.
+// Public/plugin-marketplace skills are name-only (catalog join). The body is
+// size-capped (defence-in-depth privacy + payload bound) and, like every string
+// in the block, still passes the central secret/PII sanitizer before egress.
+const MAX_SKILL_BODY_BYTES = 4096;
+const MAX_SKILL_CONTENTS = 50;
 
 // Coarse size buckets for the project CLAUDE.md (contract `claude_md_size_bucket`
 // enum). Raw byte counts are bucketed to avoid fingerprinting a specific file.
@@ -218,15 +228,47 @@ function readPermissions(settingsFilePath) {
 // recursing up to SKILL_SCAN_MAX_DEPTH. Hidden namespaces (any path segment
 // starting with ".", e.g. runtime-provided ".system" skills) are skipped so the
 // count reflects the developer's own harness rather than built-ins.
-function collectSkillNames(root, depth, acc) {
+function collectSkillNames(root, depth, acc, paths) {
   if (depth > SKILL_SCAN_MAX_DEPTH) return;
   for (const entry of safeReadDir(root)) {
     if (!entry.isDirectory()) continue;
     if (entry.name.startsWith(".")) continue;
     const dir = path.join(root, entry.name);
-    if (safeIsFile(path.join(dir, "SKILL.md"))) acc.add(entry.name);
-    collectSkillNames(dir, depth + 1, acc);
+    const md = path.join(dir, "SKILL.md");
+    if (safeIsFile(md)) {
+      acc.add(entry.name);
+      // Record the SKILL.md path for custom (project/user) skills so their body
+      // can be collected. First occurrence wins (project before user).
+      if (paths && !paths.has(entry.name)) paths.set(entry.name, md);
+    }
+    collectSkillNames(dir, depth + 1, acc, paths);
   }
+}
+
+// Read a custom skill's SKILL.md into the emittable content shape (SBEE-169):
+// `description` (from YAML frontmatter when present) + `body` (the rest,
+// size-capped). Never throws. The strings are emitted raw here and scrubbed for
+// secrets / PII by the central sanitizer before egress.
+function readSkillContent(name, mdPath) {
+  let text;
+  try {
+    text = fs.readFileSync(mdPath, "utf8");
+  } catch {
+    return null;
+  }
+  const bytes = Buffer.byteLength(text, "utf8");
+  let description = "";
+  let body = text;
+  const fm = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
+  if (fm) {
+    body = fm[2];
+    const d = fm[1].match(/^description:\s*(.+)$/m);
+    if (d) description = d[1].trim().replace(/^["']|["']$/g, "");
+  }
+  body = body.trim();
+  const truncated = body.length > MAX_SKILL_BODY_BYTES;
+  if (truncated) body = body.slice(0, MAX_SKILL_BODY_BYTES);
+  return { name, description, body, bytes, truncated };
 }
 
 // Collect markdown command/agent names under `root`. Each `*.md` file is one
@@ -362,6 +404,9 @@ function detectHarness(cwd, options = {}) {
     skills_count: 0,
     skill_source_counts: { project: 0, user: 0, plugin: 0 },
     skill_names: [],
+    // Custom (project/user) skill bodies for semantic analysis (SBEE-169).
+    // Public/plugin skills are name-only (catalog join); see skill_names.
+    skill_contents: [],
 
     // ---- Subagents ----
     subagents_present: false,
@@ -444,16 +489,21 @@ function detectHarness(cwd, options = {}) {
 
     const skillNames = new Set();
     const seenSkillScopes = { project: new Set(), user: new Set(), plugin: new Set() };
+    // name -> SKILL.md path, for CUSTOM (project/user) skills only. Plugin skills
+    // are name-only (resolved from the public catalog), so their paths aren't
+    // tracked and their bodies are never read.
+    const customSkillPaths = new Map();
     for (const { scope, dir } of skillRoots) {
       if (!safeIsDir(dir)) continue;
       const names = new Set();
-      collectSkillNames(dir, 1, names);
+      collectSkillNames(dir, 1, names, customSkillPaths);
       for (const n of names) {
         skillNames.add(n);
         seenSkillScopes[scope].add(n);
       }
     }
     // Plugin-provided skills: scan each installed plugin's bundled skills dir.
+    // (No path map -> no body collected; catalog join covers these.)
     const pluginInfo = detectPlugins(userClaudeDir, harness.redactions);
     for (const installPath of pluginInfo.installPaths) {
       const dir = path.join(installPath, "skills");
@@ -477,6 +527,17 @@ function detectHarness(cwd, options = {}) {
       "skill_name",
       harness.redactions
     );
+    // Custom-skill CONTENT (SBEE-169): body of each project/user skill that
+    // survived the name secret-check (a skill dropped for a secret in its NAME
+    // is not read at all). Emitted raw; secret-scrubbed by the central sanitizer.
+    // Bounded by MAX_SKILL_CONTENTS + per-body MAX_SKILL_BODY_BYTES.
+    const emittedSkillNames = new Set(harness.skill_names);
+    for (const name of [...customSkillPaths.keys()].sort()) {
+      if (harness.skill_contents.length >= MAX_SKILL_CONTENTS) break;
+      if (!emittedSkillNames.has(name)) continue; // dropped by the name check
+      const content = readSkillContent(name, customSkillPaths.get(name));
+      if (content) harness.skill_contents.push(content);
+    }
 
     // ---- Subagents (.claude/agents/*.md) ----
     const agentRoots = [];
