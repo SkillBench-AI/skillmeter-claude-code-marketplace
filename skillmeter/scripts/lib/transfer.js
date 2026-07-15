@@ -16,15 +16,18 @@ const { promisify } = require("util");
 const { spawn } = require("child_process");
 
 const credstore = require("../credstore");
-const { sanitizeTranscript } = require("./sanitize");
 const { getEndpointFromTokenAllowExpired, isJwtExpired } = require("./jwt");
 const { ensureFreshLicense } = require("./license-activation");
-const { getEventTimeoutMs } = require("./config");
+const { getEventTimeoutMs, getTranscriptChunkMaxBytes } = require("./config");
+const { atomicWriteJson, safeReadJson } = require("./io");
+const { parseJsonl, buildChunkPlan } = require("./transcript-delta");
 const {
   PLUGIN_ROOT,
   LOG_DIR,
   LOG_FILE,
   TRANSCRIPTS_PENDING_DIR,
+  TRANSCRIPTS_CHUNKS_DIR,
+  TRANSCRIPTS_CURSORS_DIR,
   LEGACY_LOG_DIR,
   PLUGIN_VERSION,
 } = require("./paths");
@@ -193,121 +196,255 @@ function spawnDetachedDrain() {
   }
 }
 
-/**
- * Stage a transcript for upload: sanitize the JSONL content and write it to
- * the pending directory. The staged file is the source of truth for both the
- * initial upload attempt and any later retry — we no longer depend on the
- * original transcript path existing.
- *
- * Returns the pending file path on success, or null when staging fails.
- */
-function stageTranscriptForUpload(transcriptPath) {
-  try {
-    fs.mkdirSync(TRANSCRIPTS_PENDING_DIR, { recursive: true });
-  } catch (err) {
-    console.error(`[skillmeter] Transcript staging failed (mkdir): ${err.message}`);
-    return null;
-  }
+// ---------------------------------------------------------------------------
+// Delta transcript upload (uuid-cursor)
+//
+// Instead of re-staging the whole transcript every Stop, seal only the lines
+// added since the last-sent uuid as durable chunks the drain uploads
+// independently. See scripts/lib/transcript-delta.js for the pure planning.
+// ---------------------------------------------------------------------------
 
-  const transcriptId = path.basename(transcriptPath);
-  const pendingPath = path.join(TRANSCRIPTS_PENDING_DIR, transcriptId);
+function cursorPath(transcriptId) {
+  return path.join(TRANSCRIPTS_CURSORS_DIR, `${transcriptId}.json`);
+}
 
+// Uncached (direct disk) read so a cursor advanced by one process is seen by
+// another (Stop vs detached drain vs monitor), matching getLicenseTokenUncached.
+function readCursor(transcriptId) {
+  return safeReadJson(cursorPath(transcriptId), null);
+}
+
+// Persist the delta cursor atomically. Best-effort: a failed write just means
+// the next Stop recomputes from the old cursor (chunks are idempotent by uuid).
+function writeCursor(cursor) {
   try {
-    // Always run content sanitization (secret/PII redaction). A missing salt
-    // only disables home-path hashing inside sanitizeTranscript — it never
-    // stages a raw transcript. getOrCreateHashSalt normally returns a salt.
-    const hashSalt = credstore.getOrCreateHashSalt();
-    const sanitized = sanitizeTranscript(transcriptPath, hashSalt);
-    // Overwrite previous snapshots of the same transcript — a long session
-    // re-stages on every Stop and we always want the latest lines.
-    fs.writeFileSync(pendingPath, sanitized);
-    return pendingPath;
+    atomicWriteJson(cursorPath(cursor.transcriptId), cursor);
   } catch (err) {
-    console.error(`[skillmeter] Transcript staging failed: ${err.message}`);
-    return null;
+    console.error(`[skillmeter] Transcript cursor write failed: ${err.message}`);
   }
 }
 
-/**
- * Upload a staged pending transcript file. On 2xx, deletes the pending file.
- * On failure, leaves it on disk for the next SessionStart retry.
- * @returns {Promise<{ok:boolean, error?:string}>} same result shape as
- *   transferEventLog: `error` is set only on a real transmission failure.
- */
-async function uploadPendingTranscript(pendingPath, deviceId, timeoutMs = TRANSCRIPT_TIMEOUT) {
-  if (!pendingPath || !fs.existsSync(pendingPath)) return { ok: false };
+// Seal one delta chunk as a durable body (.jsonl) + sidecar (.meta.json). The
+// meta is written (durable) BEFORE the body is atomically published, so
+// listDeltaChunks (which keys off the body) never yields a body without meta.
+// Returns the body path, or null on failure.
+function sealDeltaChunk(transcriptId, lines, meta) {
+  try {
+    fs.mkdirSync(TRANSCRIPTS_CHUNKS_DIR, { recursive: true });
+  } catch (err) {
+    console.error(`[skillmeter] Delta chunk seal failed (mkdir): ${err.message}`);
+    return null;
+  }
 
-  // A valid (non-expired) license JWT is REQUIRED — the backend does not accept
-  // unauthenticated telemetry. No valid token → leave the pending file for retry.
+  const body = lines.join("\n") + "\n";
+  const baseTs = Date.now();
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const base = `${baseTs + attempt}-${process.pid}`;
+    const bodyPath = path.join(TRANSCRIPTS_CHUNKS_DIR, `${base}.jsonl`);
+    const metaPath = path.join(TRANSCRIPTS_CHUNKS_DIR, `${base}.meta.json`);
+    if (fs.existsSync(bodyPath) || fs.existsSync(metaPath)) continue;
+
+    const tmpPath = `${bodyPath}.tmp.${process.pid}.${baseTs}`;
+    try {
+      const fd = fs.openSync(tmpPath, "w", 0o600);
+      fs.writeSync(fd, body);
+      fs.fsyncSync(fd);
+      fs.closeSync(fd);
+      atomicWriteJson(metaPath, { transcriptId, ...meta, createdAt: baseTs });
+      fs.renameSync(tmpPath, bodyPath); // publish body last
+      return bodyPath;
+    } catch (err) {
+      try { fs.unlinkSync(tmpPath); } catch {}
+      try { fs.unlinkSync(metaPath); } catch {}
+      console.error(`[skillmeter] Delta chunk seal failed: ${err.message}`);
+      return null;
+    }
+  }
+  console.error(`[skillmeter] Delta chunk seal failed: no unique chunk name`);
+  return null;
+}
+
+// List delta chunk bodies that have a durable sidecar meta (bodies without a
+// meta are half-written and skipped until complete or swept).
+function listDeltaChunks() {
+  if (!fs.existsSync(TRANSCRIPTS_CHUNKS_DIR)) return [];
+  try {
+    return fs.readdirSync(TRANSCRIPTS_CHUNKS_DIR)
+      .filter((f) => f.endsWith(".jsonl"))
+      .map((f) => path.join(TRANSCRIPTS_CHUNKS_DIR, f))
+      .filter((bodyPath) => {
+        try {
+          return (
+            fs.statSync(bodyPath).isFile() &&
+            fs.existsSync(bodyPath.replace(/\.jsonl$/, ".meta.json"))
+          );
+        } catch {
+          return false;
+        }
+      });
+  } catch {
+    return [];
+  }
+}
+
+// Build the HTTP headers for a delta chunk upload. Pure (no fs/network) so the
+// X-Chunk-Reset / X-Prompt-ID logic is unit-testable.
+function buildChunkHeaders(meta, deviceId, token) {
+  const headers = {
+    "Content-Type": "application/x-ndjson",
+    "Content-Encoding": "gzip",
+    "X-Device-ID": deviceId,
+    "X-Transcript-ID": meta.transcriptId,
+    "X-Chunk-Seq": String(meta.seq),
+    // >0 => server truncates rows with seq < baseline for this transcript
+    // (order-independent under parallel drain); "0" => plain append.
+    "X-Chunk-Reset": String(meta.reset ? meta.resetBaselineSeq : 0),
+    "X-Plugin-Version": PLUGIN_VERSION,
+    "Authorization": `Bearer ${token}`,
+  };
+  if (meta.promptId) headers["X-Prompt-ID"] = meta.promptId;
+  return headers;
+}
+
+// Upload one delta chunk. On 2xx, deletes the body then the meta; otherwise
+// leaves both for retry. Result shape matches drainFailedLogs entries.
+async function uploadDeltaChunk(bodyPath, deviceId, timeoutMs = TRANSCRIPT_TIMEOUT) {
+  if (!bodyPath || !fs.existsSync(bodyPath)) return { ok: false };
+  const metaPath = bodyPath.replace(/\.jsonl$/, ".meta.json");
+  const meta = safeReadJson(metaPath, null);
+  if (!meta) {
+    console.error(`[skillmeter] Transcript chunk: missing meta for ${path.basename(bodyPath)}`);
+    return { ok: false };
+  }
+
   const token = credstore.getLicenseTokenUncached();
   if (!token || isJwtExpired(token)) {
-    console.error(`[skillmeter] Transcript: no valid license JWT — kept pending for next session`);
+    console.error(`[skillmeter] Transcript chunk: no valid license JWT — kept for retry`);
     return { ok: false };
   }
-
   const endpoint = getEndpointFromTokenAllowExpired(token);
   if (!endpoint) {
-    console.error(`[skillmeter] Transcript: no telemetry endpoint resolvable from license JWT — leaving for retry`);
+    console.error(`[skillmeter] Transcript chunk: no telemetry endpoint resolvable — kept for retry`);
     return { ok: false };
   }
-
-  const transcriptId = path.basename(pendingPath);
 
   let compressed;
   try {
-    const raw = await fsp.readFile(pendingPath);
+    const raw = await fsp.readFile(bodyPath);
     compressed = await gzipAsync(raw);
   } catch (err) {
-    console.error(`[skillmeter] Transcript gzip failed for ${transcriptId}: ${err.message}`);
+    console.error(`[skillmeter] Transcript chunk gzip failed: ${err.message}`);
     return { ok: false, error: err.message };
   }
 
-  const doPost = () =>
-    fetch(`${endpoint}/logs/claude/transcript`, {
+  const removeChunk = () => {
+    try { fs.unlinkSync(bodyPath); } catch {}
+    try { fs.unlinkSync(metaPath); } catch {}
+  };
+
+  console.error(
+    `[skillmeter] Transferring transcript chunk: ${meta.transcriptId} seq=${meta.seq} (${compressed.length} bytes gzipped)`
+  );
+
+  try {
+    const res = await fetch(`${endpoint}/logs/claude/transcript`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/x-ndjson",
-        "Content-Encoding": "gzip",
-        "X-Device-ID": deviceId,
-        "X-Transcript-ID": transcriptId,
-        "X-Plugin-Version": PLUGIN_VERSION,
-        "Authorization": `Bearer ${token}`,
-      },
+      headers: buildChunkHeaders(meta, deviceId, token),
       body: compressed,
       signal: AbortSignal.timeout(timeoutMs),
     });
-
-  const removePending = () => {
-    try { fs.unlinkSync(pendingPath); } catch {}
-  };
-
-  console.error(`[skillmeter] Transferring transcript: ${transcriptId} (${compressed.length} bytes gzipped)`);
-
-  try {
-    const res = await doPost();
     if (res.ok) {
-      console.error(`[skillmeter] Transcript transferred: ${transcriptId}`);
-      removePending();
+      console.error(`[skillmeter] Transcript chunk transferred: ${meta.transcriptId} seq=${meta.seq}`);
+      removeChunk();
       return { ok: true };
     }
-    console.error(`[skillmeter] Transcript transfer failed: HTTP ${res.status} — kept pending for next session`);
+    console.error(`[skillmeter] Transcript chunk transfer failed: HTTP ${res.status} — kept for retry`);
     return { ok: false, error: `HTTP ${res.status}` };
   } catch (err) {
-    console.error(`[skillmeter] Transcript transfer error: ${err.message} — kept pending for next session`);
+    console.error(`[skillmeter] Transcript chunk transfer error: ${err.message} — kept for retry`);
     return { ok: false, error: err.message };
   }
+}
+
+// Returns { ok: <#uploaded>, errors: [...] } for this batch.
+async function drainDeltaChunks(timeoutMs) {
+  const files = listDeltaChunks();
+  if (files.length === 0) return { ok: 0, errors: [] };
+
+  const deviceId = credstore.getDeviceId();
+  if (!deviceId) return { ok: 0, errors: [] };
+
+  console.error(`[skillmeter] Draining ${files.length} transcript chunk(s)`);
+  // Best-effort, single-flight refresh once per batch (see drainFailedLogs).
+  await ensureFreshLicense(deviceId);
+  const results = await Promise.allSettled(files.map((f) => uploadDeltaChunk(f, deviceId, timeoutMs)));
+  return tally(results);
+}
+
+/**
+ * Stage a transcript delta: seal the lines added since the cursor's uuid as
+ * durable chunks, then advance the cursor. The cursor advances only after every
+ * chunk seals, so a partial failure re-sends the full delta next Stop (chunks
+ * are idempotent by uuid). Returns { chunks: <#sealed> }.
+ */
+function stageTranscriptDelta(transcriptPath, promptId, deviceId) {
+  const transcriptId = path.basename(transcriptPath);
+
+  let raw;
+  try {
+    raw = fs.readFileSync(transcriptPath, "utf8");
+  } catch (err) {
+    console.error(`[skillmeter] Transcript delta read failed: ${err.message}`);
+    return { chunks: 0 };
+  }
+
+  const cursor = readCursor(transcriptId);
+  const { objs } = parseJsonl(raw);
+  const hashSalt = credstore.getOrCreateHashSalt();
+
+  const plan = buildChunkPlan(objs, cursor, hashSalt, {
+    seqStart: (cursor && cursor.seq) || 0,
+    maxUncompressedBytes: getTranscriptChunkMaxBytes(),
+  });
+
+  if (!plan.newCursor) return { chunks: 0 }; // empty delta — cursor untouched
+
+  let sealed = 0;
+  for (const chunk of plan.chunks) {
+    const bodyPath = sealDeltaChunk(transcriptId, chunk.lines, {
+      seq: chunk.seq,
+      reset: chunk.reset,
+      resetBaselineSeq: chunk.resetBaselineSeq,
+      promptId,
+    });
+    if (bodyPath) sealed++;
+  }
+
+  // Advance only when the whole delta durably sealed; otherwise leave the cursor
+  // so the next Stop re-seals the full delta (dedup by uuid on the server).
+  if (sealed === plan.chunks.length) {
+    writeCursor({
+      transcriptId,
+      lastUuid: plan.newCursor.lastUuid,
+      seq: plan.newCursor.seq,
+      updatedAt: Date.now(),
+    });
+  }
+  return { chunks: sealed };
 }
 
 /**
  * Seal final-session artifacts into durable queues. Network upload is left to
  * SessionStart retry and the plugin monitor, keeping async hooks short.
  */
-function sealFinalSessionArtifacts(input) {
+function sealFinalSessionArtifacts(input, deviceId) {
   const sealedEventLog = sealEventLog();
-  let stagedTranscript = null;
+  let stagedTranscript = false;
 
   if (input && input.transcript_path && fs.existsSync(input.transcript_path)) {
-    stagedTranscript = stageTranscriptForUpload(input.transcript_path);
+    const id = deviceId || credstore.getDeviceId();
+    const res = stageTranscriptDelta(input.transcript_path, input.prompt_id, id);
+    stagedTranscript = res && res.chunks > 0;
   } else {
     console.error(`[skillmeter] No transcript to stage`);
   }
@@ -323,12 +460,13 @@ function sealEventLogAndTriggerDrain() {
   }
 }
 
-// One-time forward migration of the durable queue. Older versions (and hosts
-// without CLAUDE_PLUGIN_DATA) kept sealed event logs + pending transcripts under
-// PLUGIN_ROOT/logs, which the host deletes ~7 days after a plugin update. Copy
-// any un-uploaded artifacts into the persistent LOG_DIR so an in-place upgrade
-// doesn't strand them. Best-effort, copy (not move) + skip-existing, so it's
-// safe to run every session and a no-op when the paths coincide.
+// One-time forward migration of the durable event-log queue. Older hosts
+// (without CLAUDE_PLUGIN_DATA) kept sealed event logs under PLUGIN_ROOT/logs,
+// which the host deletes ~7 days after a plugin update. Copy any un-uploaded
+// event logs into the persistent LOG_DIR so an in-place upgrade doesn't strand
+// them. Best-effort, copy (not move) + skip-existing, so it's safe to run every
+// session and a no-op when the paths coincide. (Legacy full-transcript pending
+// files are NOT migrated — transcript upload is delta-only now.)
 function migrateLegacyQueue() {
   if (LEGACY_LOG_DIR === LOG_DIR) return; // CLAUDE_PLUGIN_DATA unavailable
   if (!fs.existsSync(LEGACY_LOG_DIR)) return;
@@ -348,16 +486,6 @@ function migrateLegacyQueue() {
       }
       // Skip *.sent (already delivered) and lock files.
     }
-    const legacyPending = path.join(LEGACY_LOG_DIR, "transcripts", "pending");
-    if (fs.existsSync(legacyPending)) {
-      fs.mkdirSync(TRANSCRIPTS_PENDING_DIR, { recursive: true });
-      for (const f of fs.readdirSync(legacyPending)) {
-        const src = path.join(legacyPending, f);
-        try { if (!fs.statSync(src).isFile()) continue; } catch { continue; }
-        const dest = path.join(TRANSCRIPTS_PENDING_DIR, f);
-        if (!fs.existsSync(dest)) fs.copyFileSync(src, dest);
-      }
-    }
   } catch {}
 }
 
@@ -376,24 +504,10 @@ function listSealedEventLogs() {
   }
 }
 
-function listPendingTranscripts() {
-  if (!fs.existsSync(TRANSCRIPTS_PENDING_DIR)) return [];
-
-  try {
-    return fs.readdirSync(TRANSCRIPTS_PENDING_DIR)
-      .map((file) => path.join(TRANSCRIPTS_PENDING_DIR, file))
-      .filter((filePath) => {
-        try { return fs.statSync(filePath).isFile(); } catch { return false; }
-      });
-  } catch {
-    return [];
-  }
-}
-
-// Total queued (un-uploaded) artifacts: sealed event logs + pending
-// transcripts. Used by the retry daemon to detect drain progress for backoff.
+// Total queued (un-uploaded) artifacts: sealed event logs + delta transcript
+// chunks. Used by the retry daemon to detect drain progress for backoff.
 function queuedFileCount() {
-  return listSealedEventLogs().length + listPendingTranscripts().length;
+  return listSealedEventLogs().length + listDeltaChunks().length;
 }
 
 // Tally { ok, error } results from a batch into { ok: <count>, errors: [...] }.
@@ -425,21 +539,6 @@ async function drainFailedLogs(timeoutMs) {
   return tally(results);
 }
 
-// Returns { ok: <#uploaded>, errors: [...] } for this batch.
-async function drainPendingTranscripts(timeoutMs) {
-  const files = listPendingTranscripts();
-  if (files.length === 0) return { ok: 0, errors: [] };
-
-  const deviceId = credstore.getDeviceId();
-  if (!deviceId) return { ok: 0, errors: [] };
-
-  console.error(`[skillmeter] Draining ${files.length} pending transcript(s)`);
-  // Best-effort, single-flight refresh once per batch (see drainFailedLogs).
-  await ensureFreshLicense(deviceId);
-  const results = await Promise.allSettled(files.map((filePath) => uploadPendingTranscript(filePath, deviceId, timeoutMs)));
-  return tally(results);
-}
-
 // Drain both queues once. Record an upload-result sentinel so the next
 // SessionStart can surface a one-line notice: success when anything uploaded,
 // or a failure (with the error) when nothing uploaded but a real transmission
@@ -447,10 +546,10 @@ async function drainPendingTranscripts(timeoutMs) {
 // through, so the notice reflects at most one outcome per drain.
 async function drainQueuesOnce(timeoutMs) {
   const ev = await drainFailedLogs(timeoutMs);
-  const tr = await drainPendingTranscripts(timeoutMs);
+  const dc = await drainDeltaChunks(timeoutMs);
   const events = ev.ok;
-  const transcripts = tr.ok;
-  const errors = [...ev.errors, ...tr.errors];
+  const transcripts = dc.ok;
+  const errors = [...ev.errors, ...dc.errors];
   if (events + transcripts > 0) {
     credstore.writeUploadResult({ events, transcripts });
   } else if (errors.length > 0) {
@@ -469,13 +568,13 @@ function retryFailedLogs() {
 }
 
 /**
- * Retry failed transcript uploads. Scans the pending directory and fires an
- * upload for every staged file left behind by a previous session. Each
- * upload is fire-and-forget; on 2xx the file is removed, otherwise it stays
- * for the next session.
+ * Retry failed transcript uploads. Scans the delta chunk queue and fires an
+ * upload for every chunk left behind by a previous session. Each upload is
+ * fire-and-forget; on 2xx the chunk is removed, otherwise it stays for the
+ * next session.
  */
 function retryFailedTranscripts() {
-  void drainPendingTranscripts();
+  void drainDeltaChunks();
 }
 
 /**
@@ -500,10 +599,26 @@ function cleanupStaleFiles() {
     }
   }
 
+  // Orphan GC only: the legacy full-file pending queue is no longer written or
+  // uploaded (transcript upload is delta-only). Sweep it so any full transcript
+  // left by a pre-cutover client version is eventually reclaimed off disk.
   if (fs.existsSync(TRANSCRIPTS_PENDING_DIR)) {
     try {
       for (const f of fs.readdirSync(TRANSCRIPTS_PENDING_DIR)) {
         candidates.push(path.join(TRANSCRIPTS_PENDING_DIR, f));
+      }
+    } catch {
+      // fall through
+    }
+  }
+
+  // Delta chunk bodies + sidecar metas (and any orphaned .tmp). Cursors are
+  // deliberately NOT swept here — they must outlive gaps (vacations, long
+  // --resume) so the delta continues instead of full-resending.
+  if (fs.existsSync(TRANSCRIPTS_CHUNKS_DIR)) {
+    try {
+      for (const f of fs.readdirSync(TRANSCRIPTS_CHUNKS_DIR)) {
+        candidates.push(path.join(TRANSCRIPTS_CHUNKS_DIR, f));
       }
     } catch {
       // fall through
@@ -537,13 +652,18 @@ module.exports = {
   transferEventLog,
   sealEventLog,
   sealEventLogAndTriggerDrain,
-  stageTranscriptForUpload,
-  uploadPendingTranscript,
+  readCursor,
+  writeCursor,
+  sealDeltaChunk,
+  listDeltaChunks,
+  buildChunkHeaders,
+  uploadDeltaChunk,
+  stageTranscriptDelta,
   sealFinalSessionArtifacts,
   spawnDetachedDrain,
   clearDrainOnceLock,
   drainFailedLogs,
-  drainPendingTranscripts,
+  drainDeltaChunks,
   drainQueuesOnce,
   queuedFileCount,
   retryFailedLogs,

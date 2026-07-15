@@ -28,6 +28,13 @@ const LOG_DIR = path.join(DATA_ROOT, "logs");
 const LOG_FILE = path.join(LOG_DIR, "events.jsonl");
 // Transcripts that failed to upload get parked here for retry on next session.
 const TRANSCRIPTS_PENDING_DIR = path.join(LOG_DIR, "transcripts", "pending");
+// Delta-upload chunks (uuid-cursor): durable per-turn deltas drained
+// independently and deleted on 2xx. Distinct dir from `pending` so the drain
+// tells delta chunks from legacy full-file staging by directory alone.
+const TRANSCRIPTS_CHUNKS_DIR = path.join(LOG_DIR, "transcripts", "chunks");
+// Delta-upload cursors ({transcriptId,lastUuid,seq}). Kept SEPARATE from chunks
+// so a cursor survives chunk deletion (next turn) and session end (--resume).
+const TRANSCRIPTS_CURSORS_DIR = path.join(LOG_DIR, "transcripts", "cursors");
 // Pre-0.17 / no-CLAUDE_PLUGIN_DATA location, for one-time forward migration.
 const LEGACY_LOG_DIR = path.join(PLUGIN_ROOT, "logs");
 
@@ -42,6 +49,8 @@ module.exports = {
   LOG_DIR,
   LOG_FILE,
   TRANSCRIPTS_PENDING_DIR,
+  TRANSCRIPTS_CHUNKS_DIR,
+  TRANSCRIPTS_CURSORS_DIR,
   LEGACY_LOG_DIR,
   PLUGIN_VERSION,
 };
