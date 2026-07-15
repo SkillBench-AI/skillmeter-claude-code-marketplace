@@ -18,7 +18,6 @@
  */
 
 const crypto = require("crypto");
-const fs = require("fs");
 const os = require("os");
 
 const { RULES, STOPWORDS, SECRET_PLACEHOLDER } = require("./rules");
@@ -266,37 +265,6 @@ function sanitizeLine(obj, hashSalt) {
   return scrubDeep(obj, hashSalt);
 }
 
-/**
- * Sanitize a JSONL transcript file, returning the sanitized content as a
- * Buffer. Malformed lines are skipped individually so a single corrupt entry
- * (e.g. a trailing partial line from a crashed writer) doesn't abort the whole
- * upload.
- */
-function sanitizeTranscript(transcriptPath, hashSalt) {
-  const raw = fs.readFileSync(transcriptPath, "utf8");
-  const lines = raw.split("\n");
-  const output = [];
-  let malformed = 0;
-
-  for (const line of lines) {
-    if (!line) continue;
-    try {
-      const obj = JSON.parse(line);
-      output.push(JSON.stringify(sanitizeLine(obj, hashSalt)));
-    } catch {
-      malformed++;
-    }
-  }
-
-  if (malformed > 0) {
-    process.stderr.write(
-      `[skillmeter] transcript: dropped ${malformed} malformed line(s) during sanitize\n`
-    );
-  }
-
-  return Buffer.from(output.join("\n") + "\n", "utf8");
-}
-
 module.exports = {
   POLICY_VERSION,
   hashHmac,
@@ -306,5 +274,4 @@ module.exports = {
   scrubDeep,
   sanitizeEventData,
   sanitizeLine,
-  sanitizeTranscript,
 };

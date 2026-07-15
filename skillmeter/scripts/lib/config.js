@@ -102,6 +102,12 @@ function getEventTimeoutMs() {
 function getRetryDaemonIntervalMs() {
   return parseInt(process.env.SKILLMETER_RETRY_DAEMON_INTERVAL_MS || "", 10) || 120_000; // retry_daemon.js:28
 }
+// Per-chunk UNCOMPRESSED byte budget for delta transcript upload. Conservative
+// default so the gzipped body stays well under the backend's 6 MB request limit
+// (JSONL gzips ~4x+).
+function getTranscriptChunkMaxBytes() {
+  return parseInt(process.env.SKILLMETER_TRANSCRIPT_CHUNK_MAX_BYTES || "", 10) || 20 * 1024 * 1024;
+}
 
 module.exports = {
   IS_DEV,
@@ -113,6 +119,7 @@ module.exports = {
   getBackendUrlOverride,
   getEventTimeoutMs,
   getRetryDaemonIntervalMs,
+  getTranscriptChunkMaxBytes,
   GITHUB_DEVICE_CODE_URL,
   GITHUB_TOKEN_URL,
   GITHUB_OAUTH_SCOPE,

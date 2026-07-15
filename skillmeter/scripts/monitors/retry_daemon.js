@@ -47,9 +47,9 @@ async function sweep() {
     log(`event-log sweep error: ${err && err.message ? err.message : err}`);
   }
   try {
-    await transfer.drainPendingTranscripts();
+    await transfer.drainDeltaChunks();
   } catch (err) {
-    log(`transcript sweep error: ${err && err.message ? err.message : err}`);
+    log(`transcript-chunk sweep error: ${err && err.message ? err.message : err}`);
   }
 }
 
