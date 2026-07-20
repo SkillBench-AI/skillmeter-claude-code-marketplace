@@ -6,6 +6,8 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const os = require("os");
+const fs = require("fs");
+const path = require("path");
 
 const s = require("../scripts/lib/sanitize");
 const { RULES } = require("../scripts/lib/rules");
@@ -206,3 +208,35 @@ test("sanitizeLine does not mutate its input", () => {
   s.sanitizeLine(line, SALT);
   assert.deepEqual(line, snapshot, "input object must be untouched");
 });
+
+// --- Shared cross-surface secret-fixture parity corpus ---------------------
+// Loads the vendored copy of skillbench-docs/eval/secret-corpus/corpus.json and
+// asserts every fixture is redacted. Tier-1 misses fail the build (blocks
+// merge), so Tier-1 recall can't silently diverge from the Codex / session
+// collector sanitizers. See SANITIZATION_EPIC.md Task 5.2.
+const SECRET_CORPUS = JSON.parse(
+  fs.readFileSync(path.join(__dirname, "fixtures", "secret-corpus.json"), "utf8")
+);
+const buildCorpusValue = (parts) =>
+  parts
+    .map((p) => (/^HI[0-9]+$/.test(p) ? SECRET_CORPUS.hi.slice(0, Number(p.slice(2))) : p))
+    .join("");
+
+test("shared corpus: version + size guard (no silent shrinkage)", () => {
+  assert.equal(SECRET_CORPUS.version, "1", "corpus version changed — re-sync all repo copies");
+  const tier1 = SECRET_CORPUS.fixtures.filter((f) => f.tier === "tier1");
+  assert.ok(tier1.length >= 12, `expected >= 12 Tier-1 fixtures, got ${tier1.length}`);
+  assert.ok(
+    SECRET_CORPUS.fixtures.some((f) => f.tier === "tier2"),
+    "expected at least one Tier-2 fixture"
+  );
+});
+
+for (const f of SECRET_CORPUS.fixtures) {
+  test(`shared corpus: ${f.tier} ${f.id} is redacted`, () => {
+    const secret = buildCorpusValue(f.parts);
+    const { value, redactions } = s.redactString(`prefix ${secret} suffix`);
+    assert.ok(redactions.length > 0, `${f.id}: expected a redaction event`);
+    assert.equal(value.includes(secret), false, `${f.id}: raw secret survived sanitization`);
+  });
+}
