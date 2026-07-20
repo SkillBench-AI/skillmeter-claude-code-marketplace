@@ -219,13 +219,17 @@ const SECRET_CORPUS = JSON.parse(
 );
 const buildCorpusValue = (parts) =>
   parts
-    .map((p) => (/^HI[0-9]+$/.test(p) ? SECRET_CORPUS.hi.slice(0, Number(p.slice(2))) : p))
+    .map((p) => {
+      if (/^HI[0-9]+$/.test(p)) return SECRET_CORPUS.hi.slice(0, Number(p.slice(2)));
+      if (/^HX[0-9]+$/.test(p)) return SECRET_CORPUS.hex.slice(0, Number(p.slice(2)));
+      return p;
+    })
     .join("");
 
 test("shared corpus: version + size guard (no silent shrinkage)", () => {
   assert.equal(SECRET_CORPUS.version, "1", "corpus version changed — re-sync all repo copies");
   const tier1 = SECRET_CORPUS.fixtures.filter((f) => f.tier === "tier1");
-  assert.ok(tier1.length >= 12, `expected >= 12 Tier-1 fixtures, got ${tier1.length}`);
+  assert.ok(tier1.length >= 24, `expected >= 24 Tier-1 fixtures, got ${tier1.length}`);
   assert.ok(
     SECRET_CORPUS.fixtures.some((f) => f.tier === "tier2"),
     "expected at least one Tier-2 fixture"
