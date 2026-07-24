@@ -5,15 +5,16 @@
 // no-mock convention: pure functions on plain objects + throwaway temp dirs.
 
 const fs = require("fs");
-const os = require("os");
 const path = require("path");
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
+const { makeTempDir, setTestEnv, writeFile } = require("../testing/helpers");
 
 // transfer.js reads its dirs from CLAUDE_PLUGIN_DATA at require time, so point
 // it at a throwaway dir BEFORE requiring it.
-const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "skm-delta-"));
-process.env.CLAUDE_PLUGIN_DATA = DATA_DIR;
+const DATA_DIR = makeTempDir("skm-delta-");
+setTestEnv("CLAUDE_PLUGIN_DATA", DATA_DIR);
+setTestEnv("SKILLMETER_TRANSCRIPT_CHUNK_MAX_BYTES", undefined);
 
 const d = require("../scripts/lib/transcript-delta");
 const transfer = require("../scripts/lib/transfer");
@@ -87,9 +88,11 @@ test("computeDelta: unknown cursor uuid -> reset from 0", () => {
 test("splitLinesByBudget: groups within budget, no line loss", () => {
   const lines = ["aaaa", "bbbb", "cccc"]; // 5 bytes each incl newline
   const groups = d.splitLinesByBudget(lines, 10); // 2 lines per group
-  assert.equal(groups.flat().length, 3);
-  assert.ok(groups.every((g) => g.join("\n").length <= 12));
-  assert.deepEqual(groups.flat(), lines);
+  assert.deepEqual(groups, [["aaaa", "bbbb"], ["cccc"]]);
+  assert.ok(
+    groups.every((group) => Buffer.byteLength(group.join("\n") + "\n") <= 10),
+    "every multi-line group stays within the byte budget"
+  );
 });
 
 test("splitLinesByBudget: a single over-budget line is its own group (never dropped)", () => {
@@ -208,6 +211,6 @@ test("listDeltaChunks excludes a body without a meta sidecar", () => {
   const dir = path.join(DATA_DIR, "logs", "transcripts", "chunks");
   fs.mkdirSync(dir, { recursive: true });
   const orphan = path.join(dir, "9999999999-1.jsonl");
-  fs.writeFileSync(orphan, "{}\n"); // no sibling .meta.json
+  writeFile(orphan, "{}\n"); // no sibling .meta.json
   assert.ok(!transfer.listDeltaChunks().includes(orphan), "orphan body not listed");
 });

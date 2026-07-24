@@ -102,8 +102,6 @@ function getLicenseOrgs(token) {
 }
 
 module.exports = {
-  JWT_EXPIRY_GRACE_SECONDS,
-  decodeJwtPayload,
   isJwtExpired,
   getEndpointFromTokenAllowExpired,
   getLicenseOrgs,

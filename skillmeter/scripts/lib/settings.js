@@ -63,7 +63,6 @@ function saveTelemetryOptIn(cwd, value) {
 }
 
 module.exports = {
-  readSettingsFile,
   getTelemetryOptIn,
   getSkillmeterStringSetting,
   saveTelemetryOptIn,

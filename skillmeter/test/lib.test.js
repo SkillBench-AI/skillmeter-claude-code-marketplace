@@ -7,38 +7,42 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs");
-const os = require("os");
 const path = require("path");
+
+const {
+  makeTempDir,
+  makeJwt,
+  setTestEnv,
+  writeFile,
+} = require("../testing/helpers");
+
+setTestEnv("SKILLMETER_BACKEND_URL", undefined);
 
 const io = require("../scripts/lib/io");
 const { isJwtExpired, getEndpointFromTokenAllowExpired } = require("../scripts/lib/jwt");
 
-function tmp() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "skm-lib-"));
-}
-
 // --- io.safeReadJson -------------------------------------------------------
 
 test("safeReadJson returns parsed content for valid JSON", () => {
-  const d = tmp();
+  const d = makeTempDir("skm-lib-");
   const f = path.join(d, "x.json");
-  fs.writeFileSync(f, JSON.stringify({ a: 1 }));
+  writeFile(f, JSON.stringify({ a: 1 }));
   assert.deepEqual(io.safeReadJson(f), { a: 1 });
 });
 
 test("safeReadJson returns the fallback on missing/malformed file", () => {
-  const d = tmp();
+  const d = makeTempDir("skm-lib-");
   assert.equal(io.safeReadJson(path.join(d, "nope.json")), null);
   assert.deepEqual(io.safeReadJson(path.join(d, "nope.json"), {}), {});
   const bad = path.join(d, "bad.json");
-  fs.writeFileSync(bad, "{not json");
+  writeFile(bad, "{not json");
   assert.deepEqual(io.safeReadJson(bad, { fb: true }), { fb: true });
 });
 
 // --- io.atomicWriteJson ----------------------------------------------------
 
 test("atomicWriteJson writes JSON that safeReadJson round-trips", () => {
-  const d = tmp();
+  const d = makeTempDir("skm-lib-");
   const f = path.join(d, "nested", "out.json");
   io.atomicWriteJson(f, { hello: "world" });
   assert.deepEqual(io.safeReadJson(f), { hello: "world" });
@@ -46,8 +50,8 @@ test("atomicWriteJson writes JSON that safeReadJson round-trips", () => {
 
 // --- io.findGitRoot --------------------------------------------------------
 
-test("findGitRoot walks up to the .git marker and returns '' outside a repo", () => {
-  const d = tmp();
+test("findGitRoot walks up to the .git marker and handles empty input", () => {
+  const d = makeTempDir("skm-lib-");
   const nested = path.join(d, "a", "b");
   fs.mkdirSync(nested, { recursive: true });
   fs.mkdirSync(path.join(d, ".git"));
@@ -55,19 +59,12 @@ test("findGitRoot walks up to the .git marker and returns '' outside a repo", ()
   // cwd through; compare against the resolved dir, not its symlink-resolved form.
   assert.equal(io.findGitRoot(nested), path.resolve(d));
   assert.equal(io.findGitRoot(""), "");
-
-  const orphan = tmp(); // fresh tmp dir with no .git up its (short) chain
-  // Not asserting a specific value for orphan since tmp may sit under a repo on
-  // some machines; just assert the type contract.
-  assert.equal(typeof io.findGitRoot(orphan), "string");
 });
 
 // --- jwt.isJwtExpired (parametrized) ---------------------------------------
 
-const mkJwt = (expOffsetSec) =>
-  "h." +
-  Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + expOffsetSec })).toString("base64") +
-  ".s";
+const expiringJwt = (expOffsetSec) =>
+  makeJwt({ exp: Math.floor(Date.now() / 1000) + expOffsetSec });
 
 test("isJwtExpired default: missing token is NOT expired", () => {
   assert.equal(isJwtExpired(null), false);
@@ -80,30 +77,27 @@ test("isJwtExpired treatMissingAsExpired: missing token IS expired", () => {
 });
 
 test("isJwtExpired honors skewSeconds", () => {
-  const t = mkJwt(60); // expires in 60s
+  const t = expiringJwt(60); // expires in 60s
   assert.equal(isJwtExpired(t, { skewSeconds: 30 }), false); // 60 > 30 → valid
   assert.equal(isJwtExpired(t, { skewSeconds: 300 }), true); // 60 < 300 → expired proactively
 });
 
 test("isJwtExpired: a long-lived token is never expired", () => {
-  assert.equal(isJwtExpired(mkJwt(3600)), false);
+  assert.equal(isJwtExpired(expiringJwt(3600)), false);
 });
 
 // --- endpoint resolution from JWT `aud` ------------------------------------
 
-const mkTok = (payload) =>
-  "h." + Buffer.from(JSON.stringify(payload)).toString("base64") + ".s";
-
 test("getEndpointFromTokenAllowExpired reads the `aud` claim (string)", () => {
   assert.equal(
-    getEndpointFromTokenAllowExpired(mkTok({ aud: "https://x.meter.skillbench.ai" })),
+    getEndpointFromTokenAllowExpired(makeJwt({ aud: "https://x.meter.skillbench.ai" })),
     "https://x.meter.skillbench.ai"
   );
 });
 
 test("`aud` may be an array; the first http(s) URL wins", () => {
   assert.equal(
-    getEndpointFromTokenAllowExpired(mkTok({ aud: ["skillbench", "https://x.meter.ai"] })),
+    getEndpointFromTokenAllowExpired(makeJwt({ aud: ["skillbench", "https://x.meter.ai"] })),
     "https://x.meter.ai"
   );
 });
@@ -111,13 +105,15 @@ test("`aud` may be an array; the first http(s) URL wins", () => {
 test("ignores the legacy telemetry_endpoint claim — `aud` only", () => {
   // No aud URL → null even when a legacy telemetry_endpoint is present.
   assert.equal(
-    getEndpointFromTokenAllowExpired(mkTok({ aud: "just-an-audience", telemetry_endpoint: "https://legacy.meter.ai" })),
+    getEndpointFromTokenAllowExpired(
+      makeJwt({ aud: "just-an-audience", telemetry_endpoint: "https://legacy.meter.ai" })
+    ),
     null
   );
 });
 
 test("returns null when no `aud` URL is present", () => {
-  assert.equal(getEndpointFromTokenAllowExpired(mkTok({ sub: "x" })), null);
+  assert.equal(getEndpointFromTokenAllowExpired(makeJwt({ sub: "x" })), null);
   assert.equal(getEndpointFromTokenAllowExpired(null), null);
 });
 

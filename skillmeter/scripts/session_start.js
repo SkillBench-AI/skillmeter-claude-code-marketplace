@@ -14,9 +14,10 @@ const credstore = require("./credstore.js");
 // watchPaths and the optional banner stay a single JSON object.
 async function prepareSession() {
   const deviceId = credstore.getDeviceId();
-  if (!deviceId || credstore.getTelemetryDisabled()) return;
   credstore.ensureSigninResultFile();
+  credstore.migrateOrgTelemetryConsent();
   migrateLegacyQueue();
+  if (!deviceId || credstore.getTelemetryDisabled()) return;
   try { await refreshLicense(deviceId); } catch {}
 }
 
@@ -26,7 +27,6 @@ function runSessionStartHook() {
     // harness (instruction files, skills, hooks, plugin/agent info), detected
     // once at session start. Metadata only — no raw harness file contents.
     const harness = detectHarness(ctx.cwd, {
-      hashSalt: ctx.hashSalt,
       pluginRoot: PLUGIN_ROOT,
       pluginVersion: PLUGIN_VERSION,
       agentType: input.agent_type,
@@ -83,6 +83,10 @@ function runSessionStartHook() {
       }
       if (!credstore.hasValidLicense()) {
         lines.push(signInRequiredBanner());
+      } else if (gate.mode === "org_consent_required") {
+        lines.push(
+          `SkillMeter: signed in — run /skillmeter:signin to choose telemetry for @${repoScopeDecision.remoteOrg}.`
+        );
       } else if (gate.capture && repoScopeDecision.allowed) {
         // Telemetry actually captures only when the repo is in scope too (the
         // hard repo-scope block downstream); show "active" only then.
@@ -92,13 +96,25 @@ function runSessionStartHook() {
       process.stdout.write(JSON.stringify(out) + "\n");
 
       // stderr notices + SessionStart-only side effects (wording unchanged).
-      if (gate.mode === "opted_out") {
+      if (gate.mode === "project_disabled") {
         process.stderr.write(`SkillMeter v${PLUGIN_VERSION} (telemetry disabled for this project)\n`);
         return;
       }
+      if (gate.mode === "org_consent_required") {
+        process.stderr.write(
+          `SkillMeter v${PLUGIN_VERSION} (telemetry choice required for @${repoScopeDecision.remoteOrg})\n`
+        );
+        return;
+      }
+      if (gate.mode === "org_disabled") {
+        process.stderr.write(
+          `SkillMeter v${PLUGIN_VERSION} (telemetry disabled for @${repoScopeDecision.remoteOrg})\n`
+        );
+        return;
+      }
       if (gate.capture) {
-        const note = gate.mode === "auto_org"
-          ? "(telemetry auto-enabled — repo owned by allowed org)"
+        const note = gate.mode === "org_enabled"
+          ? `(telemetry enabled for @${repoScopeDecision.remoteOrg})`
           : "(activated)";
         process.stderr.write(`SkillMeter v${PLUGIN_VERSION} ${note}\n`);
         retryFailedLogs();
@@ -106,7 +122,7 @@ function runSessionStartHook() {
         cleanupStaleFiles();
         return;
       }
-      // not_enabled: no per-project preference and no auto-enable signal.
+      // Not signed in, out of scope, or globally paused.
       process.stderr.write(
         `SkillMeter v${PLUGIN_VERSION} (telemetry not configured for this project)\n` +
         `  /skillmeter:signin                — sign in with GitHub\n` +

@@ -10,8 +10,6 @@
 
 const credstore = require("./credstore.js");
 const { trySilentGhActivate } = require("./lib/license-activation");
-const { welcomeBanner } = require("./lib/banner.js");
-const { getRepoScopeDecision } = require("./lib/repo-scope");
 const { readStdinJson } = require("./lib/io");
 const path = require("path");
 
@@ -50,6 +48,18 @@ function isSigninCommand(input) {
   return input.command_name === "signin" && input.command_source === "plugin";
 }
 
+function signedInContext() {
+  const state = {
+    status: "signed_in",
+    globalTelemetryDisabled: credstore.getTelemetryDisabled(),
+    orgs: credstore.getAllowedGitHubOrgs().map((org) => ({
+      org,
+      consent: credstore.getOrgTelemetryConsent(org),
+    })),
+  };
+  return `SkillMeter sign-in state JSON:\n${JSON.stringify(state)}`;
+}
+
 async function main() {
   const input = await readStdin();
   if (!isSigninCommand(input)) return;
@@ -60,7 +70,7 @@ async function main() {
 
   const existingToken = credstore.getLicenseToken();
   if (existingToken && !credstore.isLicenseTokenExpired(existingToken)) {
-    addContext(welcomeBanner(getRepoScopeDecision(input.cwd || process.cwd())));
+    addContext(signedInContext());
     return;
   }
 
@@ -72,7 +82,7 @@ async function main() {
 
   const jwt = await trySilentGhActivate(deviceId);
   if (jwt) {
-    addContext(welcomeBanner(getRepoScopeDecision(input.cwd || process.cwd())));
+    addContext(signedInContext());
     return;
   }
 

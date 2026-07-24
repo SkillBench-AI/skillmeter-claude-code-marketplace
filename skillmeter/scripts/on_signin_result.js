@@ -15,7 +15,7 @@
 const fs = require("fs");
 const path = require("path");
 const credstore = require("./credstore.js");
-const { welcomeBanner } = require("./lib/banner.js");
+const { signinStatusBanner } = require("./lib/banner.js");
 const { getRepoScopeDecision } = require("./lib/repo-scope");
 
 // Dedupe marker: FileChanged can fire more than once per change, and re-fires
@@ -52,14 +52,22 @@ function main() {
   } catch {}
 
   if (result.status === "success") {
-    // Show what telemetry ACTUALLY tracks for the current repo, not the full
-    // org membership (getRepoScopeDecision applies the repo-scope org filter).
     const scope = getRepoScopeDecision(process.cwd());
-    const body = scope.allowed && scope.remoteOrg
-      ? `Signed in — tracking @${scope.remoteOrg}`
-      : "Signed in — this repo not tracked";
+    const org = credstore.getAllowedGitHubOrgs()[0] || "";
+    const consent = org ? credstore.getOrgTelemetryConsent(org) : null;
+    const body = !org
+      ? "Signed in — license has no telemetry organization"
+      : consent === null
+        ? `Signed in to @${org} — run /skillmeter:signin to choose telemetry`
+        : consent
+          ? `Signed in — telemetry enabled for @${org}`
+          : `Signed in — telemetry off for @${org}`;
     emit({
-      systemMessage: welcomeBanner(scope),
+      systemMessage:
+        signinStatusBanner(org, consent, scope.allowed && scope.remoteOrg === org) +
+        (org && consent === null
+          ? "\nRun /skillmeter:signin to choose whether to enable organization telemetry."
+          : ""),
       terminalSequence: osc777("SkillMeter", body),
     });
     return;

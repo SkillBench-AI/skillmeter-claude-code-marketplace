@@ -93,8 +93,7 @@ const KNOWN_HOOK_EVENTS = new Set([
 
 // Marketplaces recognised as public/known. As of schema v2.0 all plugin names
 // are emitted raw, so this set is no longer a raw-vs-hash gate; it is retained
-// (and exported) so downstream can still tell public-catalog plugins from
-// private ones without re-deriving the list.
+// so downstream can still tell public-catalog plugins from private ones.
 const PUBLIC_MARKETPLACES = new Set([
   "skillbench",
   "claude-plugins-official",
@@ -371,8 +370,6 @@ function readHooks(hooksFilePath) {
  * @param {string} [options.agentVersion] - agent CLI version, when the runtime
  *   exposes it (Claude Code does not surface this to hooks today, so it is
  *   typically ""; wired for parity + future availability).
- * @param {string} [options.hashSalt] - accepted for backward compatibility;
- *   no longer used by harness detection (identifiers are emitted raw in v2.0).
  * @returns {object} flat, plain-JSON harness metadata (safe to route through the
  *   sanitizer and upload).
  */
@@ -718,8 +715,6 @@ function detectPlugins(userClaudeDir, redactions) {
 
 module.exports = {
   HARNESS_SCHEMA_VERSION,
-  KNOWN_HOOK_EVENTS,
-  PUBLIC_MARKETPLACES,
   detectHarness,
   findRepoRoot,
   sizeBucket,

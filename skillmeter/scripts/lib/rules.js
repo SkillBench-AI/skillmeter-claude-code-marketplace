@@ -256,5 +256,4 @@ module.exports = {
   RULES,
   STOPWORDS,
   SECRET_PLACEHOLDER,
-  EMAIL_PLACEHOLDER,
 };

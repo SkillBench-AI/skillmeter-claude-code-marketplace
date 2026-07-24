@@ -4,9 +4,9 @@
  *
  * Rationale: the SessionStart hook only retries pending uploads once. If the
  * backend happens to be down when a session starts and comes back five
- * minutes in, sealed event logs and pending transcripts sit on disk until the
- * *next* session. This daemon closes that gap by scanning durable queues on a
- * loop for the lifetime of an interactive session.
+ * minutes in, sealed event logs and transcript delta chunks sit on disk until
+ * the *next* session. This daemon closes that gap by scanning durable queues
+ * on a loop for the lifetime of an interactive session.
  *
  * Relationship to SessionStart retry:
  *   - This does NOT replace `retryFailedLogs` / `retryFailedTranscripts` in

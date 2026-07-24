@@ -18,13 +18,13 @@
  */
 
 const credstore = require("./credstore.js");
-const licenseActivation = require("./lib/license-activation");
-const { welcomeBanner } = require("./lib/banner.js");
+const { signinStatusBanner } = require("./lib/banner.js");
 const { startSpinner } = require("./lib/spinner.js");
 const { getRepoScopeDecision } = require("./lib/repo-scope");
 const { postBearerJson } = require("./lib/http");
-const { STATE_DIR } = require("./lib/paths");
 const {
+  STATE_DIR,
+  getActivateUrl,
   getGitHubClientId,
   GITHUB_DEVICE_CODE_URL,
   GITHUB_TOKEN_URL,
@@ -57,6 +57,16 @@ function log(msg) {
 
 function say(msg) {
   process.stdout.write(msg + "\n");
+}
+
+function showSigninStatus(cwd = process.cwd()) {
+  const org = credstore.getAllowedGitHubOrgs()[0] || "";
+  const consent = org ? credstore.getOrgTelemetryConsent(org) : null;
+  const scope = getRepoScopeDecision(cwd);
+  say(signinStatusBanner(org, consent, scope.allowed && scope.remoteOrg === org));
+  if (org && consent === null) {
+    say(`Run /skillmeter:signin to choose whether to enable telemetry for @${org}.`);
+  }
 }
 
 // copyToClipboard tries platform-native clipboard tools. Returns true on
@@ -136,7 +146,7 @@ async function pollForToken(deviceCode, initialInterval) {
 
 async function exchangeForLicense(githubToken, deviceId) {
   const res = await postBearerJson(
-    licenseActivation.getActivateUrl(),
+    getActivateUrl(),
     githubToken,
     { device_id: deviceId },
     { timeoutMs: 10_000 }
@@ -211,7 +221,7 @@ async function main() {
   const existingToken = credstore.getLicenseToken();
   if (existingToken && !credstore.isLicenseTokenExpired(existingToken)) {
     // Already signed in — the license (and its validated org) is current.
-    say(welcomeBanner(getRepoScopeDecision(process.cwd())));
+    showSigninStatus();
     return;
   }
   if (existingToken) {
@@ -227,7 +237,7 @@ async function main() {
   log("Trying gh CLI first...");
   const silentJwt = await licenseActivation.trySilentGhActivate(deviceId);
   if (silentJwt) {
-    say(welcomeBanner(getRepoScopeDecision(process.cwd())));
+    showSigninStatus();
     return;
   }
 
@@ -280,7 +290,7 @@ async function runForegroundPoll(deviceId, device) {
       say("Sign-in discarded: signed out during issuance.");
       process.exit(0);
     }
-    say(welcomeBanner(getRepoScopeDecision(process.cwd())));
+    showSigninStatus();
   } catch (err) {
     stop();
     say(`Sign-in failed: ${err.message}`);

@@ -140,7 +140,6 @@ function buildChunkPlan(objs, cursor, salt, opts = {}) {
 }
 
 module.exports = {
-  DEFAULT_CHUNK_MAX_BYTES,
   parseJsonl,
   lastContentUuid,
   computeDelta,

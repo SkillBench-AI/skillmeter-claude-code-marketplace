@@ -30,13 +30,21 @@ function brandLine(marker) {
   return `${marker}  SkillMeter v${PLUGIN_VERSION} · skillbench`;
 }
 
-// Shown on /skillmeter:signin success. `scope` is a getRepoScopeDecision(cwd)
-// result — we show what telemetry ACTUALLY tracks for the current repo (the
-// matched org), not the user's full org membership. Outside scope, we say so.
-function welcomeBanner(scope) {
-  const status = scope && scope.allowed && scope.remoteOrg
-    ? `Tracking this repo · @${scope.remoteOrg}`
-    : "Signed in · this repo not tracked";
+// Shown after sign-in and whenever /skillmeter:signin manages an existing
+// consent. Authentication is deliberately distinct from telemetry permission.
+function signinStatusBanner(org, consent, scopeAllowed = false) {
+  let status;
+  if (!org) {
+    status = "Signed in · no licensed organization";
+  } else if (consent === null) {
+    status = `Signed in · choose telemetry for @${org}`;
+  } else if (consent === false) {
+    status = `Signed in · telemetry off · @${org}`;
+  } else if (scopeAllowed) {
+    status = `Telemetry active · @${org}`;
+  } else {
+    status = `Signed in · telemetry enabled · @${org}`;
+  }
   return box([brandLine("✓"), status]);
 }
 
@@ -66,7 +74,7 @@ function telemetryFailedNotice(error) {
 }
 
 module.exports = {
-  welcomeBanner,
+  signinStatusBanner,
   signInRequiredBanner,
   telemetryActiveBanner,
   telemetrySentNotice,

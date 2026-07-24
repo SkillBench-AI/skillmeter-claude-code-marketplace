@@ -271,7 +271,6 @@ module.exports = {
   redactString,
   containsSecret,
   scrubString,
-  scrubDeep,
   sanitizeEventData,
   sanitizeLine,
 };

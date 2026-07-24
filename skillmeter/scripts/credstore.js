@@ -2,15 +2,18 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 
-// Resolved centrally in lib/paths.js so SKILLMETER_STATE_DIR can isolate a dev
+// Resolved centrally in lib/config.js so SKILLMETER_STATE_DIR can isolate a dev
 // environment's credentials/identity from prod.
-const { CRED_FILE } = require("./lib/paths");
+const { CRED_FILE } = require("./lib/config");
 // Canonical JWT helpers. The validated org(s) for telemetry are read straight
 // from the license JWT (the activator's decision) — the client no longer stores
 // or narrows a GitHub org list.
 const { isJwtExpired, getLicenseOrgs } = require("./lib/jwt");
 // Shared low-level file I/O (safe read, atomic write) — leaf module, no cycle.
 const { safeReadJson, atomicWriteJson } = require("./lib/io");
+
+const ORG_TELEMETRY_POLICY_VERSION = 1;
+const ORG_TELEMETRY_MIGRATION_VERSION = 1;
 
 // ---------------------------------------------------------------------------
 // Low-level file helpers
@@ -138,6 +141,10 @@ function getLicenseTokenUncached() {
 
 function setLicenseToken(jwt) {
   const store = readStore();
+  // Preserve the old auto-org behavior for users who already had a license
+  // before org consent existed. This runs before replacing the token so a
+  // newly-issued token can never be mistaken for a legacy opt-in.
+  migrateOrgTelemetryConsentStore(store);
   store.license_jwt = jwt;
   writeStore(store);
   _cache = store;
@@ -196,6 +203,98 @@ function setTelemetryDisabled(value) {
   _cache = store;
 }
 
+function normalizeOrg(org) {
+  return typeof org === "string" ? org.trim().toLowerCase() : "";
+}
+
+function getOrgTelemetryConsentFromStore(store, org) {
+  const normalized = normalizeOrg(org);
+  if (!normalized) return null;
+  const record = store.org_telemetry_consents?.[normalized];
+  if (!record || record.policy_version !== ORG_TELEMETRY_POLICY_VERSION) return null;
+  return typeof record.enabled === "boolean" ? record.enabled : null;
+}
+
+/**
+ * One-time compatibility migration. Before org consent existed, every repo
+ * matching the license org was auto-enabled. Preserve that behavior only for a
+ * license already present when this version first runs. New installs get the
+ * migration marker before sign-in, so their newly-issued JWT remains unset.
+ */
+function migrateOrgTelemetryConsentStore(store) {
+  if ((store.org_telemetry_migration_version || 0) >= ORG_TELEMETRY_MIGRATION_VERSION) {
+    return false;
+  }
+
+  if (store.license_jwt && store.signed_out !== true) {
+    const consents = { ...(store.org_telemetry_consents || {}) };
+    for (const org of getLicenseOrgs(store.license_jwt)) {
+      const normalized = normalizeOrg(org);
+      if (!normalized || consents[normalized]) continue;
+      consents[normalized] = {
+        enabled: true,
+        policy_version: ORG_TELEMETRY_POLICY_VERSION,
+        decided_at: Date.now(),
+        source: "legacy",
+      };
+    }
+    if (Object.keys(consents).length > 0) store.org_telemetry_consents = consents;
+  }
+
+  store.org_telemetry_migration_version = ORG_TELEMETRY_MIGRATION_VERSION;
+  return true;
+}
+
+function migrateOrgTelemetryConsent() {
+  const store = readStore();
+  if (migrateOrgTelemetryConsentStore(store)) {
+    writeStore(store);
+    _cache = store;
+  }
+  return store;
+}
+
+function getOrgTelemetryConsent(org) {
+  const store = migrateOrgTelemetryConsent();
+  return getOrgTelemetryConsentFromStore(store, org);
+}
+
+function setOrgTelemetryConsent(org, enabled) {
+  const normalized = normalizeOrg(org);
+  if (!normalized) throw new Error("A GitHub organization is required.");
+  if (typeof enabled !== "boolean") throw new Error("Org telemetry consent must be boolean.");
+
+  const store = readStore();
+  migrateOrgTelemetryConsentStore(store);
+  store.org_telemetry_consents = {
+    ...(store.org_telemetry_consents || {}),
+    [normalized]: {
+      enabled,
+      policy_version: ORG_TELEMETRY_POLICY_VERSION,
+      decided_at: Date.now(),
+      source: "user",
+    },
+  };
+  writeStore(store);
+  _cache = store;
+  return store.org_telemetry_consents[normalized];
+}
+
+/**
+ * Network-side consent check. Token expiry is deliberately handled by the
+ * transfer layer after its refresh attempt; this check answers only whether
+ * the current license org(s) are authorized to transmit at all.
+ */
+function isTelemetryTransmissionAllowed() {
+  const store = migrateOrgTelemetryConsent();
+  if (store.telemetry_disabled === true) return false;
+  const orgs = store.license_jwt ? getLicenseOrgs(store.license_jwt) : [];
+  if (orgs.length === 0) return false;
+  // Current licenses carry one org. Requiring every org is the conservative
+  // behavior if a future plural claim is issued before queues become org-tagged.
+  return orgs.every((org) => getOrgTelemetryConsentFromStore(store, org) === true);
+}
+
 // Drop the license JWT atomically (the validated org lives in the JWT, so
 // nothing else needs clearing). Also removes the obsolete allowed_github_orgs
 // key left by pre-JWT-org versions. Preserves device_id and hash_salt so the
@@ -213,6 +312,10 @@ function signOut() {
 // signed-out sentinel so the next gh attempt is unblocked.
 function markEngaged() {
   const store = readStore();
+  // Mark a token-less install as migrated before a new JWT is minted. Without
+  // this ordering, the first successful sign-in would look like a legacy user
+  // and be silently auto-enabled.
+  migrateOrgTelemetryConsentStore(store);
   delete store.signed_out;
   writeStore(store);
   _cache = store;
@@ -226,6 +329,7 @@ function markEngaged() {
 function commitSignin({ jwt }) {
   const store = readStore();
   if (store.signed_out === true) return false;
+  migrateOrgTelemetryConsentStore(store);
   store.license_jwt = jwt;
   writeStore(store);
   _cache = store;
@@ -252,6 +356,13 @@ module.exports = {
   isLicenseTokenExpired,
   hasValidLicense,
   getAllowedGitHubOrgs,
+  getOrgTelemetryConsent,
+  setOrgTelemetryConsent,
+  migrateOrgTelemetryConsent,
+  isTelemetryTransmissionAllowed,
+  // Pure helpers exported for focused policy/migration tests.
+  _getOrgTelemetryConsentFromStore: getOrgTelemetryConsentFromStore,
+  _migrateOrgTelemetryConsentStore: migrateOrgTelemetryConsentStore,
   // Atomic sign-in lifecycle — prefer these over the lower-level set* helpers
   // when adjusting more than one field, so partial writes can't race.
   commitSignin,
@@ -267,7 +378,6 @@ module.exports = {
   readSigninResult,
   ensureSigninResultFile,
   // Upload result sentinel (for the SessionStart "telemetry sent" notice)
-  UPLOAD_RESULT_FILE,
   writeUploadResult,
   readUploadResult,
   markUploadNotified,

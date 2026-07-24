@@ -19,12 +19,12 @@
  *   - the emitted block survives the sanitizeEventData boundary.
  */
 
-const os = require("os");
 const fs = require("fs");
 const path = require("path");
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
+const { makeTempDir, writeFile } = require("../testing/helpers");
 
 const {
   detectHarness,
@@ -34,35 +34,24 @@ const {
 } = require("../scripts/harness");
 const sanitizer = require("../scripts/lib/sanitize");
 
-const SALT = "deadbeefcafe";
-
 // --- helpers ---------------------------------------------------------------
-
-function tmpDir(prefix) {
-  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-}
-
-function write(file, contents = "") {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, contents);
-}
 
 // Build a fake project that looks like a git repo so findRepoRoot anchors here.
 function makeProject() {
-  const root = tmpDir("sk-harness-proj-");
+  const root = makeTempDir("sk-harness-proj-");
   fs.mkdirSync(path.join(root, ".git"), { recursive: true });
   return root;
 }
 
 function makeHome() {
-  return tmpDir("sk-harness-home-");
+  return makeTempDir("sk-harness-home-");
 }
 
 function addSkill(root, namespaceOrName, maybeName) {
   const rel = maybeName
     ? path.join(".claude", "skills", namespaceOrName, maybeName, "SKILL.md")
     : path.join(".claude", "skills", namespaceOrName, "SKILL.md");
-  write(path.join(root, rel), "# skill\n");
+  writeFile(path.join(root, rel), "# skill\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -71,7 +60,7 @@ test("bare project: flat defaults, Level 2 unknown, no raw content", () => {
   const root = makeProject();
   const home = makeHome();
 
-  const h = detectHarness(root, { homeDir: home, repoRoot: root, hashSalt: SALT });
+  const h = detectHarness(root, { homeDir: home, repoRoot: root });
 
   assert.equal(h.harness_schema_version, "2.1");
   assert.equal(h.agent_type, "claude-code");
@@ -125,7 +114,7 @@ test("bare project: flat defaults, Level 2 unknown, no raw content", () => {
 
 test("harness_schema_version matches the exported contract version", () => {
   const root = makeProject();
-  const h = detectHarness(root, { homeDir: makeHome(), repoRoot: root, hashSalt: SALT });
+  const h = detectHarness(root, { homeDir: makeHome(), repoRoot: root });
   assert.equal(h.harness_schema_version, HARNESS_SCHEMA_VERSION);
   assert.equal(h.harness_schema_version, "2.1");
 });
@@ -135,7 +124,6 @@ test("carries runtime fields (agent_type, agent_version, model, session_source, 
   const h = detectHarness(root, {
     homeDir: makeHome(),
     repoRoot: root,
-    hashSalt: SALT,
     agentType: "claude-code-1.0",
     agentVersion: "2.3.4",
     model: "claude-sonnet-4",
@@ -152,11 +140,11 @@ test("carries runtime fields (agent_type, agent_version, model, session_source, 
 test("instruction files: project CLAUDE.md/AGENTS.md/CLAUDE.local.md presence", () => {
   const root = makeProject();
   const home = makeHome();
-  write(path.join(root, "CLAUDE.md"), "# claude\n@./docs/a.md\n@./docs/b.md\n");
-  write(path.join(root, "CLAUDE.local.md"), "# local\n");
-  write(path.join(root, "AGENTS.md"), "# agents\n");
+  writeFile(path.join(root, "CLAUDE.md"), "# claude\n@./docs/a.md\n@./docs/b.md\n");
+  writeFile(path.join(root, "CLAUDE.local.md"), "# local\n");
+  writeFile(path.join(root, "AGENTS.md"), "# agents\n");
 
-  const h = detectHarness(root, { homeDir: home, repoRoot: root, hashSalt: SALT });
+  const h = detectHarness(root, { homeDir: home, repoRoot: root });
 
   assert.equal(h.has_claude_md, true);
   assert.equal(h.has_claude_local_md, true);
@@ -170,9 +158,9 @@ test("instruction files: project CLAUDE.md/AGENTS.md/CLAUDE.local.md presence", 
 test("detects user-level CLAUDE.md (~/.claude/CLAUDE.md)", () => {
   const root = makeProject();
   const home = makeHome();
-  write(path.join(home, ".claude", "CLAUDE.md"), "# global\n");
+  writeFile(path.join(home, ".claude", "CLAUDE.md"), "# global\n");
 
-  const h = detectHarness(root, { homeDir: home, repoRoot: root, hashSalt: SALT });
+  const h = detectHarness(root, { homeDir: home, repoRoot: root });
 
   assert.equal(h.has_claude_md, false);
   assert.equal(h.has_user_claude_md, true);
@@ -181,12 +169,12 @@ test("detects user-level CLAUDE.md (~/.claude/CLAUDE.md)", () => {
 test("counts nested CLAUDE.md across the project tree, skipping node_modules", () => {
   const root = makeProject();
   const home = makeHome();
-  write(path.join(root, "CLAUDE.md"), "# root\n");
-  write(path.join(root, "packages", "a", "CLAUDE.md"), "# a\n");
-  write(path.join(root, "packages", "b", "CLAUDE.md"), "# b\n");
-  write(path.join(root, "node_modules", "dep", "CLAUDE.md"), "# vendored, must be ignored\n");
+  writeFile(path.join(root, "CLAUDE.md"), "# root\n");
+  writeFile(path.join(root, "packages", "a", "CLAUDE.md"), "# a\n");
+  writeFile(path.join(root, "packages", "b", "CLAUDE.md"), "# b\n");
+  writeFile(path.join(root, "node_modules", "dep", "CLAUDE.md"), "# vendored, must be ignored\n");
 
-  const h = detectHarness(root, { homeDir: home, repoRoot: root, hashSalt: SALT });
+  const h = detectHarness(root, { homeDir: home, repoRoot: root });
   assert.equal(h.claude_md_count, 3);
 });
 
@@ -205,9 +193,9 @@ test("skills: count, per-source counts, RAW names; skips hidden .system", () => 
   addSkill(root, "deploy");
   addSkill(root, "team", "review-pr"); // nested namespace
   addSkill(home, "signin"); // user-level (~/.claude/skills)
-  write(path.join(home, ".claude", "skills", ".system", "imagegen", "SKILL.md"), "x");
+  writeFile(path.join(home, ".claude", "skills", ".system", "imagegen", "SKILL.md"), "x");
 
-  const h = detectHarness(root, { homeDir: home, repoRoot: root, hashSalt: SALT });
+  const h = detectHarness(root, { homeDir: home, repoRoot: root });
 
   assert.equal(h.skills_present, true);
   assert.equal(h.skills_count, 3);
@@ -236,7 +224,7 @@ test("fail-closed: a skill name embedding a secret is dropped, not emitted", () 
   addSkill(root, "deploy");
   addSkill(root, "AWS_SECRET_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE");
 
-  const h = detectHarness(root, { homeDir: home, repoRoot: root, hashSalt: SALT });
+  const h = detectHarness(root, { homeDir: home, repoRoot: root });
 
   assert.equal(h.skills_count, 2); // true on-disk total
   assert.deepEqual(h.skill_names, ["deploy"]); // secret-bearing name excluded
@@ -252,12 +240,12 @@ test("fail-closed: a skill name embedding a secret is dropped, not emitted", () 
 test("skill_contents: custom (project/user) skill body collected; plugin skills name-only", () => {
   const root = makeProject();
   const home = makeHome();
-  write(
+  writeFile(
     path.join(root, ".claude", "skills", "deploy", "SKILL.md"),
     "---\nname: deploy\ndescription: Ship the app\n---\n1. run tests\n2. deploy\n"
   );
   const pluginsDir = path.join(home, ".claude", "plugins");
-  write(
+  writeFile(
     path.join(pluginsDir, "installed_plugins.json"),
     JSON.stringify({
       version: 2,
@@ -268,12 +256,12 @@ test("skill_contents: custom (project/user) skill body collected; plugin skills 
       },
     })
   );
-  write(
+  writeFile(
     path.join(pluginsDir, "installed", "toolkit", "skills", "bundled", "SKILL.md"),
     "---\ndescription: nope\n---\nplugin skill body\n"
   );
 
-  const h = detectHarness(root, { homeDir: home, repoRoot: root, hashSalt: SALT });
+  const h = detectHarness(root, { homeDir: home, repoRoot: root });
 
   assert.deepEqual([...h.skill_names].sort(), ["bundled", "deploy"]);
   assert.equal(h.skill_contents.length, 1);
@@ -289,9 +277,9 @@ test("skill_contents: oversized body is truncated, original byte size preserved"
   const root = makeProject();
   const home = makeHome();
   const big = "x".repeat(6000);
-  write(path.join(root, ".claude", "skills", "big", "SKILL.md"), `---\ndescription: d\n---\n${big}`);
+  writeFile(path.join(root, ".claude", "skills", "big", "SKILL.md"), `---\ndescription: d\n---\n${big}`);
 
-  const h = detectHarness(root, { homeDir: home, repoRoot: root, hashSalt: SALT });
+  const h = detectHarness(root, { homeDir: home, repoRoot: root });
   const c = h.skill_contents.find((s) => s.name === "big");
   assert.ok(c, "custom skill body present");
   assert.equal(c.truncated, true);
@@ -302,10 +290,10 @@ test("skill_contents: oversized body is truncated, original byte size preserved"
 test("subagents: .claude/agents/*.md detected, counted, raw names", () => {
   const root = makeProject();
   const home = makeHome();
-  write(path.join(root, ".claude", "agents", "reviewer.md"), "# reviewer\n");
-  write(path.join(root, ".claude", "agents", "planner.md"), "# planner\n");
+  writeFile(path.join(root, ".claude", "agents", "reviewer.md"), "# reviewer\n");
+  writeFile(path.join(root, ".claude", "agents", "planner.md"), "# planner\n");
 
-  const h = detectHarness(root, { homeDir: home, repoRoot: root, hashSalt: SALT });
+  const h = detectHarness(root, { homeDir: home, repoRoot: root });
 
   assert.equal(h.subagents_present, true);
   assert.equal(h.subagents_count, 2);
@@ -316,10 +304,10 @@ test("subagents: .claude/agents/*.md detected, counted, raw names", () => {
 test("slash commands: .claude/commands/**/*.md detected with namespacing, raw names", () => {
   const root = makeProject();
   const home = makeHome();
-  write(path.join(root, ".claude", "commands", "deploy.md"), "# deploy\n");
-  write(path.join(root, ".claude", "commands", "git", "sync.md"), "# sync\n");
+  writeFile(path.join(root, ".claude", "commands", "deploy.md"), "# deploy\n");
+  writeFile(path.join(root, ".claude", "commands", "git", "sync.md"), "# sync\n");
 
-  const h = detectHarness(root, { homeDir: home, repoRoot: root, hashSalt: SALT });
+  const h = detectHarness(root, { homeDir: home, repoRoot: root });
 
   assert.equal(h.commands_present, true);
   assert.equal(h.commands_count, 2);
@@ -329,8 +317,8 @@ test("slash commands: .claude/commands/**/*.md detected with namespacing, raw na
 test("hooks: allow-listed event names, total entry count, and per-source counts", () => {
   const root = makeProject();
   const home = makeHome();
-  const pluginRoot = tmpDir("sk-harness-plugin-");
-  write(
+  const pluginRoot = makeTempDir("sk-harness-plugin-");
+  writeFile(
     path.join(pluginRoot, "hooks", "hooks.json"),
     JSON.stringify({
       hooks: {
@@ -340,12 +328,12 @@ test("hooks: allow-listed event names, total entry count, and per-source counts"
       },
     })
   );
-  write(
+  writeFile(
     path.join(root, ".claude", "settings.json"),
     JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [{}] }] } })
   );
 
-  const h = detectHarness(root, { homeDir: home, repoRoot: root, pluginRoot, hashSalt: SALT });
+  const h = detectHarness(root, { homeDir: home, repoRoot: root, pluginRoot });
 
   assert.deepEqual(h.hooks_enabled, ["PreToolUse", "Stop", "UserPromptSubmit"]);
   // plugin: 2 (PreToolUse inner) + 1 (Stop) = 3; project: 1
@@ -359,11 +347,11 @@ test("permissions: defaultMode + raw allow/deny/ask rules, additionalDirectories
   const root = makeProject();
   const home = makeHome();
   // User-level default mode; project rules override / add.
-  write(
+  writeFile(
     path.join(home, ".claude", "settings.json"),
     JSON.stringify({ permissions: { defaultMode: "default", allow: ["Read(src/**)"] } })
   );
-  write(
+  writeFile(
     path.join(root, ".claude", "settings.json"),
     JSON.stringify({
       permissions: {
@@ -376,7 +364,7 @@ test("permissions: defaultMode + raw allow/deny/ask rules, additionalDirectories
     })
   );
 
-  const h = detectHarness(root, { homeDir: home, repoRoot: root, hashSalt: SALT });
+  const h = detectHarness(root, { homeDir: home, repoRoot: root });
 
   // local > project > user precedence: project's acceptEdits wins over user default.
   assert.equal(h.permission_default_mode, "acceptEdits");
@@ -389,7 +377,7 @@ test("permissions: defaultMode + raw allow/deny/ask rules, additionalDirectories
 test("MCP: .mcp.json servers detected with RAW names; command/env never read", () => {
   const root = makeProject();
   const home = makeHome();
-  write(
+  writeFile(
     path.join(root, ".mcp.json"),
     JSON.stringify({
       mcpServers: {
@@ -399,7 +387,7 @@ test("MCP: .mcp.json servers detected with RAW names; command/env never read", (
     })
   );
 
-  const h = detectHarness(root, { homeDir: home, repoRoot: root, hashSalt: SALT });
+  const h = detectHarness(root, { homeDir: home, repoRoot: root });
 
   assert.equal(h.has_mcp_config, true);
   assert.equal(h.mcp_servers_count, 2);
@@ -414,7 +402,7 @@ test("plugins/marketplaces: names raw, marketplace + public flag retained", () =
   const root = makeProject();
   const home = makeHome();
   const pluginsDir = path.join(home, ".claude", "plugins");
-  write(
+  writeFile(
     path.join(pluginsDir, "installed_plugins.json"),
     JSON.stringify({
       version: 2,
@@ -424,12 +412,12 @@ test("plugins/marketplaces: names raw, marketplace + public flag retained", () =
       },
     })
   );
-  write(
+  writeFile(
     path.join(pluginsDir, "known_marketplaces.json"),
     JSON.stringify({ skillbench: {}, "claude-plugins-official": {} })
   );
 
-  const h = detectHarness(root, { homeDir: home, repoRoot: root, hashSalt: SALT });
+  const h = detectHarness(root, { homeDir: home, repoRoot: root });
 
   assert.equal(h.plugins_count, 2);
   assert.equal(h.marketplaces_count, 2);
@@ -453,7 +441,7 @@ test("fail-closed: a plugin name embedding a secret is dropped", () => {
   const root = makeProject();
   const home = makeHome();
   const pluginsDir = path.join(home, ".claude", "plugins");
-  write(
+  writeFile(
     path.join(pluginsDir, "installed_plugins.json"),
     JSON.stringify({
       version: 2,
@@ -466,7 +454,7 @@ test("fail-closed: a plugin name embedding a secret is dropped", () => {
     })
   );
 
-  const h = detectHarness(root, { homeDir: home, repoRoot: root, hashSalt: SALT });
+  const h = detectHarness(root, { homeDir: home, repoRoot: root });
 
   assert.equal(h.plugins_count, 2); // true on-disk total
   assert.equal(h.plugins.length, 1); // secret-bearing entry dropped
@@ -479,7 +467,6 @@ test("never throws on a bogus cwd; returns safe defaults", () => {
   const h = detectHarness("/nonexistent/path/ bad", {
     homeDir: "/also/nonexistent",
     repoRoot: "",
-    hashSalt: SALT,
   });
   assert.equal(h.harness_schema_version, "2.1");
   assert.equal(h.skills_count, 0);
@@ -490,10 +477,10 @@ test("never throws on a bogus cwd; returns safe defaults", () => {
 test("malformed settings.json is ignored, not fatal", () => {
   const root = makeProject();
   const home = makeHome();
-  const pluginRoot = tmpDir("sk-harness-plugin-");
-  write(path.join(pluginRoot, "hooks", "hooks.json"), "{ not valid json");
+  const pluginRoot = makeTempDir("sk-harness-plugin-");
+  writeFile(path.join(pluginRoot, "hooks", "hooks.json"), "{ not valid json");
 
-  const h = detectHarness(root, { homeDir: home, repoRoot: root, pluginRoot, hashSalt: SALT });
+  const h = detectHarness(root, { homeDir: home, repoRoot: root, pluginRoot });
   assert.deepEqual(h.hooks_enabled, []);
   assert.equal(h.hooks_count, 0);
 });
@@ -501,10 +488,10 @@ test("malformed settings.json is ignored, not fatal", () => {
 test("emitted harness object survives the sanitizeEventData boundary", () => {
   const root = makeProject();
   const home = makeHome();
-  write(path.join(root, "CLAUDE.md"), "# claude\n");
+  writeFile(path.join(root, "CLAUDE.md"), "# claude\n");
   addSkill(root, "deploy");
 
-  const h = detectHarness(root, { homeDir: home, repoRoot: root, hashSalt: SALT });
+  const h = detectHarness(root, { homeDir: home, repoRoot: root });
   const { value, meta } = sanitizer.sanitizeEventData({ harness: h });
 
   assert.equal(meta.secrets, 0);

@@ -110,7 +110,6 @@ function getTranscriptChunkMaxBytes() {
 }
 
 module.exports = {
-  IS_DEV,
   STATE_DIR,
   CRED_FILE,
   getActivateUrl,

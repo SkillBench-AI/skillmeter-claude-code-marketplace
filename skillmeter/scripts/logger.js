@@ -8,8 +8,7 @@
  * keeps only:
  *
  *   - the `runHook` lifecycle that every hook script drives,
- *   - the structured-log sink (`logInfo`, `logStructured`),
- *   - a small set of helpers used by hook entrypoints and CLI commands.
+ *   - the structured-log sink.
  *
  * If you're adding new transfer / sanitisation / JWT logic, put it in
  * the relevant `lib/` module — don't grow this file back into a junk
@@ -30,29 +29,26 @@ const { hashHmac, sanitizeEventData } = require("./lib/sanitize");
 const { readStdinJson } = require("./lib/io");
 const { getTelemetryOptIn } = require("./lib/settings");
 const { getRepoScopeDecision } = require("./lib/repo-scope");
+const { resolveTelemetryGate } = require("./lib/telemetry-policy");
 
 // ---------------------------------------------------------------------------
 // Structured event log — the per-event NDJSON written to events.jsonl. The
 // transport layer in lib/transfer.js handles uploading; this is just the sink.
 // ---------------------------------------------------------------------------
 
-function getTimestamp() {
-  return new Date().toISOString();
-}
-
 function getTranscriptId(transcriptPath) {
   if (!transcriptPath) return "";
   return path.basename(transcriptPath);
 }
 
-function logStructured(level, event, sessionId, data, deviceId) {
+function logEvent(event, sessionId, data, deviceId) {
   if (!deviceId) return;
 
   fs.mkdirSync(LOG_DIR, { recursive: true });
 
   const logEntry = {
-    timestamp: getTimestamp(),
-    level,
+    timestamp: new Date().toISOString(),
+    level: "info",
     hook_event_name: event,
     session_id: sessionId,
     device_id: deviceId,
@@ -61,9 +57,6 @@ function logStructured(level, event, sessionId, data, deviceId) {
 
   fs.appendFileSync(LOG_FILE, JSON.stringify(logEntry) + "\n");
 }
-
-const logInfo = (event, sessionId, data, deviceId) =>
-  logStructured("info", event, sessionId, data, deviceId);
 
 // ---------------------------------------------------------------------------
 // Hook I/O
@@ -77,45 +70,29 @@ const readStdin = () => readStdinJson({ tty: null, empty: null });
 // Hook lifecycle — called by every script under scripts/*.js
 // ---------------------------------------------------------------------------
 
-/**
- * Resolve the per-project telemetry gate, combining the explicit opt-in
- * setting with org-ownership auto-enable.
- *
- *   - explicit `false` → off  (user opted out; always respected)
- *   - explicit `true`  → on   (subject to the repo-scope gate downstream)
- *   - unset (`null`)   → on **only when the repo is owned by an allowed org**
- *                        ("auto_org"); otherwise off
- *
- * Pure function — no I/O — so the policy can be reasoned about and tested
- * directly (the codebase has no runner; see AGENTS.md).
- *
- * @param {boolean|null} optIn - getTelemetryOptIn(cwd) result
- * @param {boolean} repoOrgOwned - repoScopeDecision.allowed
- * @returns {{capture: boolean, mode: "opted_out"|"opted_in"|"auto_org"|"not_enabled"}}
- */
-function resolveTelemetryGate(optIn, repoOrgOwned) {
-  if (optIn === false) return { capture: false, mode: "opted_out" };
-  if (optIn === true) return { capture: true, mode: "opted_in" };
-  if (repoOrgOwned === true) return { capture: true, mode: "auto_org" };
-  return { capture: false, mode: "not_enabled" };
-}
-
 // Default stderr messaging for the resolved gate, used by every hook that
-// doesn't supply an onGate reactor. Kept byte-identical to the historical
-// inline branch so hook diagnostics don't drift.
+// doesn't supply an onGate reactor.
 function defaultGateMessaging(eventName, gate) {
   if (!gate.capture) {
-    const reason =
-      gate.mode === "opted_out"
-        ? "telemetry disabled for this project"
-        : "telemetry not enabled";
+    const reasons = {
+      global_disabled: "telemetry globally disabled",
+      not_signed_in: "not signed in",
+      out_of_scope: "repository outside the licensed org",
+      org_consent_required: "organization telemetry choice required",
+      org_disabled: "telemetry disabled for this organization",
+      project_disabled: "telemetry disabled for this project",
+    };
+    const reason = reasons[gate.mode] || "telemetry not enabled";
     console.error(`[skillmeter] ${eventName}: skipped (${reason})`);
-    return;
   }
-  if (gate.mode === "auto_org") {
-    console.error(
-      `[skillmeter] ${eventName}: telemetry auto-enabled (repo owned by allowed org; run /skillmeter:telemetry disable to opt out)`
-    );
+}
+
+async function runOptionalCallback(eventName, phase, callback, input, deviceId) {
+  if (!callback) return;
+  try {
+    await callback(input, deviceId);
+  } catch (err) {
+    console.error(`[skillmeter] ${eventName}: ${phase} failed (${err.message})`);
   }
 }
 
@@ -124,17 +101,14 @@ function defaultGateMessaging(eventName, gate) {
  *
  * @param {string} eventName - Hook event name (e.g. "SessionStart")
  * @param {function} buildData - (input, ctx) => object with event-specific fields.
- *   ctx provides { hashSalt, cwd, getTranscriptId }. Returned fields are raw;
+ *   ctx provides { cwd, getTranscriptId }. Returned fields are raw;
  *   runHook scrubs them centrally via sanitizeEventData.
  * @param {object} [options]
- * @param {function} [options.beforeStdin] - Called after deviceId check, before stdin read (e.g. retryFailedLogs)
  * @param {function} [options.onGate] - Gate reactor: ({ gate, repoScopeDecision, cwd, input, eventName }) => void.
  *   Runs after the gate is resolved (for banners/side-effects). The capture decision stays central —
  *   runHook exits when gate.capture is false regardless. Without it, default stderr messaging is used.
  * @param {function} [options.afterSkip] - Called before exit when the event is skipped after stdin is read.
- * @param {function} [options.afterLog] - Called after logInfo for hook-local follow-up work.
- * @param {boolean} [options.awaitAfterSkip=false] - Await afterSkip when it returns a Promise.
- * @param {boolean} [options.awaitAfterLog=false] - Await afterLog when it returns a Promise.
+ * @param {function} [options.afterLog] - Called after the event is logged.
  */
 async function runHook(eventName, buildData, options = {}) {
   const deviceId = getDeviceId();
@@ -142,8 +116,6 @@ async function runHook(eventName, buildData, options = {}) {
     console.error(`[skillmeter] ${eventName}: skipped (no device ID)`);
     process.exit(0);
   }
-
-  if (options.beforeStdin) options.beforeStdin(deviceId);
 
   const input = await readStdin();
   if (!input) {
@@ -153,26 +125,28 @@ async function runHook(eventName, buildData, options = {}) {
 
   const cwd = input.cwd || process.cwd();
 
-  if (credstore.getTelemetryDisabled()) {
-    console.error(`[skillmeter] ${eventName}: skipped (telemetry globally disabled)`);
-    process.exit(0);
-  }
-
-  // Resolve repo ownership up front: it both gates capture (below) and, for
-  // projects with no explicit opt-in, decides whether telemetry auto-enables.
+  // Resolve repo ownership and the parent org consent before considering the
+  // per-project override. Project `true` can never bypass missing org consent.
   const repoScopeDecision = getRepoScopeDecision(cwd);
-
-  // Single gate: compute once, then let the caller REACT (banners/side-effects)
-  // via onGate — the capture decision stays central. Hooks without an onGate get
-  // the default stderr messaging. (Replaces the former checkOptIn override +
-  // duplicated policy in session_start.js.)
-  const gate = resolveTelemetryGate(getTelemetryOptIn(cwd), repoScopeDecision.allowed);
+  const orgConsent = repoScopeDecision.remoteOrg
+    ? credstore.getOrgTelemetryConsent(repoScopeDecision.remoteOrg)
+    : null;
+  const gate = resolveTelemetryGate({
+    globalDisabled: credstore.getTelemetryDisabled(),
+    hasValidLicense: credstore.hasValidLicense(),
+    repoOrgOwned: repoScopeDecision.allowed,
+    orgConsent,
+    projectOptIn: getTelemetryOptIn(cwd),
+  });
   if (options.onGate) {
-    options.onGate({ gate, repoScopeDecision, cwd, input, eventName });
+    options.onGate({ gate, repoScopeDecision, orgConsent, cwd, input, eventName });
   } else {
     defaultGateMessaging(eventName, gate);
   }
-  if (!gate.capture) process.exit(0);
+  if (!gate.capture) {
+    await runOptionalCallback(eventName, "afterSkip", options.afterSkip, input, deviceId);
+    process.exit(0);
+  }
 
   const sessionId = input.session_id || "unknown";
   const hashSalt = getOrCreateHashSalt();
@@ -181,28 +155,7 @@ async function runHook(eventName, buildData, options = {}) {
     process.exit(0);
   }
 
-  if (!repoScopeDecision.allowed) {
-    console.error(
-      `[skillmeter] ${eventName}: skipped (${repoScopeDecision.classification})`
-    );
-    if (options.afterSkip) {
-      try {
-        const result = options.afterSkip(input, deviceId);
-        if (options.awaitAfterSkip && result && typeof result.then === "function") {
-          await result;
-        } else if (result && typeof result.catch === "function") {
-          result.catch((err) => {
-            console.error(`[skillmeter] ${eventName}: afterSkip failed (${err.message})`);
-          });
-        }
-      } catch (err) {
-        console.error(`[skillmeter] ${eventName}: afterSkip failed (${err.message})`);
-      }
-    }
-    process.exit(0);
-  }
-
-  const ctx = { hashSalt, cwd, getTranscriptId };
+  const ctx = { cwd, getTranscriptId };
   const eventData = buildData ? buildData(input, ctx) : {};
 
   // Central sanitization catch-all: every hook's payload (prompt,
@@ -242,23 +195,10 @@ async function runHook(eventName, buildData, options = {}) {
   };
   if (meta.secrets > 0 || meta.pii > 0) data._sanitization = meta;
 
-  logInfo(eventName, sessionId, data, deviceId);
+  logEvent(eventName, sessionId, data, deviceId);
   console.error(`[skillmeter] ${eventName}: logged (session=${sessionId.slice(0, 8)}…)`);
 
-  if (options.afterLog) {
-    try {
-      const result = options.afterLog(input, deviceId);
-      if (options.awaitAfterLog && result && typeof result.then === "function") {
-        await result;
-      } else if (result && typeof result.catch === "function") {
-        result.catch((err) => {
-          console.error(`[skillmeter] ${eventName}: afterLog failed (${err.message})`);
-        });
-      }
-    } catch (err) {
-      console.error(`[skillmeter] ${eventName}: afterLog failed (${err.message})`);
-    }
-  }
+  await runOptionalCallback(eventName, "afterLog", options.afterLog, input, deviceId);
 }
 
 // ---------------------------------------------------------------------------

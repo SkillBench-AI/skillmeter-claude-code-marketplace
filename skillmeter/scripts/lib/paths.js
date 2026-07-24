@@ -5,13 +5,9 @@
  * `CLAUDE_PLUGIN_ROOT` is set by the Claude Code loader when a hook runs; the
  * fallback resolves two levels up from this file for direct `node` invocations.
  *
- * Cross-session user state (STATE_DIR/CRED_FILE) is owned by lib/config.js and
- * re-exported here so existing consumers (credstore, signin) keep importing it
- * from paths. Dependency direction is one-way: paths → config.
  */
 
 const path = require("path");
-const { STATE_DIR, CRED_FILE } = require("./config");
 const { safeReadJson } = require("./io");
 
 const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, "..", "..");
@@ -44,8 +40,6 @@ const PLUGIN_VERSION =
 
 module.exports = {
   PLUGIN_ROOT,
-  STATE_DIR,
-  CRED_FILE,
   LOG_DIR,
   LOG_FILE,
   TRANSCRIPTS_PENDING_DIR,

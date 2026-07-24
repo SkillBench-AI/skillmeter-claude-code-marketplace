@@ -4,8 +4,8 @@
  *
  * The filesystem is the source of truth. Hooks append to the active
  * `events.jsonl`, final-session hooks seal it to `events.jsonl.<ts>`, and the
- * SessionStart hook / retry monitor drain sealed event logs plus pending
- * transcripts in the background.
+ * SessionStart hook / retry monitor drain sealed event logs plus queued
+ * transcript delta chunks in the background.
  */
 
 const fs = require("fs");
@@ -40,7 +40,7 @@ const gzipAsync = promisify(zlib.gzip);
 const EVENT_TIMEOUT = getEventTimeoutMs();
 const TRANSCRIPT_TIMEOUT = 30_000;
 
-// How long we keep uploaded `.sent` event logs and pending transcripts
+// How long we keep uploaded `.sent` event logs and queued transcript artifacts
 // before the SessionStart sweep deletes them. 30 days is long enough to
 // survive vacations and short outages; short enough that disks don't fill
 // up if ingest breaks for weeks.
@@ -60,6 +60,10 @@ const DRAIN_ONCE_LOCK_STALE_MS = 30_000;
 // reported as send failures (the not-signed-in banner already covers those).
 async function transferEventLog(logFile, timeoutMs = EVENT_TIMEOUT) {
   if (!logFile || !fs.existsSync(logFile)) return { ok: false };
+  if (!credstore.isTelemetryTransmissionAllowed()) {
+    console.error(`[skillmeter] Event log: telemetry not authorized for the current org — leaving for retry`);
+    return { ok: false };
+  }
 
   // A valid (non-expired) license JWT is REQUIRED — the backend does not accept
   // unauthenticated telemetry. No valid token → leave the file for retry (the
@@ -310,6 +314,10 @@ function buildChunkHeaders(meta, deviceId, token) {
 // leaves both for retry. Result shape matches drainFailedLogs entries.
 async function uploadDeltaChunk(bodyPath, deviceId, timeoutMs = TRANSCRIPT_TIMEOUT) {
   if (!bodyPath || !fs.existsSync(bodyPath)) return { ok: false };
+  if (!credstore.isTelemetryTransmissionAllowed()) {
+    console.error(`[skillmeter] Transcript chunk: telemetry not authorized for the current org — kept for retry`);
+    return { ok: false };
+  }
   const metaPath = bodyPath.replace(/\.jsonl$/, ".meta.json");
   const meta = safeReadJson(metaPath, null);
   if (!meta) {
@@ -370,6 +378,9 @@ async function uploadDeltaChunk(bodyPath, deviceId, timeoutMs = TRANSCRIPT_TIMEO
 async function drainDeltaChunks(timeoutMs) {
   const files = listDeltaChunks();
   if (files.length === 0) return { ok: 0, errors: [] };
+  if (!credstore.isTelemetryTransmissionAllowed()) {
+    return { ok: 0, errors: [] };
+  }
 
   const deviceId = credstore.getDeviceId();
   if (!deviceId) return { ok: 0, errors: [] };
@@ -530,6 +541,9 @@ async function drainFailedLogs(timeoutMs) {
   const files = listSealedEventLogs();
   // Empty queue: do nothing — never fire a refresh on an idle daemon sweep.
   if (files.length === 0) return { ok: 0, errors: [] };
+  if (!credstore.isTelemetryTransmissionAllowed()) {
+    return { ok: 0, errors: [] };
+  }
 
   console.error(`[skillmeter] Draining ${files.length} failed log file(s)`);
   // Best-effort, single-flight refresh once per batch so every file in this
@@ -644,23 +658,13 @@ function cleanupStaleFiles() {
 }
 
 module.exports = {
-  EVENT_TIMEOUT,
-  TRANSCRIPT_TIMEOUT,
-  CLEANUP_MAX_AGE_MS,
-  DRAIN_ONCE_LOCK_FILE,
-  DRAIN_ONCE_LOCK_STALE_MS,
-  transferEventLog,
-  sealEventLog,
   sealEventLogAndTriggerDrain,
   readCursor,
   writeCursor,
   sealDeltaChunk,
   listDeltaChunks,
   buildChunkHeaders,
-  uploadDeltaChunk,
-  stageTranscriptDelta,
   sealFinalSessionArtifacts,
-  spawnDetachedDrain,
   clearDrainOnceLock,
   drainFailedLogs,
   drainDeltaChunks,

@@ -4,8 +4,8 @@
  *
  * This process exists to reduce upload latency without making Claude Code wait
  * on network I/O. Queue files remain the source of truth: failed uploads leave
- * sealed event logs and pending transcripts on disk for SessionStart / monitor
- * retry.
+ * sealed event logs and transcript delta chunks on disk for SessionStart /
+ * monitor retry.
  */
 
 const {

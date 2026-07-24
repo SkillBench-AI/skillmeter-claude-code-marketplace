@@ -5,8 +5,7 @@
  * a license JWT at the activation endpoint and stores it via credstore. The
  * validated org is minted into the JWT by the activator (no client org lookup).
  *
- * The exported surface (`getActivateUrl`, `trySilentGhActivate`) is what
- * sign-in entrypoints and the hook-runtime refresh path consume.
+ * The exported surface is limited to activation and refresh orchestration.
  */
 
 const fs = require("fs");
@@ -14,9 +13,6 @@ const path = require("path");
 const { execSync } = require("child_process");
 const credstore = require("../credstore");
 const { LOG_DIR } = require("./paths");
-// activate/refresh URL resolution now lives in the central config module
-// (env > settings > dev-bundle > prod default). Re-exported below so
-// signin.js keeps consuming licenseActivation.getActivateUrl unchanged.
 const { getActivateUrl, getRefreshUrl } = require("./config");
 const { postBearerJson } = require("./http");
 
@@ -202,13 +198,13 @@ function shouldRefresh(
 async function refreshLicense(deviceId) {
   const current = credstore.getLicenseTokenUncached();
   if (current && !credstore.isLicenseTokenExpired(current)) return current;
-  if (!deviceId) return null;
+  // SessionStart and queue drainers may refresh an existing sign-in, but must
+  // never create a brand-new sign-in before the user invokes /skillmeter:signin.
+  if (!current || !deviceId) return null;
   if (credstore.getSignedOut()) return null;
 
-  if (current) {
-    const fresh = await refreshExpiredJwt(current, deviceId);
-    if (fresh) return fresh;
-  }
+  const fresh = await refreshExpiredJwt(current, deviceId);
+  if (fresh) return fresh;
   try {
     return await trySilentGhActivate(deviceId);
   } catch {
@@ -259,12 +255,7 @@ async function ensureFreshLicense(deviceId) {
 }
 
 module.exports = {
-  getActivateUrl,
-  getRefreshUrl,
-  refreshExpiredJwt,
   trySilentGhActivate,
-  shouldRefresh,
   refreshLicense,
   ensureFreshLicense,
-  LICENSE_REFRESH_COOLDOWN_MS,
 };

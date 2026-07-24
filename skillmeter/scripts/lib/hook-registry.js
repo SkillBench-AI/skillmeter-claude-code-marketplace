@@ -8,7 +8,7 @@
  * new observation-only hook is now a one-line entry here plus a hooks.json line.
  *
  * Each mapper is `(input, ctx) => data`, exactly the `buildData` contract
- * runHook expects (ctx provides { hashSalt, cwd, getTranscriptId }). Payloads
+ * runHook expects (ctx provides { cwd, getTranscriptId }). Payloads
  * are returned raw; runHook's central sanitizeEventData boundary HMAC-hashes
  * path-bearing keys (file_path / path / notebook_path / cwd) and redacts
  * secrets/PII. Field names track the current Claude Code hook input schema.

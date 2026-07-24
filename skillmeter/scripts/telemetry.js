@@ -16,6 +16,7 @@ const {
   getTelemetryOptIn,
   saveTelemetryOptIn,
 } = require("./lib/settings");
+const credstore = require("./credstore.js");
 const {
   getAllowedGitHubOrgs,
   getLicenseToken,
@@ -23,7 +24,9 @@ const {
   getSignedOut,
   getTelemetryDisabled,
   setTelemetryDisabled,
-} = require("./credstore.js");
+} = credstore;
+const { getRepoScopeDecision } = require("./lib/repo-scope");
+const { resolveTelemetryGate } = require("./lib/telemetry-policy");
 
 const cwd = process.cwd();
 const action = process.argv[2];
@@ -49,11 +52,38 @@ function licenseLine() {
   return `signed in as ${orgs.join(", ")}`;
 }
 
+function orgLine() {
+  const orgs = getAllowedGitHubOrgs();
+  if (orgs.length === 0) return "not available";
+  return orgs.map((org) => {
+    const consent = credstore.getOrgTelemetryConsent(org);
+    const state = consent === true ? "enabled" : consent === false ? "disabled" : "choice required";
+    return `@${org} ${state}`;
+  }).join(", ");
+}
+
+function effectiveLine() {
+  const scope = getRepoScopeDecision(cwd);
+  const orgConsent = scope.remoteOrg
+    ? credstore.getOrgTelemetryConsent(scope.remoteOrg)
+    : null;
+  const gate = resolveTelemetryGate({
+    globalDisabled: getTelemetryDisabled(),
+    hasValidLicense: credstore.hasValidLicense(),
+    repoOrgOwned: scope.allowed,
+    orgConsent,
+    projectOptIn: getTelemetryOptIn(cwd),
+  });
+  return gate.capture ? `enabled (${gate.mode})` : `disabled (${gate.mode})`;
+}
+
 function printStatus() {
   process.stderr.write(
     "SkillMeter telemetry:\n" +
     `  global:       ${globalLine()}\n` +
+    `  organization: ${orgLine()}\n` +
     `  this project: ${projectLine()}\n` +
+    `  effective:    ${effectiveLine()}\n` +
     `  license:      ${licenseLine()}\n`
   );
 }
@@ -68,6 +98,16 @@ switch (action) {
         "Run `/skillmeter:telemetry enable-global` to clear it.\n"
       );
     }
+    const scope = getRepoScopeDecision(cwd);
+    if (
+      scope.allowed &&
+      credstore.getOrgTelemetryConsent(scope.remoteOrg) !== true
+    ) {
+      process.stderr.write(
+        `Note: telemetry is not enabled for @${scope.remoteOrg}. ` +
+        "Run `/skillmeter:signin` to choose the organization setting.\n"
+      );
+    }
     printStatus();
     break;
   case "disable":
@@ -78,6 +118,12 @@ switch (action) {
   case "enable-global":
     setTelemetryDisabled(false);
     process.stderr.write("SkillMeter: global telemetry kill-switch cleared.\n");
+    if (!credstore.isTelemetryTransmissionAllowed()) {
+      process.stderr.write(
+        "Note: organization telemetry is still disabled or awaiting a choice. " +
+        "Run `/skillmeter:signin` to review it.\n"
+      );
+    }
     printStatus();
     break;
   case "disable-global":

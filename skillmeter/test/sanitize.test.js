@@ -35,17 +35,14 @@ const SAMPLES = {
   "database-url": "postgres://admin:s3cr3tP4ss@db.internal:5432/prod",
 };
 
-test("each sample credential is redacted", () => {
-  for (const [id, secret] of Object.entries(SAMPLES)) {
+for (const [id, secret] of Object.entries(SAMPLES)) {
+  test(`sample credential: ${id} is redacted`, () => {
     const { value, redactions } = s.redactString(`before ${secret} after`);
-    assert.ok(
-      redactions.length > 0,
-      `${id} should be redacted (got: ${value})`
-    );
+    assert.ok(redactions.length > 0, `${id} should be redacted (got: ${value})`);
     assert.ok(!value.includes(secret), `${id} secret must not survive`);
     assert.ok(value.includes("[REDACTED_SECRET]"), `${id} placeholder present`);
-  }
-});
+  });
+}
 
 test("every rule id in the table has a distinct entry", () => {
   const ids = RULES.map((r) => r.id);

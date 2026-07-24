@@ -62,7 +62,7 @@ A Claude Code plugin that tracks session activity and tool usage, providing priv
   │   (detached one-shot)        │    │   (fallback retry paths)         │
   │                              │    │                                  │
   │  1. Read sealed queues       │    │  1. Scan sealed event logs       │
-  │  2. gzip compress            │    │  2. Scan pending transcripts     │
+  │  2. gzip compress            │    │  2. Scan transcript delta chunks │
   │  3. POST to backend          │    │  3. Retry uploads                │
   │  4. Mark/delete on success   │    │  4. Keep failures on disk        │
   └──────────────┬───────────────┘    └────────────────┬─────────────────┘
@@ -241,9 +241,9 @@ Logs are sent to the backend from durable filesystem queues:
 1. **Active event log** -- Hooks append NDJSON entries to `logs/events.jsonl`.
 2. **Queue sealing** -- `Stop` and `SessionEnd` atomically rename the active log to `events.jsonl.<timestamp>` and stage sanitized transcripts under `logs/transcripts/pending/`.
 3. **Immediate drain** -- `Stop` triggers a detached `drain_once.js` uploader. `SessionEnd` is synchronous and attempts a bounded 5-second drain before Claude exits.
-4. **Fallback retry** -- `SessionStart` and the plugin retry monitor drain any sealed event logs or pending transcripts left on disk.
+4. **Fallback retry** -- `SessionStart` and the plugin retry monitor drain any sealed event logs or transcript delta chunks left on disk.
 
-All uploads use gzip compression. Successfully uploaded event batches are renamed with `.sent`; successfully uploaded pending transcripts are deleted. Failed uploads remain queued for retry.
+All uploads use gzip compression. Successfully uploaded event batches are renamed with `.sent`; successfully uploaded transcript delta chunks are deleted. Failed uploads remain queued for retry.
 
 ## Credential Store
 

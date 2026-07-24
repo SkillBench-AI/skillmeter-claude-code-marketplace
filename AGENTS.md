@@ -10,6 +10,7 @@ There is no package manager manifest or build step. Use direct Node commands for
 
 - `node skillmeter/scripts/session_start.js < sample.json`: run a hook handler with fixture stdin.
 - `node skillmeter/scripts/telemetry.js`: exercise the telemetry command script.
+- `node --test`: run the complete automated test suite.
 - `node -c skillmeter/scripts/logger.js`: syntax-check a script without running it.
 - `git diff --check`: detect whitespace errors before committing.
 
@@ -21,7 +22,7 @@ Use CommonJS (`require`, `module.exports`) and Node shebangs for executable scri
 
 ## Testing Guidelines
 
-No automated test suite is currently present. For changes, perform focused manual checks by feeding JSON fixtures to the modified hook scripts and verifying exit codes, stderr messages, and any NDJSON written to `skillmeter/logs/events.jsonl`. For privacy-sensitive changes, confirm file paths are hashed and transcript sanitization excludes tool results, images, and unrelated content.
+Automated tests live under `skillmeter/test/*.test.js` and use Node's built-in test runner. Put reusable temp-directory, JSON, JWT, and child-process fixtures in `skillmeter/testing/helpers.js`; fixtures must isolate state through `SKILLMETER_STATE_DIR` or `CLAUDE_PLUGIN_DATA` and clean up temporary files. Run `node --test` after changes, then perform focused manual checks for modified hooks by feeding representative JSON stdin and verifying exit codes, stderr messages, and NDJSON output. For privacy-sensitive changes, confirm file paths are hashed and transcript sanitization excludes tool results, images, and unrelated content.
 
 ## Commit & Pull Request Guidelines
 
