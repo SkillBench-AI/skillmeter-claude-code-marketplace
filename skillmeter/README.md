@@ -255,11 +255,7 @@ SkillMeter stores device identity, hash salt, license JWT, allowed GitHub identi
 |--------------------------------------|--------------------------------------------------------------------|
 | `/skillmeter:signin`                 | Sign in with GitHub (silent via `gh`, or device-flow fallback)     |
 | `/skillmeter:signout`                | Sign out and stop all telemetry; keeps device identity intact      |
-| `/skillmeter:telemetry enable`       | Opt the current project in                                         |
-| `/skillmeter:telemetry disable`      | Opt the current project out                                        |
-| `/skillmeter:telemetry enable-global`| Clear the machine-global telemetry kill-switch                     |
-| `/skillmeter:telemetry disable-global`| Pause telemetry across every project on this machine              |
-| `/skillmeter:telemetry status`       | Show global, per-project, and sign-in state                        |
+| `/skillmeter:telemetry list`         | Show and toggle effective telemetry for known organization repos   |
 
 ## Configuration
 

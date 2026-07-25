@@ -131,12 +131,13 @@ async function runHook(eventName, buildData, options = {}) {
   const orgConsent = repoScopeDecision.remoteOrg
     ? credstore.getOrgTelemetryConsent(repoScopeDecision.remoteOrg)
     : null;
+  const settingsRoot = repoScopeDecision.repoRoot || cwd;
   const gate = resolveTelemetryGate({
     globalDisabled: credstore.getTelemetryDisabled(),
     hasValidLicense: credstore.hasValidLicense(),
     repoOrgOwned: repoScopeDecision.allowed,
     orgConsent,
-    projectOptIn: getTelemetryOptIn(cwd),
+    projectOptIn: getTelemetryOptIn(settingsRoot),
   });
   if (options.onGate) {
     options.onGate({ gate, repoScopeDecision, orgConsent, cwd, input, eventName });

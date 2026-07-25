@@ -4,7 +4,13 @@ const { retryFailedLogs, retryFailedTranscripts, cleanupStaleFiles, migrateLegac
 const { refreshLicense } = require("./lib/license-activation");
 const { detectHarness } = require("./harness.js");
 const { PLUGIN_ROOT, PLUGIN_VERSION } = require("./lib/paths");
-const { signInRequiredBanner, telemetryActiveBanner, telemetrySentNotice, telemetryFailedNotice } = require("./lib/banner.js");
+const {
+  signInRequiredBanner,
+  telemetryConsentRequiredBanner,
+  telemetryActiveBanner,
+  telemetrySentNotice,
+  telemetryFailedNotice,
+} = require("./lib/banner.js");
 const credstore = require("./credstore.js");
 
 // Pre-hook work: refresh the license (silent gh) so the banner decision below
@@ -84,9 +90,7 @@ function runSessionStartHook() {
       if (!credstore.hasValidLicense()) {
         lines.push(signInRequiredBanner());
       } else if (gate.mode === "org_consent_required") {
-        lines.push(
-          `SkillMeter: signed in — run /skillmeter:signin to choose telemetry for @${repoScopeDecision.remoteOrg}.`
-        );
+        lines.push(telemetryConsentRequiredBanner(repoScopeDecision.remoteOrg));
       } else if (gate.capture && repoScopeDecision.allowed) {
         // Telemetry actually captures only when the repo is in scope too (the
         // hard repo-scope block downstream); show "active" only then.
@@ -126,9 +130,7 @@ function runSessionStartHook() {
       process.stderr.write(
         `SkillMeter v${PLUGIN_VERSION} (telemetry not configured for this project)\n` +
         `  /skillmeter:signin                — sign in with GitHub\n` +
-        `  /skillmeter:telemetry enable      — opt this project in\n` +
-        `  /skillmeter:telemetry disable     — opt this project out\n` +
-        `  /skillmeter:telemetry status      — show current state\n`
+        `  /skillmeter:telemetry list        — review repository targets\n`
       );
     },
   });

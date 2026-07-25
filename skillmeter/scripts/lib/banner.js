@@ -2,9 +2,9 @@
  * SkillMeter status banners (shown via the SessionStart hook `systemMessage`
  * and the /skillmeter:signin flow).
  *
- * One compact, content-sized box for every state: a marker + brand line
- * (`SkillMeter · skillbench`) and a one-line status. The box auto-sizes to its
- * longest line.
+ * One content-sized card for every state. The title lives in the border while
+ * the body gives the state, scope, privacy posture, and one next action. The
+ * card auto-sizes to its longest line.
  *
  * NO ANSI color: the SessionStart `systemMessage` renderer does not interpret
  * SGR escape codes — it prints them literally as garbage. Box-drawing glyphs
@@ -14,48 +14,100 @@
 
 const { PLUGIN_VERSION } = require("./paths");
 
-// Content-sized box (1-space padding each side). ✓/✗/·/box glyphs are all
-// single-column, so [...l].length measures the visible width correctly.
-function box(lines) {
-  const width = Math.max(...lines.map((l) => [...l].length));
-  const rule = "─".repeat(width + 2);
-  const body = lines.map((l) => `│ ${l}${" ".repeat(width - [...l].length)} │`);
-  return ["", `╭${rule}╮`, ...body, `╰${rule}╯`, ""].join("\n");
+// Content-sized card (2-space body padding). All glyphs used here are
+// single-column, so [...value].length measures the visible width correctly.
+function card(lines) {
+  const title = `SkillMeter v${PLUGIN_VERSION}`;
+  const bodyWidth = Math.max(
+    [...title].length,
+    ...lines.map((line) => [...line].length)
+  );
+  const innerWidth = bodyWidth + 4;
+  const titleRule = `─ ${title} `;
+  const top = `╭${titleRule}${"─".repeat(innerWidth - [...titleRule].length)}╮`;
+  const body = lines.map((line) => {
+    const padding = " ".repeat(bodyWidth - [...line].length);
+    return `│  ${line}${padding}  │`;
+  });
+  return [top, ...body, `╰${"─".repeat(innerWidth)}╯`].join("\n");
 }
 
-// Brand line: <marker>  SkillMeter v<version> · skillbench. The running plugin
-// version is shown so a stale session (hooks loaded from an older cached version
-// than the one installed) is immediately visible.
-function brandLine(marker) {
-  return `${marker}  SkillMeter v${PLUGIN_VERSION} · skillbench`;
+function orgLine(org) {
+  return `Organization  @${org}`;
+}
+
+function manageLine(command) {
+  return `Manage        ${command}`;
+}
+
+function telemetryConsentRequiredBanner(org) {
+  return card([
+    "[ TELEMETRY SETUP ]",
+    "",
+    orgLine(org),
+    "Status        OFF — nothing is being sent",
+    "",
+    "→ /skillmeter:signin to review",
+  ]);
 }
 
 // Shown after sign-in and whenever /skillmeter:signin manages an existing
 // consent. Authentication is deliberately distinct from telemetry permission.
 function signinStatusBanner(org, consent, scopeAllowed = false) {
-  let status;
   if (!org) {
-    status = "Signed in · no licensed organization";
-  } else if (consent === null) {
-    status = `Signed in · choose telemetry for @${org}`;
-  } else if (consent === false) {
-    status = `Signed in · telemetry off · @${org}`;
-  } else if (scopeAllowed) {
-    status = `Telemetry active · @${org}`;
-  } else {
-    status = `Signed in · telemetry enabled · @${org}`;
+    return card([
+      "[ SIGNED IN ]",
+      "",
+      "No licensed organization was found.",
+    ]);
   }
-  return box([brandLine("✓"), status]);
+  if (consent === null) return telemetryConsentRequiredBanner(org);
+  if (consent === false) {
+    return card([
+      "[ TELEMETRY OFF ]",
+      "",
+      orgLine(org),
+      "No telemetry is being sent.",
+      "",
+      manageLine("/skillmeter:signin"),
+    ]);
+  }
+  if (scopeAllowed) return telemetryActiveBanner(org);
+  return card([
+    "[ SIGNED IN ]",
+    "",
+    orgLine(org),
+    "Telemetry is enabled for organization repositories.",
+    "",
+    manageLine("/skillmeter:signin"),
+  ]);
 }
 
 // Shown at SessionStart when no valid license JWT is detected.
 function signInRequiredBanner() {
-  return box([brandLine("✗"), "Not signed in — run /skillmeter:signin"]);
+  return card([
+    "[ ACTION REQUIRED ]",
+    "",
+    "Sign in to verify this repository.",
+    "Telemetry remains OFF until you choose.",
+    "",
+    "→ /skillmeter:signin",
+  ]);
 }
 
 // Shown at SessionStart when telemetry is actively capturing this session.
 function telemetryActiveBanner(org) {
-  return box([brandLine("✓"), org ? `Telemetry active · @${org}` : "Telemetry active"]);
+  const lines = [
+    "[ TELEMETRY ON ]",
+    "",
+  ];
+  if (org) lines.push(orgLine(org));
+  lines.push(
+    "Sanitized telemetry is active in this repository.",
+    "",
+    manageLine("/skillmeter:telemetry list")
+  );
+  return card(lines);
 }
 
 // One-line notice shown at SessionStart after a drain uploaded telemetry.
@@ -76,6 +128,7 @@ function telemetryFailedNotice(error) {
 module.exports = {
   signinStatusBanner,
   signInRequiredBanner,
+  telemetryConsentRequiredBanner,
   telemetryActiveBanner,
   telemetrySentNotice,
   telemetryFailedNotice,

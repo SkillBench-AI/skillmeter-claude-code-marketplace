@@ -64,10 +64,7 @@ function main() {
           : `Signed in — telemetry off for @${org}`;
     emit({
       systemMessage:
-        signinStatusBanner(org, consent, scope.allowed && scope.remoteOrg === org) +
-        (org && consent === null
-          ? "\nRun /skillmeter:signin to choose whether to enable organization telemetry."
-          : ""),
+        signinStatusBanner(org, consent, scope.allowed && scope.remoteOrg === org),
       terminalSequence: osc777("SkillMeter", body),
     });
     return;
