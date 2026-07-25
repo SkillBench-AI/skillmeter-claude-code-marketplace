@@ -67,38 +67,6 @@ for (const uiCase of CONSENT_UI_CASES) {
   });
 }
 
-test("legacy license migration preserves the former auto-org enabled state", () => {
-  const store = { license_jwt: licenseJwt() };
-  assert.equal(credstore._migrateOrgTelemetryConsentStore(store), true);
-  assert.equal(store.org_telemetry_migration_version, 1);
-  assert.equal(store.org_telemetry_consents["skillbench-ai"].enabled, true);
-  assert.equal(store.org_telemetry_consents["skillbench-ai"].source, "legacy");
-  assert.equal(credstore._getOrgTelemetryConsentFromStore(store, "SKILLBENCH-AI"), true);
-});
-
-test("token-less migration prevents a later new sign-in from being auto-enabled", () => {
-  const store = {};
-  assert.equal(credstore._migrateOrgTelemetryConsentStore(store), true);
-  store.license_jwt = licenseJwt();
-  assert.equal(credstore._migrateOrgTelemetryConsentStore(store), false);
-  assert.equal(credstore._getOrgTelemetryConsentFromStore(store, "skillbench-ai"), null);
-});
-
-test("signed-out legacy state is not migrated to enabled", () => {
-  const store = { license_jwt: licenseJwt(), signed_out: true };
-  credstore._migrateOrgTelemetryConsentStore(store);
-  assert.equal(credstore._getOrgTelemetryConsentFromStore(store, "skillbench-ai"), null);
-});
-
-test("a stale policy version requires a fresh choice", () => {
-  const store = {
-    org_telemetry_consents: {
-      "skillbench-ai": { enabled: true, policy_version: 0 },
-    },
-  };
-  assert.equal(credstore._getOrgTelemetryConsentFromStore(store, "skillbench-ai"), null);
-});
-
 const ENABLED_POLICY = {
   globalDisabled: false,
   hasValidLicense: true,
@@ -171,9 +139,9 @@ test("org consent CLI validates the JWT org and persists the explicit choice", (
 
   const enabled = runNode(script, ["set", "skillbench-ai", "enabled"], { env });
   assert.equal(enabled.status, 0, enabled.stderr);
-  const stored = readJson(credentialPath);
-  assert.equal(stored.org_telemetry_consents["skillbench-ai"].enabled, true);
-  assert.equal(stored.org_telemetry_consents["skillbench-ai"].source, "user");
+  const stored = readJson(path.join(stateDir, "telemetry-policy.json"));
+  assert.equal(stored.organizations["skillbench-ai"].enabled, true);
+  assert.equal(stored.organizations["skillbench-ai"].source, "user");
 
   const rejected = runNode(script, ["set", "other-org", "enabled"], { env });
   assert.equal(rejected.status, 1);
@@ -228,20 +196,19 @@ test("transmission authorization requires org consent and honors the global kill
 
   assert.equal(runProbe().stdout, "false");
 
-  const store = readJson(credentialPath);
-  store.org_telemetry_consents = {
-    "skillbench-ai": {
-      enabled: true,
-      policy_version: 1,
-      decided_at: Date.now(),
-      source: "user",
-    },
-  };
-  writeJson(credentialPath, store);
+  const consentScript = path.resolve(__dirname, "../scripts/org_telemetry_consent.js");
+  const enabled = runNode(consentScript, ["set", "skillbench-ai", "enabled"], {
+    env: { ...process.env, SKILLMETER_STATE_DIR: stateDir },
+  });
+  assert.equal(enabled.status, 0, enabled.stderr);
   assert.equal(runProbe().stdout, "true");
 
-  store.telemetry_disabled = true;
-  writeJson(credentialPath, store);
+  const telemetryScript = path.resolve(__dirname, "../scripts/telemetry.js");
+  const disabled = runNode(telemetryScript, ["disable-global"], {
+    cwd: path.resolve(__dirname, "../.."),
+    env: { ...process.env, SKILLMETER_STATE_DIR: stateDir },
+  });
+  assert.equal(disabled.status, 0, disabled.stderr);
   assert.equal(runProbe().stdout, "false");
 });
 
@@ -267,7 +234,9 @@ test("SessionStart does not silently activate a token-less install", () => {
   assert.doesNotMatch(result.stderr, /gh activation/);
   const stored = readJson(path.join(stateDir, "credentials.json"));
   assert.equal(stored.license_jwt, undefined);
-  assert.equal(stored.org_telemetry_migration_version, 1);
+  assert.equal(stored.telemetry_disabled, true);
+  const policy = readJson(path.join(stateDir, "telemetry-policy.json"));
+  assert.equal(policy.migration.credentials_version, 1);
 });
 
 test("hook capture stays off until org consent is enabled", () => {
@@ -305,24 +274,24 @@ test("hook capture stays off until org consent is enabled", () => {
   assert.match(blocked.stderr, /organization telemetry choice required/);
   assert.equal(fs.existsSync(path.join(dataDir, "logs", "events.jsonl")), false);
 
-  writeJson(credentialPath, {
-    ...baseStore,
-    org_telemetry_consents: {
-      "skillbench-ai": {
-        enabled: true,
-        policy_version: 1,
-        decided_at: Date.now(),
-        source: "user",
-      },
-    },
-  });
+  const consent = runNode(
+    path.resolve(__dirname, "../scripts/org_telemetry_consent.js"),
+    ["set", "skillbench-ai", "enabled"],
+    { env }
+  );
+  assert.equal(consent.status, 0, consent.stderr);
   const allowed = runNode(hook, ["UserPromptSubmit"], { cwd: repo, env, input });
   assert.equal(allowed.status, 0, allowed.stderr);
   assert.match(allowed.stderr, /logged/);
-  assert.equal(fs.existsSync(path.join(dataDir, "logs", "events.jsonl")), true);
+  const repositoryRoot = path.join(dataDir, "logs", "repositories");
+  assert.ok(
+    fs.readdirSync(repositoryRoot).some((entry) =>
+      fs.existsSync(path.join(repositoryRoot, entry, "events.jsonl"))
+    )
+  );
 });
 
-test("a skipped final hook still seals previously captured events without uploading", () => {
+test("organization OFF deletes its repository queue and skipped hooks do not recreate it", () => {
   const stateDir = makeTempDir("skm-org-consent-");
   const dataDir = makeTempDir("skm-org-consent-");
   const repo = makeTempDir("skm-org-consent-");
@@ -337,18 +306,48 @@ test("a skipped final hook still seals previously captured events without upload
     license_jwt: licenseJwt(),
     org_telemetry_migration_version: 1,
   });
+  const env = {
+    ...process.env,
+    SKILLMETER_STATE_DIR: stateDir,
+    CLAUDE_PLUGIN_DATA: dataDir,
+  };
+  const consentScript = path.resolve(__dirname, "../scripts/org_telemetry_consent.js");
+  assert.equal(
+    runNode(consentScript, ["set", "skillbench-ai", "enabled"], { env }).status,
+    0
+  );
+  const hook = path.resolve(__dirname, "../scripts/hook.js");
+  const input = JSON.stringify({
+    session_id: "consent-gate-stop-test",
+    cwd: repo,
+    prompt: "hello",
+  });
+  assert.match(
+    runNode(hook, ["UserPromptSubmit"], { cwd: repo, env, input }).stderr,
+    /logged/
+  );
+  const repositoriesDir = path.join(dataDir, "logs", "repositories");
+  assert.ok(fs.existsSync(repositoriesDir));
 
-  const logsDir = path.join(dataDir, "logs");
-  const activeLog = path.join(logsDir, "events.jsonl");
-  writeFile(activeLog, '{"hook_event_name":"UserPromptSubmit"}\n');
+  const disabled = runNode(
+    consentScript,
+    ["set", "skillbench-ai", "disabled"],
+    { env }
+  );
+  assert.equal(disabled.status, 0, disabled.stderr);
+  const queueRoot = path.join(
+    repositoriesDir,
+    fs.readdirSync(repositoriesDir)[0]
+  );
+  assert.equal(fs.existsSync(path.join(queueRoot, "events.jsonl")), false);
+  assert.equal(
+    fs.existsSync(path.join(queueRoot, "transcripts", "chunks")),
+    false
+  );
 
   const result = runNode(path.resolve(__dirname, "../scripts/stop.js"), [], {
     cwd: repo,
-    env: {
-      ...process.env,
-      SKILLMETER_STATE_DIR: stateDir,
-      CLAUDE_PLUGIN_DATA: dataDir,
-    },
+    env,
     input: JSON.stringify({
       session_id: "consent-gate-stop-test",
       cwd: repo,
@@ -356,10 +355,10 @@ test("a skipped final hook still seals previously captured events without upload
   });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stderr, /organization telemetry choice required/);
-  assert.equal(fs.existsSync(activeLog), false);
-  assert.ok(
-    fs.readdirSync(logsDir).some((name) => /^events\.jsonl\.\d+$/.test(name)),
-    "the active log should be moved into the durable retry queue"
+  assert.match(result.stderr, /telemetry disabled for this organization/);
+  assert.equal(fs.existsSync(path.join(queueRoot, "events.jsonl")), false);
+  assert.equal(
+    fs.existsSync(path.join(queueRoot, "transcripts", "chunks")),
+    false
   );
 });

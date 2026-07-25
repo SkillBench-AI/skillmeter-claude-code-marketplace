@@ -94,6 +94,7 @@ const STATE_DIR =
   process.env.SKILLMETER_STATE_DIR ||
   path.join(os.homedir(), IS_DEV ? DEV_STATE_DIRNAME : PROD_STATE_DIRNAME);
 const CRED_FILE = path.join(STATE_DIR, "credentials.json");
+const TELEMETRY_POLICY_FILE = path.join(STATE_DIR, "telemetry-policy.json");
 
 // --- Numeric / boolean knobs (same defaults as before) ---
 function getEventTimeoutMs() {
@@ -112,6 +113,7 @@ function getTranscriptChunkMaxBytes() {
 module.exports = {
   STATE_DIR,
   CRED_FILE,
+  TELEMETRY_POLICY_FILE,
   getActivateUrl,
   getRefreshUrl,
   getGitHubClientId,

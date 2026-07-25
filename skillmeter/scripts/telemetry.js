@@ -1,8 +1,6 @@
 #!/usr/bin/env node
 /**
- * Manage SkillMeter telemetry — both the per-project opt-in (stored in
- * `<cwd>/.claude/settings.local.json`) and the machine-global kill-switch
- * (stored in `~/.skillbench/credentials.json`).
+ * Manage SkillMeter telemetry through the machine policy SSOT.
  *
  * Usage:
  *   node telemetry.js enable          # opt this project in
@@ -12,10 +10,8 @@
  *   node telemetry.js status          # show global + per-project + sign-in state
  */
 
-const {
-  getTelemetryOptIn,
-  saveTelemetryOptIn,
-} = require("./lib/settings");
+const telemetryStore = require("./lib/telemetry-store");
+const { purgeRepositoryQueue } = require("./lib/repository-queue");
 const credstore = require("./credstore.js");
 const {
   getAllowedGitHubOrgs,
@@ -34,7 +30,9 @@ const repoScopeDecision = getRepoScopeDecision(cwd);
 const settingsRoot = repoScopeDecision.repoRoot || cwd;
 
 function projectLine() {
-  const optIn = getTelemetryOptIn(settingsRoot);
+  const optIn = repoScopeDecision.repoKey
+    ? telemetryStore.getRepositoryOverride(repoScopeDecision.repoKey, settingsRoot)
+    : null;
   if (optIn === true) return "enabled";
   if (optIn === false) return "disabled";
   return "not configured";
@@ -73,7 +71,9 @@ function effectiveLine() {
     hasValidLicense: credstore.hasValidLicense(),
     repoOrgOwned: repoScopeDecision.allowed,
     orgConsent,
-    projectOptIn: getTelemetryOptIn(settingsRoot),
+    projectOptIn: repoScopeDecision.repoKey
+      ? telemetryStore.getRepositoryOverride(repoScopeDecision.repoKey, settingsRoot)
+      : null,
   });
   return gate.capture ? `enabled (${gate.mode})` : `disabled (${gate.mode})`;
 }
@@ -91,7 +91,11 @@ function printStatus() {
 
 switch (action) {
   case "enable":
-    saveTelemetryOptIn(settingsRoot, true);
+    if (!repoScopeDecision.repoKey) {
+      process.stderr.write("SkillMeter: this directory has no unambiguous licensed GitHub repository.\n");
+      process.exit(1);
+    }
+    telemetryStore.setRepositoryOverride(repoScopeDecision.repoKey, true);
     process.stderr.write(`SkillMeter: telemetry enabled for ${settingsRoot}\n`);
     if (getTelemetryDisabled()) {
       process.stderr.write(
@@ -111,7 +115,12 @@ switch (action) {
     printStatus();
     break;
   case "disable":
-    saveTelemetryOptIn(settingsRoot, false);
+    if (!repoScopeDecision.repoKey) {
+      process.stderr.write("SkillMeter: this directory has no unambiguous licensed GitHub repository.\n");
+      process.exit(1);
+    }
+    telemetryStore.setRepositoryOverride(repoScopeDecision.repoKey, false);
+    purgeRepositoryQueue(repoScopeDecision.repoKey);
     process.stderr.write(`SkillMeter: telemetry disabled for ${settingsRoot}\n`);
     printStatus();
     break;

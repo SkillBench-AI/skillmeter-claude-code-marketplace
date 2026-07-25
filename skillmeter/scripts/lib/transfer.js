@@ -1,6 +1,6 @@
 /**
- * Transport layer: durable event/transcript queues, upload retries, and
- * age-based cleanup.
+ * Transport layer: repository-bound durable event/transcript queues, upload
+ * retries, policy revalidation, and delivered-artifact cleanup.
  *
  * The filesystem is the source of truth. Hooks append to the active
  * `events.jsonl`, final-session hooks seal it to `events.jsonl.<ts>`, and the
@@ -10,6 +10,7 @@
 
 const fs = require("fs");
 const fsp = require("fs").promises;
+const crypto = require("crypto");
 const path = require("path");
 const zlib = require("zlib");
 const { promisify } = require("util");
@@ -30,7 +31,18 @@ const {
   TRANSCRIPTS_CURSORS_DIR,
   LEGACY_LOG_DIR,
   PLUGIN_VERSION,
+  repositoryQueuePaths,
 } = require("./paths");
+const telemetryStore = require("./telemetry-store");
+const {
+  queueContextForRepository,
+  listRepositoryQueueContexts,
+  queueContextForPath,
+  queueDisposition,
+  purgeRepositoryQueue,
+  purgeOrganizationQueues,
+  purgeDisallowedQueues,
+} = require("./repository-queue");
 
 // Async gzip for transcript uploads — keeps the hook's event loop responsive
 // while compressing multi-MB transcripts. Sync variants are still used for
@@ -40,13 +52,45 @@ const gzipAsync = promisify(zlib.gzip);
 const EVENT_TIMEOUT = getEventTimeoutMs();
 const TRANSCRIPT_TIMEOUT = 30_000;
 
-// How long we keep uploaded `.sent` event logs and queued transcript artifacts
-// before the SessionStart sweep deletes them. 30 days is long enough to
-// survive vacations and short outages; short enough that disks don't fill
-// up if ingest breaks for weeks.
+// Delivered `.sent` event logs are retained briefly for diagnostics. Unsent
+// chunks are never age-deleted; policy OFF or a successful acknowledgement is
+// required to remove them.
 const CLEANUP_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const DRAIN_ONCE_LOCK_FILE = path.join(LOG_DIR, ".drain-once.lock");
 const DRAIN_ONCE_LOCK_STALE_MS = 30_000;
+const QUEUE_DRAIN_LOCK_STALE_MS = 2 * 60_000;
+
+function acquireQueueDrainLock(name) {
+  const lockPath = path.join(LOG_DIR, `.${name}-drain.lock`);
+  try {
+    fs.mkdirSync(LOG_DIR, { recursive: true });
+    try {
+      const stat = fs.statSync(lockPath);
+      if (Date.now() - stat.mtimeMs > QUEUE_DRAIN_LOCK_STALE_MS) {
+        fs.unlinkSync(lockPath);
+      }
+    } catch {}
+    const fd = fs.openSync(lockPath, "wx", 0o600);
+    fs.writeSync(fd, `${process.pid} ${Date.now()}\n`);
+    return { fd, lockPath };
+  } catch {
+    return null;
+  }
+}
+
+function releaseQueueDrainLock(lock) {
+  if (!lock) return;
+  try { fs.closeSync(lock.fd); } catch {}
+  try { fs.unlinkSync(lock.lockPath); } catch {}
+}
+
+function idempotencyKey(repoKey, body) {
+  return crypto.createHash("sha256")
+    .update(repoKey)
+    .update("\0")
+    .update(body)
+    .digest("hex");
+}
 
 /**
  * Upload an event log file to the backend via fetch + gzip.
@@ -60,8 +104,21 @@ const DRAIN_ONCE_LOCK_STALE_MS = 30_000;
 // reported as send failures (the not-signed-in banner already covers those).
 async function transferEventLog(logFile, timeoutMs = EVENT_TIMEOUT) {
   if (!logFile || !fs.existsSync(logFile)) return { ok: false };
-  if (!credstore.isTelemetryTransmissionAllowed()) {
-    console.error(`[skillmeter] Event log: telemetry not authorized for the current org — leaving for retry`);
+  const context = queueContextForPath(logFile);
+  if (!context) {
+    try { fs.unlinkSync(logFile); } catch {}
+    return { ok: false };
+  }
+  const disposition = queueDisposition(context);
+  if (disposition === "delete") {
+    purgeRepositoryQueue(context.repoKey);
+    return { ok: false };
+  }
+  if (
+    disposition === "pause" ||
+    !credstore.isTelemetryTransmissionAllowed(context.repoKey)
+  ) {
+    console.error(`[skillmeter] Event log: telemetry not authorized for this repository — leaving for retry`);
     return { ok: false };
   }
 
@@ -93,12 +150,19 @@ async function transferEventLog(logFile, timeoutMs = EVENT_TIMEOUT) {
   console.error(`[skillmeter] Transferring event log: ${baseName} (${compressed.length} bytes gzipped)`);
 
   try {
+    if (
+      queueDisposition(context) !== "send" ||
+      !credstore.isTelemetryTransmissionAllowed(context.repoKey)
+    ) {
+      return { ok: false };
+    }
     const res = await fetch(`${endpoint}/logs/claude`, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-ndjson",
         "Content-Encoding": "gzip",
         "X-Plugin-Version": PLUGIN_VERSION,
+        "X-Idempotency-Key": idempotencyKey(context.repoKey, fileContent),
         "Authorization": `Bearer ${token}`,
       },
       body: compressed,
@@ -122,8 +186,14 @@ async function transferEventLog(logFile, timeoutMs = EVENT_TIMEOUT) {
  * queue transition only; network upload is handled by retryFailedLogs().
  * @returns {string|null} sealed file path when a log was rotated.
  */
-function sealEventLog() {
-  if (!fs.existsSync(LOG_FILE)) {
+function sealEventLog(repository) {
+  const logFile = repository?.repoKey
+    ? repositoryQueuePaths(
+        repository.repoKey,
+        credstore.getOrCreateHashSalt()
+      ).eventLog
+    : "";
+  if (!logFile || !fs.existsSync(logFile)) {
     console.error(`[skillmeter] No event log to seal`);
     return null;
   }
@@ -131,11 +201,11 @@ function sealEventLog() {
   const baseTimestamp = Date.now();
   for (let attempt = 0; attempt < 100; attempt++) {
     const suffix = `${baseTimestamp + attempt}`;
-    const sealedFile = `${LOG_FILE}.${suffix}`;
+    const sealedFile = `${logFile}.${suffix}`;
     if (fs.existsSync(sealedFile)) continue;
 
     try {
-      fs.renameSync(LOG_FILE, sealedFile);
+      fs.renameSync(logFile, sealedFile);
       console.error(`[skillmeter] Sealed event log: ${path.basename(sealedFile)}`);
       return sealedFile;
     } catch (err) {
@@ -208,21 +278,25 @@ function spawnDetachedDrain() {
 // independently. See scripts/lib/transcript-delta.js for the pure planning.
 // ---------------------------------------------------------------------------
 
-function cursorPath(transcriptId) {
-  return path.join(TRANSCRIPTS_CURSORS_DIR, `${transcriptId}.json`);
+function cursorPath(transcriptId, repository) {
+  if (!repository?.repoKey) return "";
+  const context = repository?.repoKey
+    ? queueContextForRepository(repository.repoKey, repository.org)
+    : null;
+  return context ? path.join(context.cursors, `${transcriptId}.json`) : "";
 }
 
 // Uncached (direct disk) read so a cursor advanced by one process is seen by
 // another (Stop vs detached drain vs monitor), matching getLicenseTokenUncached.
-function readCursor(transcriptId) {
-  return safeReadJson(cursorPath(transcriptId), null);
+function readCursor(transcriptId, repository) {
+  return safeReadJson(cursorPath(transcriptId, repository), null);
 }
 
 // Persist the delta cursor atomically. Best-effort: a failed write just means
 // the next Stop recomputes from the old cursor (chunks are idempotent by uuid).
-function writeCursor(cursor) {
+function writeCursor(cursor, repository) {
   try {
-    atomicWriteJson(cursorPath(cursor.transcriptId), cursor);
+    atomicWriteJson(cursorPath(cursor.transcriptId, repository), cursor);
   } catch (err) {
     console.error(`[skillmeter] Transcript cursor write failed: ${err.message}`);
   }
@@ -232,9 +306,15 @@ function writeCursor(cursor) {
 // meta is written (durable) BEFORE the body is atomically published, so
 // listDeltaChunks (which keys off the body) never yields a body without meta.
 // Returns the body path, or null on failure.
-function sealDeltaChunk(transcriptId, lines, meta) {
+function sealDeltaChunk(transcriptId, lines, meta, repository) {
+  if (!repository?.repoKey) return null;
+  const context = repository?.repoKey
+    ? queueContextForRepository(repository.repoKey, repository.org)
+    : null;
+  if (!context) return null;
+  const chunksDir = context.chunks;
   try {
-    fs.mkdirSync(TRANSCRIPTS_CHUNKS_DIR, { recursive: true });
+    fs.mkdirSync(chunksDir, { recursive: true });
   } catch (err) {
     console.error(`[skillmeter] Delta chunk seal failed (mkdir): ${err.message}`);
     return null;
@@ -244,8 +324,8 @@ function sealDeltaChunk(transcriptId, lines, meta) {
   const baseTs = Date.now();
   for (let attempt = 0; attempt < 100; attempt++) {
     const base = `${baseTs + attempt}-${process.pid}`;
-    const bodyPath = path.join(TRANSCRIPTS_CHUNKS_DIR, `${base}.jsonl`);
-    const metaPath = path.join(TRANSCRIPTS_CHUNKS_DIR, `${base}.meta.json`);
+    const bodyPath = path.join(chunksDir, `${base}.jsonl`);
+    const metaPath = path.join(chunksDir, `${base}.meta.json`);
     if (fs.existsSync(bodyPath) || fs.existsSync(metaPath)) continue;
 
     const tmpPath = `${bodyPath}.tmp.${process.pid}.${baseTs}`;
@@ -254,7 +334,14 @@ function sealDeltaChunk(transcriptId, lines, meta) {
       fs.writeSync(fd, body);
       fs.fsyncSync(fd);
       fs.closeSync(fd);
-      atomicWriteJson(metaPath, { transcriptId, ...meta, createdAt: baseTs });
+      atomicWriteJson(metaPath, {
+        transcriptId,
+        ...meta,
+        repoKey: repository?.repoKey,
+        org: repository?.org,
+        policyRevision: telemetryStore.getPolicyRevision(),
+        createdAt: baseTs,
+      });
       fs.renameSync(tmpPath, bodyPath); // publish body last
       return bodyPath;
     } catch (err) {
@@ -271,11 +358,14 @@ function sealDeltaChunk(transcriptId, lines, meta) {
 // List delta chunk bodies that have a durable sidecar meta (bodies without a
 // meta are half-written and skipped until complete or swept).
 function listDeltaChunks() {
-  if (!fs.existsSync(TRANSCRIPTS_CHUNKS_DIR)) return [];
-  try {
-    return fs.readdirSync(TRANSCRIPTS_CHUNKS_DIR)
+  const directories = listRepositoryQueueContexts().map((context) => context.chunks);
+  const files = [];
+  for (const directory of directories) {
+    if (!fs.existsSync(directory)) continue;
+    try {
+      files.push(...fs.readdirSync(directory)
       .filter((f) => f.endsWith(".jsonl"))
-      .map((f) => path.join(TRANSCRIPTS_CHUNKS_DIR, f))
+      .map((f) => path.join(directory, f))
       .filter((bodyPath) => {
         try {
           return (
@@ -285,15 +375,15 @@ function listDeltaChunks() {
         } catch {
           return false;
         }
-      });
-  } catch {
-    return [];
+      }));
+    } catch {}
   }
+  return files;
 }
 
 // Build the HTTP headers for a delta chunk upload. Pure (no fs/network) so the
 // X-Chunk-Reset / X-Prompt-ID logic is unit-testable.
-function buildChunkHeaders(meta, deviceId, token) {
+function buildChunkHeaders(meta, deviceId, token, rawBody = null) {
   const headers = {
     "Content-Type": "application/x-ndjson",
     "Content-Encoding": "gzip",
@@ -307,6 +397,9 @@ function buildChunkHeaders(meta, deviceId, token) {
     "Authorization": `Bearer ${token}`,
   };
   if (meta.promptId) headers["X-Prompt-ID"] = meta.promptId;
+  if (meta.repoKey && rawBody) {
+    headers["X-Idempotency-Key"] = idempotencyKey(meta.repoKey, rawBody);
+  }
   return headers;
 }
 
@@ -314,14 +407,28 @@ function buildChunkHeaders(meta, deviceId, token) {
 // leaves both for retry. Result shape matches drainFailedLogs entries.
 async function uploadDeltaChunk(bodyPath, deviceId, timeoutMs = TRANSCRIPT_TIMEOUT) {
   if (!bodyPath || !fs.existsSync(bodyPath)) return { ok: false };
-  if (!credstore.isTelemetryTransmissionAllowed()) {
-    console.error(`[skillmeter] Transcript chunk: telemetry not authorized for the current org — kept for retry`);
-    return { ok: false };
-  }
   const metaPath = bodyPath.replace(/\.jsonl$/, ".meta.json");
   const meta = safeReadJson(metaPath, null);
   if (!meta) {
     console.error(`[skillmeter] Transcript chunk: missing meta for ${path.basename(bodyPath)}`);
+    return { ok: false };
+  }
+  const context = queueContextForPath(bodyPath);
+  if (!context || !meta.repoKey || meta.repoKey !== context.repoKey) {
+    try { fs.unlinkSync(bodyPath); } catch {}
+    try { fs.unlinkSync(metaPath); } catch {}
+    return { ok: false };
+  }
+  const disposition = queueDisposition(context);
+  if (disposition === "delete") {
+    purgeRepositoryQueue(context.repoKey);
+    return { ok: false };
+  }
+  if (
+    disposition === "pause" ||
+    !credstore.isTelemetryTransmissionAllowed(context.repoKey)
+  ) {
+    console.error(`[skillmeter] Transcript chunk: telemetry not authorized for this repository — kept for retry`);
     return { ok: false };
   }
 
@@ -337,8 +444,9 @@ async function uploadDeltaChunk(bodyPath, deviceId, timeoutMs = TRANSCRIPT_TIMEO
   }
 
   let compressed;
+  let raw;
   try {
-    const raw = await fsp.readFile(bodyPath);
+    raw = await fsp.readFile(bodyPath);
     compressed = await gzipAsync(raw);
   } catch (err) {
     console.error(`[skillmeter] Transcript chunk gzip failed: ${err.message}`);
@@ -355,9 +463,15 @@ async function uploadDeltaChunk(bodyPath, deviceId, timeoutMs = TRANSCRIPT_TIMEO
   );
 
   try {
+    if (
+      queueDisposition(context) !== "send" ||
+      !credstore.isTelemetryTransmissionAllowed(context.repoKey)
+    ) {
+      return { ok: false };
+    }
     const res = await fetch(`${endpoint}/logs/claude/transcript`, {
       method: "POST",
-      headers: buildChunkHeaders(meta, deviceId, token),
+      headers: buildChunkHeaders(meta, deviceId, token, raw),
       body: compressed,
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -376,20 +490,29 @@ async function uploadDeltaChunk(bodyPath, deviceId, timeoutMs = TRANSCRIPT_TIMEO
 
 // Returns { ok: <#uploaded>, errors: [...] } for this batch.
 async function drainDeltaChunks(timeoutMs) {
-  const files = listDeltaChunks();
-  if (files.length === 0) return { ok: 0, errors: [] };
-  if (!credstore.isTelemetryTransmissionAllowed()) {
-    return { ok: 0, errors: [] };
+  const lock = acquireQueueDrainLock("transcripts");
+  if (!lock) return { ok: 0, errors: [] };
+  try {
+    purgeDisallowedQueues();
+    const files = listDeltaChunks();
+    if (files.length === 0) return { ok: 0, errors: [] };
+    if (telemetryStore.getGlobalDisabled()) {
+      return { ok: 0, errors: [] };
+    }
+
+    const deviceId = credstore.getDeviceId();
+    if (!deviceId) return { ok: 0, errors: [] };
+
+    console.error(`[skillmeter] Draining ${files.length} transcript chunk(s)`);
+    // Best-effort, single-flight refresh once per batch (see drainFailedLogs).
+    await ensureFreshLicense(deviceId);
+    const results = await Promise.allSettled(
+      files.map((file) => uploadDeltaChunk(file, deviceId, timeoutMs))
+    );
+    return tally(results);
+  } finally {
+    releaseQueueDrainLock(lock);
   }
-
-  const deviceId = credstore.getDeviceId();
-  if (!deviceId) return { ok: 0, errors: [] };
-
-  console.error(`[skillmeter] Draining ${files.length} transcript chunk(s)`);
-  // Best-effort, single-flight refresh once per batch (see drainFailedLogs).
-  await ensureFreshLicense(deviceId);
-  const results = await Promise.allSettled(files.map((f) => uploadDeltaChunk(f, deviceId, timeoutMs)));
-  return tally(results);
 }
 
 /**
@@ -398,7 +521,8 @@ async function drainDeltaChunks(timeoutMs) {
  * chunk seals, so a partial failure re-sends the full delta next Stop (chunks
  * are idempotent by uuid). Returns { chunks: <#sealed> }.
  */
-function stageTranscriptDelta(transcriptPath, promptId, deviceId) {
+function stageTranscriptDelta(transcriptPath, promptId, deviceId, repository) {
+  if (!repository?.repoKey) return { chunks: 0 };
   const transcriptId = path.basename(transcriptPath);
 
   let raw;
@@ -409,7 +533,7 @@ function stageTranscriptDelta(transcriptPath, promptId, deviceId) {
     return { chunks: 0 };
   }
 
-  const cursor = readCursor(transcriptId);
+  const cursor = readCursor(transcriptId, repository);
   const { objs } = parseJsonl(raw);
   const hashSalt = credstore.getOrCreateHashSalt();
 
@@ -427,7 +551,7 @@ function stageTranscriptDelta(transcriptPath, promptId, deviceId) {
       reset: chunk.reset,
       resetBaselineSeq: chunk.resetBaselineSeq,
       promptId,
-    });
+    }, repository);
     if (bodyPath) sealed++;
   }
 
@@ -439,22 +563,66 @@ function stageTranscriptDelta(transcriptPath, promptId, deviceId) {
       lastUuid: plan.newCursor.lastUuid,
       seq: plan.newCursor.seq,
       updatedAt: Date.now(),
-    });
+    }, repository);
   }
   return { chunks: sealed };
+}
+
+function advanceCursorToTranscriptTail(transcriptPath, repository, {
+  onlyWhenMissing = false,
+} = {}) {
+  if (!transcriptPath || !repository?.repoKey) return false;
+  const transcriptId = path.basename(transcriptPath);
+  const existing = readCursor(transcriptId, repository);
+  if (onlyWhenMissing && existing) return false;
+  let raw;
+  try {
+    raw = fs.readFileSync(transcriptPath, "utf8");
+  } catch {
+    return false;
+  }
+  const { objs } = parseJsonl(raw);
+  const last = [...objs].reverse().find((record) =>
+    record && typeof record.uuid === "string" && record.uuid
+  );
+  if (!last) return false;
+  writeCursor({
+    transcriptId,
+    lastUuid: last.uuid,
+    seq: existing?.seq || 0,
+    updatedAt: Date.now(),
+    discarded: !onlyWhenMissing,
+  }, repository);
+  return true;
+}
+
+function initializeTranscriptCursor(input, deviceId, repository) {
+  return advanceCursorToTranscriptTail(input?.transcript_path, repository, {
+    onlyWhenMissing: true,
+  });
+}
+
+function discardSkippedSessionArtifacts(input, deviceId, repository) {
+  sealEventLogAndTriggerDrain(input, deviceId, repository);
+  advanceCursorToTranscriptTail(input?.transcript_path, repository);
 }
 
 /**
  * Seal final-session artifacts into durable queues. Network upload is left to
  * SessionStart retry and the plugin monitor, keeping async hooks short.
  */
-function sealFinalSessionArtifacts(input, deviceId) {
-  const sealedEventLog = sealEventLog();
+function sealFinalSessionArtifacts(input, deviceId, repository) {
+  const sealedEventLog = sealEventLog(repository);
   let stagedTranscript = false;
 
   if (input && input.transcript_path && fs.existsSync(input.transcript_path)) {
     const id = deviceId || credstore.getDeviceId();
-    const res = stageTranscriptDelta(input.transcript_path, input.prompt_id, id);
+    const res = stageTranscriptDelta(
+      input.transcript_path,
+      input.prompt_id,
+      id,
+      repository
+    );
     stagedTranscript = res && res.chunks > 0;
   } else {
     console.error(`[skillmeter] No transcript to stage`);
@@ -465,54 +633,57 @@ function sealFinalSessionArtifacts(input, deviceId) {
   }
 }
 
-function sealEventLogAndTriggerDrain() {
-  if (sealEventLog()) {
+function sealEventLogAndTriggerDrain(input, deviceId, repository) {
+  if (sealEventLog(repository)) {
     spawnDetachedDrain();
   }
 }
 
-// One-time forward migration of the durable event-log queue. Older hosts
-// (without CLAUDE_PLUGIN_DATA) kept sealed event logs under PLUGIN_ROOT/logs,
-// which the host deletes ~7 days after a plugin update. Copy any un-uploaded
-// event logs into the persistent LOG_DIR so an in-place upgrade doesn't strand
-// them. Best-effort, copy (not move) + skip-existing, so it's safe to run every
-// session and a no-op when the paths coincide. (Legacy full-transcript pending
-// files are NOT migrated — transcript upload is delta-only now.)
+// Remove pre-SSOT queue artifacts. They have no repository identity, so moving
+// or retrying them could transmit under the wrong org after a later sign-in.
 function migrateLegacyQueue() {
-  if (LEGACY_LOG_DIR === LOG_DIR) return; // CLAUDE_PLUGIN_DATA unavailable
-  if (!fs.existsSync(LEGACY_LOG_DIR)) return;
   try {
     fs.mkdirSync(LOG_DIR, { recursive: true });
+    // Pre-SSOT queues are not repository-bound and cannot be authorized
+    // safely. Delete them instead of guessing a tenant/repository.
+    for (const candidate of [
+      LOG_FILE,
+      TRANSCRIPTS_PENDING_DIR,
+      TRANSCRIPTS_CHUNKS_DIR,
+      TRANSCRIPTS_CURSORS_DIR,
+    ]) {
+      try { fs.rmSync(candidate, { recursive: true, force: true }); } catch {}
+    }
+    if (LEGACY_LOG_DIR === LOG_DIR || !fs.existsSync(LEGACY_LOG_DIR)) return;
+    try {
+      fs.rmSync(
+        path.join(LEGACY_LOG_DIR, "transcripts"),
+        { recursive: true, force: true }
+      );
+    } catch {}
     for (const f of fs.readdirSync(LEGACY_LOG_DIR)) {
       const src = path.join(LEGACY_LOG_DIR, f);
       try { if (!fs.statSync(src).isFile()) continue; } catch { continue; }
-      if (/^events\.jsonl\.\d+$/.test(f)) {
-        // Already-sealed batch → copy under the same name.
-        const dest = path.join(LOG_DIR, f);
-        if (!fs.existsSync(dest)) fs.copyFileSync(src, dest);
-      } else if (f === "events.jsonl") {
-        // Seal the legacy active log into a batch the drain recognizes.
-        const dest = path.join(LOG_DIR, `events.jsonl.${Date.now()}`);
-        if (!fs.existsSync(dest)) fs.copyFileSync(src, dest);
+      if (/^events\.jsonl(?:\.\d+)?$/.test(f)) {
+        try { fs.unlinkSync(src); } catch {}
       }
-      // Skip *.sent (already delivered) and lock files.
     }
   } catch {}
 }
 
 function listSealedEventLogs() {
-  if (!fs.existsSync(LOG_DIR)) return [];
-
-  try {
-    return fs.readdirSync(LOG_DIR)
-      .filter((file) => /^events\.jsonl\.\d+$/.test(file))
-      .map((file) => path.join(LOG_DIR, file))
-      .filter((filePath) => {
-        try { return fs.statSync(filePath).isFile(); } catch { return false; }
-      });
-  } catch {
-    return [];
+  const files = [];
+  for (const context of listRepositoryQueueContexts()) {
+    try {
+      files.push(...fs.readdirSync(context.root)
+        .filter((file) => /^events\.jsonl\.\d+$/.test(file))
+        .map((file) => path.join(context.root, file))
+        .filter((filePath) => {
+          try { return fs.statSync(filePath).isFile(); } catch { return false; }
+        }));
+    } catch {}
   }
+  return files;
 }
 
 // Total queued (un-uploaded) artifacts: sealed event logs + delta transcript
@@ -538,19 +709,28 @@ function tally(results) {
 
 // Returns { ok: <#uploaded>, errors: [...] } for this batch.
 async function drainFailedLogs(timeoutMs) {
-  const files = listSealedEventLogs();
-  // Empty queue: do nothing — never fire a refresh on an idle daemon sweep.
-  if (files.length === 0) return { ok: 0, errors: [] };
-  if (!credstore.isTelemetryTransmissionAllowed()) {
-    return { ok: 0, errors: [] };
-  }
+  const lock = acquireQueueDrainLock("events");
+  if (!lock) return { ok: 0, errors: [] };
+  try {
+    purgeDisallowedQueues();
+    const files = listSealedEventLogs();
+    // Empty queue: do nothing — never fire a refresh on an idle daemon sweep.
+    if (files.length === 0) return { ok: 0, errors: [] };
+    if (telemetryStore.getGlobalDisabled()) {
+      return { ok: 0, errors: [] };
+    }
 
-  console.error(`[skillmeter] Draining ${files.length} failed log file(s)`);
-  // Best-effort, single-flight refresh once per batch so every file in this
-  // drain sends with the freshest token. Non-blocking and never throws.
-  await ensureFreshLicense(credstore.getDeviceId());
-  const results = await Promise.allSettled(files.map((filePath) => transferEventLog(filePath, timeoutMs)));
-  return tally(results);
+    console.error(`[skillmeter] Draining ${files.length} failed log file(s)`);
+    // Best-effort, single-flight refresh once per batch so every file in this
+    // drain sends with the freshest token. Non-blocking and never throws.
+    await ensureFreshLicense(credstore.getDeviceId());
+    const results = await Promise.allSettled(
+      files.map((filePath) => transferEventLog(filePath, timeoutMs))
+    );
+    return tally(results);
+  } finally {
+    releaseQueueDrainLock(lock);
+  }
 }
 
 // Drain both queues once. Record an upload-result sentinel so the next
@@ -592,14 +772,22 @@ function retryFailedTranscripts() {
 }
 
 /**
- * Delete stale files from LOG_DIR and TRANSCRIPTS_PENDING_DIR. Called from
- * SessionStart right after the retry funcs so failed retries stay around
- * for at least one more session, and nothing that retryFailedTranscripts
- * just kicked off gets yanked out from under the fetch.
+ * Delete delivered event logs and obsolete pre-delta pending files. Unsent
+ * repository-bound chunks and cursors are intentionally retained.
  */
 function cleanupStaleFiles() {
   const now = Date.now();
   const candidates = [];
+
+  for (const context of listRepositoryQueueContexts()) {
+    try {
+      for (const f of fs.readdirSync(context.root)) {
+        if (/^events\.jsonl\.\d+\.sent$/.test(f)) {
+          candidates.push(path.join(context.root, f));
+        }
+      }
+    } catch {}
+  }
 
   if (fs.existsSync(LOG_DIR)) {
     try {
@@ -620,19 +808,6 @@ function cleanupStaleFiles() {
     try {
       for (const f of fs.readdirSync(TRANSCRIPTS_PENDING_DIR)) {
         candidates.push(path.join(TRANSCRIPTS_PENDING_DIR, f));
-      }
-    } catch {
-      // fall through
-    }
-  }
-
-  // Delta chunk bodies + sidecar metas (and any orphaned .tmp). Cursors are
-  // deliberately NOT swept here — they must outlive gaps (vacations, long
-  // --resume) so the delta continues instead of full-resending.
-  if (fs.existsSync(TRANSCRIPTS_CHUNKS_DIR)) {
-    try {
-      for (const f of fs.readdirSync(TRANSCRIPTS_CHUNKS_DIR)) {
-        candidates.push(path.join(TRANSCRIPTS_CHUNKS_DIR, f));
       }
     } catch {
       // fall through
@@ -662,9 +837,12 @@ module.exports = {
   readCursor,
   writeCursor,
   sealDeltaChunk,
+  stageTranscriptDelta,
   listDeltaChunks,
   buildChunkHeaders,
   sealFinalSessionArtifacts,
+  initializeTranscriptCursor,
+  discardSkippedSessionArtifacts,
   clearDrainOnceLock,
   drainFailedLogs,
   drainDeltaChunks,
@@ -674,4 +852,8 @@ module.exports = {
   retryFailedTranscripts,
   cleanupStaleFiles,
   migrateLegacyQueue,
+  purgeRepositoryQueue,
+  purgeOrganizationQueues,
+  purgeDisallowedQueues,
+  listRepositoryQueueContexts,
 };

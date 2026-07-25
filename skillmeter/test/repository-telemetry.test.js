@@ -58,14 +58,32 @@ function testEnvironment() {
   const projectsDir = path.join(claudeConfigDir, "projects");
   const reposDir = path.join(temp, "repos");
   const repoA = makeRepo(reposDir, "repo-a", "skillbench-ai");
+  const repoAClone = makeRepo(reposDir, "repo-a-clone", "skillbench-ai");
+  writeFile(
+    path.join(repoAClone, ".git", "config"),
+    '[remote "origin"]\n  url = https://github.com/skillbench-ai/repo-a.git\n'
+  );
   const repoB = makeRepo(reposDir, "repo-b", "skillbench-ai");
   const repoC = makeRepo(reposDir, "repo-c", "skillbench-ai");
+  const ambiguousRepo = makeRepo(reposDir, "ambiguous", "skillbench-ai");
+  writeFile(
+    path.join(ambiguousRepo, ".git", "config"),
+    [
+      '[remote "origin"]',
+      "  url = https://github.com/skillbench-ai/one.git",
+      "  url = https://github.com/skillbench-ai/two.git",
+      "",
+    ].join("\n")
+  );
   const externalRepo = makeRepo(reposDir, "external", "another-org");
 
   writeJson(path.join(repoA, ".claude", "settings.local.json"), {
     skillmeter: { telemetry: false },
   });
   writeJson(path.join(repoC, ".claude", "settings.local.json"), {
+    skillmeter: { telemetry: true },
+  });
+  writeJson(path.join(repoAClone, ".claude", "settings.local.json"), {
     skillmeter: { telemetry: true },
   });
 
@@ -75,8 +93,10 @@ function testEnvironment() {
     "11111111-1111-4111-8111-111111111111",
     [
       { type: "user", cwd: repoA },
+      { type: "assistant", cwd: repoAClone },
       { type: "assistant", message: { content: `{"cwd":"${externalRepo}"}` } },
       { type: "user", cwd: repoB },
+      { type: "assistant", cwd: ambiguousRepo },
     ]
   );
   writeTranscript(
@@ -115,9 +135,11 @@ function testEnvironment() {
     claudeConfigDir,
     reposDir,
     repoA,
+    repoAClone,
     repoB,
     repoC,
     externalRepo,
+    ambiguousRepo,
     env: {
       ...process.env,
       HOME: temp,
@@ -161,7 +183,7 @@ test("repository display components remove control and prompt syntax", () => {
   );
 });
 
-test("transcript cwd discovery reads only top-level cwd fields", async () => {
+test("transcript discovery reads cwd and structured path fields only", async () => {
   const temp = makeTempDir("skm-repository-cwds-");
   const transcript = path.join(temp, "session.jsonl");
   writeFile(
@@ -172,6 +194,13 @@ test("transcript cwd discovery reads only top-level cwd fields", async () => {
         type: "assistant",
         message: { content: '{"cwd":"/repo/not-top-level"}' },
       }),
+      JSON.stringify({
+        type: "user",
+        toolUseResult: {
+          filePath: "/repo/from-tool/src/index.js",
+          edits: [{ file_path: "/repo/from-edit/README.md" }],
+        },
+      }),
       "{malformed",
       JSON.stringify({ type: "user", cwd: "/repo/two" }),
       "",
@@ -180,7 +209,12 @@ test("transcript cwd discovery reads only top-level cwd fields", async () => {
 
   assert.deepEqual(
     (await collectTranscriptCwds(transcript)).sort(),
-    ["/repo/one", "/repo/two"]
+    [
+      "/repo/from-edit/README.md",
+      "/repo/from-tool/src/index.js",
+      "/repo/one",
+      "/repo/two",
+    ]
   );
 });
 
@@ -246,13 +280,14 @@ test("repository toggle applies only a validated local repository ID", () => {
     cwd: fixture.repoA,
     env: fixture.env,
   });
-  const repoA = JSON.parse(listed.stdout).repositories.find(
+  const listOutput = JSON.parse(listed.stdout);
+  const repoA = listOutput.repositories.find(
     (repo) => repo.displayName === "@skillbench-ai/repo-a"
   );
 
   const toggled = runNode(
     REPOSITORY_TELEMETRY_SCRIPT,
-    ["toggle", repoA.id],
+    ["toggle", String(listOutput.revision), repoA.id],
     { cwd: fixture.repoA, env: fixture.env }
   );
 
@@ -266,21 +301,25 @@ test("repository toggle applies only a validated local repository ID", () => {
     },
   ]);
   assert.equal(
-    readJson(path.join(fixture.repoA, ".claude", "settings.local.json"))
-      .skillmeter.telemetry,
+    readJson(path.join(fixture.stateDir, "telemetry-policy.json"))
+      .repositories["github.com/skillbench-ai/repo-a"].enabled,
     true
+  );
+  assert.equal(
+    fs.existsSync(path.join(fixture.repoA, ".claude", "settings.local.json")),
+    false
   );
 
   const invalid = runNode(
     REPOSITORY_TELEMETRY_SCRIPT,
-    ["toggle", fixture.repoA],
+    ["toggle", String(listOutput.revision), fixture.repoA],
     { cwd: fixture.repoA, env: fixture.env }
   );
   assert.equal(invalid.status, 1);
   assert.match(invalid.stderr, /valid repository IDs/);
 });
 
-test("per-project telemetry commands write the git root from a nested cwd", () => {
+test("per-project telemetry commands write the repository SSOT from a nested cwd", () => {
   const fixture = testEnvironment();
   const nestedCwd = path.join(fixture.repoA, "packages", "app");
   writeFile(path.join(nestedCwd, ".keep"));
@@ -292,13 +331,45 @@ test("per-project telemetry commands write the git root from a nested cwd", () =
 
   assert.equal(enabled.status, 0, enabled.stderr);
   assert.equal(
-    readJson(path.join(fixture.repoA, ".claude", "settings.local.json"))
-      .skillmeter.telemetry,
+    readJson(path.join(fixture.stateDir, "telemetry-policy.json"))
+      .repositories["github.com/skillbench-ai/repo-a"].enabled,
     true
   );
   assert.equal(
     fs.existsSync(path.join(nestedCwd, ".claude", "settings.local.json")),
     false
+  );
+});
+
+test("repository picker rejects a stale list revision", () => {
+  const fixture = testEnvironment();
+  const listed = JSON.parse(
+    runNode(REPOSITORY_TELEMETRY_SCRIPT, ["list"], {
+      cwd: fixture.repoA,
+      env: fixture.env,
+    }).stdout
+  );
+  const repoA = listed.repositories.find(
+    (repo) => repo.displayName === "@skillbench-ai/repo-a"
+  );
+
+  const enabled = runNode(TELEMETRY_SCRIPT, ["enable"], {
+    cwd: fixture.repoA,
+    env: fixture.env,
+  });
+  assert.equal(enabled.status, 0, enabled.stderr);
+
+  const stale = runNode(
+    REPOSITORY_TELEMETRY_SCRIPT,
+    ["toggle", String(listed.revision), repoA.id],
+    { cwd: fixture.repoA, env: fixture.env }
+  );
+  assert.equal(stale.status, 0, stale.stderr);
+  assert.equal(JSON.parse(stale.stdout).stale, true);
+  assert.equal(
+    readJson(path.join(fixture.stateDir, "telemetry-policy.json"))
+      .repositories["github.com/skillbench-ai/repo-a"].enabled,
+    true
   );
 });
 
@@ -355,7 +426,7 @@ test("global kill-switch lists repositories as blocked and prevents toggles", ()
 
   const blocked = runNode(
     REPOSITORY_TELEMETRY_SCRIPT,
-    ["toggle", output.repositories[0].id],
+    ["toggle", String(output.revision), output.repositories[0].id],
     { cwd: fixture.repoA, env: fixture.env }
   );
   assert.equal(blocked.status, 0, blocked.stderr);
@@ -382,7 +453,7 @@ test("telemetry skill routes list through the repository toggle UI", () => {
   assert.match(TELEMETRY_SKILL, /Space selects changes/);
   assert.match(
     TELEMETRY_SKILL,
-    /repository_telemetry\.js toggle ID\.\.\./
+    /repository_telemetry\.js toggle REVISION ID\.\.\./
   );
   assert.match(TELEMETRY_SKILL, /passing only the validated/);
 });

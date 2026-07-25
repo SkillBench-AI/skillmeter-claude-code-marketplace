@@ -14,6 +14,7 @@ const { makeTempDir, writeFile } = require("../testing/helpers");
 const scope = require("../scripts/lib/repo-scope");
 const {
   extractGitHubOrgFromRemote,
+  extractGitHubRepositoryFromRemote,
   parseInsteadOf,
   applyInsteadOf,
   parseSshConfig,
@@ -36,6 +37,16 @@ test("scp-like SSH remote", () => {
 test("HTTPS remote with and without .git", () => {
   assert.equal(ex("https://github.com/Owner/Repo.git"), "owner");
   assert.equal(ex("https://github.com/Owner/Repo"), "owner");
+});
+
+test("repository identity includes normalized owner and name", () => {
+  assert.equal(
+    extractGitHubRepositoryFromRemote(
+      "git@github.com:Owner/Repo.git",
+      NO_REWRITES
+    ),
+    "owner/repo"
+  );
 });
 
 test("ssh:// and git:// scheme remotes", () => {
@@ -187,6 +198,25 @@ test("getRemoteUrlsForRepo reads every remote from .git/config", () => {
   );
   assert.deepEqual(getRemoteUrlsForRepo(root), [
     "git@github.com:me/fork.git",
+    "https://github.com/Org/repo.git",
+  ]);
+});
+
+test("getRemoteUrlsForRepo follows a worktree commondir", () => {
+  const root = makeTempDir("skm-scope-worktree-");
+  const common = path.join(root, "main", ".git");
+  const worktreeGitDir = path.join(common, "worktrees", "feature");
+  const worktree = path.join(root, "feature");
+  writeFile(
+    path.join(common, "config"),
+    '[remote "origin"]\n\turl = https://github.com/Org/repo.git\n'
+  );
+  writeFile(path.join(worktreeGitDir, "commondir"), "../..\n");
+  writeFile(
+    path.join(worktree, ".git"),
+    `gitdir: ${worktreeGitDir}\n`
+  );
+  assert.deepEqual(getRemoteUrlsForRepo(worktree), [
     "https://github.com/Org/repo.git",
   ]);
 });

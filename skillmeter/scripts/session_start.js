@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 const { runHook } = require("./logger.js");
-const { retryFailedLogs, retryFailedTranscripts, cleanupStaleFiles, migrateLegacyQueue } = require("./lib/transfer");
+const {
+  retryFailedLogs,
+  retryFailedTranscripts,
+  cleanupStaleFiles,
+  migrateLegacyQueue,
+  initializeTranscriptCursor,
+} = require("./lib/transfer");
 const { refreshLicense } = require("./lib/license-activation");
 const { detectHarness } = require("./harness.js");
 const { PLUGIN_ROOT, PLUGIN_VERSION } = require("./lib/paths");
@@ -133,6 +139,7 @@ function runSessionStartHook() {
         `  /skillmeter:telemetry list        — review repository targets\n`
       );
     },
+    afterLog: initializeTranscriptCursor,
   });
 }
 

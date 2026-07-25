@@ -1,10 +1,10 @@
 /**
- * Per-project settings I/O. Owns the telemetry opt-in stored under
- * `<cwd>/.claude/settings.local.json`. Repo-scope no longer lives here —
- * it's derived from the activated user's GitHub identities and stored in
- * credstore (see `lib/repo-scope.js`).
+ * Per-project settings I/O. Telemetry is read here only for one-time migration
+ * into the machine policy SSOT; string-valued dev settings remain local.
  */
 
+const fs = require("fs");
+const crypto = require("crypto");
 const path = require("path");
 const { safeReadJson, atomicWriteJson } = require("./io");
 
@@ -19,16 +19,20 @@ function readSettingsFile(cwd) {
   return safeReadJson(settingsPathFor(cwd), null);
 }
 
-/**
- * Load the telemetry opt-in for a given working directory.
- * @returns {boolean|null} true/false when explicitly set; null when absent.
- */
-function getTelemetryOptIn(cwd) {
+function getTelemetryOptInSnapshot(cwd) {
   try {
-    const content = readSettingsFile(cwd);
-    if (!content) return null;
-    if (!content.skillmeter || typeof content.skillmeter.telemetry !== "boolean") return null;
-    return content.skillmeter.telemetry;
+    const raw = fs.readFileSync(settingsPathFor(cwd), "utf8");
+    const content = JSON.parse(raw);
+    if (!content || typeof content !== "object" || Array.isArray(content)) {
+      return null;
+    }
+    if (!content.skillmeter || typeof content.skillmeter.telemetry !== "boolean") {
+      return null;
+    }
+    return {
+      value: content.skillmeter.telemetry,
+      fingerprint: crypto.createHash("sha256").update(raw).digest("hex"),
+    };
   } catch {
     return null;
   }
@@ -52,18 +56,67 @@ function getSkillmeterStringSetting(cwd, key) {
 }
 
 /**
- * Persist the telemetry opt-in. Merges with existing settings file content
- * so adjacent keys (repoScope, etc.) aren't clobbered.
+ * Remove only the legacy telemetry key after it has been imported into the
+ * machine policy store. Adjacent Claude and SkillMeter settings are preserved.
+ * A file that contained no other settings is removed instead of leaving `{}`.
  */
-function saveTelemetryOptIn(cwd, value) {
+function removeTelemetryOptIn(cwd, expectedValue, expectedFingerprint = "") {
   const p = settingsPathFor(cwd);
-  const content = safeReadJson(p, {});
-  content.skillmeter = { ...content.skillmeter, telemetry: value };
-  atomicWriteJson(p, content);
+  let raw;
+  try {
+    raw = fs.readFileSync(p, "utf8");
+  } catch {
+    return false;
+  }
+  if (
+    expectedFingerprint &&
+    crypto.createHash("sha256").update(raw).digest("hex") !== expectedFingerprint
+  ) {
+    return false;
+  }
+  let content;
+  try {
+    content = JSON.parse(raw);
+  } catch {
+    return false;
+  }
+  if (!content || typeof content !== "object" || Array.isArray(content)) {
+    return false;
+  }
+  if (
+    !content.skillmeter ||
+    content.skillmeter.telemetry !== expectedValue
+  ) {
+    return false;
+  }
+
+  const nextSkillmeter = { ...content.skillmeter };
+  delete nextSkillmeter.telemetry;
+  const next = { ...content };
+  if (Object.keys(nextSkillmeter).length === 0) delete next.skillmeter;
+  else next.skillmeter = nextSkillmeter;
+
+  if (Object.keys(next).length === 0) {
+    try {
+      fs.unlinkSync(p);
+      return true;
+    } catch (err) {
+      if (err && err.code === "ENOENT") return true;
+      return false;
+    }
+  }
+
+  try {
+    atomicWriteJson(p, next);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 module.exports = {
-  getTelemetryOptIn,
+  getTelemetryOptInSnapshot,
   getSkillmeterStringSetting,
-  saveTelemetryOptIn,
+  removeTelemetryOptIn,
+  settingsPathFor,
 };

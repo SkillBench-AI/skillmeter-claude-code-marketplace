@@ -243,11 +243,13 @@ Logs are sent to the backend from durable filesystem queues:
 3. **Immediate drain** -- `Stop` triggers a detached `drain_once.js` uploader. `SessionEnd` is synchronous and attempts a bounded 5-second drain before Claude exits.
 4. **Fallback retry** -- `SessionStart` and the plugin retry monitor drain any sealed event logs or transcript delta chunks left on disk.
 
-All uploads use gzip compression. Successfully uploaded event batches are renamed with `.sent`; successfully uploaded transcript delta chunks are deleted. Failed uploads remain queued for retry.
+All uploads use gzip compression. Queues are partitioned by canonical GitHub repository identity, and the current global, organization, and repository policy is checked again immediately before each request. Successfully uploaded event batches are renamed with `.sent`; successfully uploaded transcript delta chunks are deleted. Failed uploads remain queued for retry.
 
-## Credential Store
+## Local State
 
-SkillMeter stores device identity, hash salt, license JWT, allowed GitHub identities, the global telemetry kill-switch, and the GitHub fallback cooldown in `~/.skillbench/credentials.json`. Keychain and plugin-local credential fallback files are no longer supported or migrated; users with older credentials should run `/skillmeter:signin` after upgrading.
+SkillMeter stores device identity, hash salt, license JWT, and the GitHub fallback cooldown in `~/.skillbench/credentials.json`. Global, organization, and repository telemetry decisions live in the single machine policy store `~/.skillbench/telemetry-policy.json`.
+
+Legacy telemetry values are imported automatically. After a repository value is durably imported, only `skillmeter.telemetry` is removed from that checkout's `.claude/settings.local.json`; adjacent Claude and SkillMeter development settings are preserved. Clones and worktrees share the same repository policy through the normalized `github.com/org/repo` identity.
 
 ## Slash Commands
 
@@ -261,7 +263,7 @@ SkillMeter stores device identity, hash salt, license JWT, allowed GitHub identi
 
 | Environment Variable           | Default                                                                       | Description                                                                                                                                  |
 |--------------------------------|-------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
-| `SKILLMETER_BACKEND_URL`       | unset — endpoint resolved from the license JWT's `telemetry_endpoint` claim   | Base-URL override for local development / integration tests (e.g. `http://localhost:8080`). Bypasses the JWT check; callers append `/logs/claude` and `/logs/claude/transcript`. |
+| `SKILLMETER_BACKEND_URL`       | unset — endpoint resolved from the license JWT's `aud` claim                  | Base-URL override for local development / integration tests (e.g. `http://localhost:8080`). Callers append `/logs/claude` and `/logs/claude/transcript`; upload authentication still requires a valid license JWT. |
 | `SKILLMETER_ACTIVATE_URL`      | `https://api.skillbench.ai/activate`                                          | Activation endpoint that exchanges a GitHub OAuth token for a SkillMeter license JWT. Point at `https://api.dev.skillbench.com/activate` to run against dev. |
 | `SKILLMETER_GITHUB_CLIENT_ID`  | prod SkillMeter GitHub OAuth App                                              | Override the GitHub OAuth App used for the device-code login. Set to the dev App's `client_id` when activating against dev.                  |
 | `SKILLMETER_TIMEOUT`           | `10`                                                                          | Upload timeout (seconds)                                                                                                                     |
@@ -281,11 +283,11 @@ In production the telemetry hostname is per-tenant and looks like `https://<slug
 }
 ```
 
-Resolution order is env var → settings file → built-in default. Typically you set the env vars together when running activation against dev; once the JWT is cached, telemetry routing is read straight from its `telemetry_endpoint` claim and doesn't need `SKILLMETER_BACKEND_URL`.
+Resolution order is env var → settings file → built-in default. Typically you set the env vars together when running activation against dev; once the JWT is cached, telemetry routing is read straight from its `aud` claim and doesn't need `SKILLMETER_BACKEND_URL`.
 
 ## Repo-Scoped Filtering
 
-Telemetry is gated to repositories owned by the GitHub org your license was validated for. That org is decided by the license activator and carried in the license JWT's `org` claim (read via `getAllowedGitHubOrgs` → `getLicenseOrgs`); the client does not fetch or persist a GitHub org list. Only repositories whose GitHub remote owner matches the licensed org are eligible for telemetry.
+Telemetry is gated to repositories owned by the GitHub org your license was validated for. That org is decided by the license activator and carried in the license JWT's `org` claim (read via `getAllowedGitHubOrgs` → `getLicenseOrgs`); the client does not fetch or persist a GitHub org list. A matching `origin` is preferred. If no matching origin exists, a unique matching remote is accepted; multiple distinct matching repositories fail closed as ambiguous.
 
 Events are dropped — even in workdirs where the user ran `/skillmeter:telemetry enable` — for:
 
@@ -295,14 +297,14 @@ Events are dropped — even in workdirs where the user ran `/skillmeter:telemetr
 
 The tracked org is decided by the license activator, not the client — there is no client-side org narrowing. Org names match case-insensitively.
 
-### Per-project opt-in & auto-enable
+### Organization consent and repository overrides
 
-Whether a project emits telemetry resolves in three states:
+After sign-in, organization telemetry remains off until the user makes the organization-level choice. An eligible repository then resolves in three states:
 
-- **Explicitly disabled** (`/skillmeter:telemetry disable`) — never sends; always wins.
-- **Explicitly enabled** (`/skillmeter:telemetry enable`) — sends (still subject to the repo-scope gate above).
-- **Unset** (default) — telemetry **auto-enables when the repo is owned by the licensed org** (the org from your license JWT). For any other directory it stays off until you choose. SessionStart prints `telemetry auto-enabled — repo owned by allowed org`; run `/skillmeter:telemetry disable` to opt a matching project back out.
+- **Explicitly disabled** — capture stops and unsent payloads for that repository are deleted.
+- **Explicitly enabled** — capture is allowed, subject to the global, sign-in, ownership, and organization gates.
+- **Unset** — inherits the organization decision.
 
-The machine-global kill-switch (`/skillmeter:telemetry disable-global`) overrides all of the above.
+Use `/skillmeter:telemetry list` to review and toggle known repositories. The machine-global kill-switch overrides all repository and organization decisions; unlike an org/repository OFF choice, it pauses queued transfers without deleting them.
 
 The tracked org follows your license — re-run `/skillmeter:signin` to pick up a re-issued license.

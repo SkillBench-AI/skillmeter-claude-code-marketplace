@@ -24,10 +24,10 @@ const path = require("path");
 // few consumers that need them — logger is no longer a façade.
 const credstore = require("./credstore");
 const { getDeviceId, getOrCreateHashSalt } = credstore;
-const { LOG_DIR, LOG_FILE } = require("./lib/paths");
 const { hashHmac, sanitizeEventData } = require("./lib/sanitize");
-const { readStdinJson } = require("./lib/io");
-const { getTelemetryOptIn } = require("./lib/settings");
+const { atomicWriteJson, readStdinJson, safeReadJson } = require("./lib/io");
+const telemetryStore = require("./lib/telemetry-store");
+const { repositoryQueuePaths } = require("./lib/paths");
 const { getRepoScopeDecision } = require("./lib/repo-scope");
 const { resolveTelemetryGate } = require("./lib/telemetry-policy");
 
@@ -41,21 +41,40 @@ function getTranscriptId(transcriptPath) {
   return path.basename(transcriptPath);
 }
 
-function logEvent(event, sessionId, data, deviceId) {
-  if (!deviceId) return;
+function logEvent(event, sessionId, data, deviceId, repoKey, hashSalt) {
+  if (!deviceId || !repoKey || !hashSalt) return false;
+  if (!credstore.isTelemetryTransmissionAllowed(repoKey)) return false;
 
-  fs.mkdirSync(LOG_DIR, { recursive: true });
+  const queue = repositoryQueuePaths(repoKey, hashSalt);
+  const logFile = queue.eventLog;
+  try {
+    fs.mkdirSync(path.dirname(logFile), { recursive: true });
+    const existing = safeReadJson(queue.metadata, null);
+    if (existing && existing.repoKey !== repoKey) return false;
+    if (!existing) {
+      atomicWriteJson(queue.metadata, {
+        repoKey,
+        org: repoKey.split("/")[1],
+        policyRevision: telemetryStore.getPolicyRevision(),
+        createdAt: Date.now(),
+      });
+    }
 
-  const logEntry = {
-    timestamp: new Date().toISOString(),
-    level: "info",
-    hook_event_name: event,
-    session_id: sessionId,
-    device_id: deviceId,
-    data,
-  };
+    const logEntry = {
+      timestamp: new Date().toISOString(),
+      level: "info",
+      hook_event_name: event,
+      session_id: sessionId,
+      device_id: deviceId,
+      data,
+    };
 
-  fs.appendFileSync(LOG_FILE, JSON.stringify(logEntry) + "\n");
+    fs.appendFileSync(logFile, JSON.stringify(logEntry) + "\n");
+    return true;
+  } catch (err) {
+    console.error(`[skillmeter] ${event}: log write failed (${err.message})`);
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -87,10 +106,17 @@ function defaultGateMessaging(eventName, gate) {
   }
 }
 
-async function runOptionalCallback(eventName, phase, callback, input, deviceId) {
+async function runOptionalCallback(
+  eventName,
+  phase,
+  callback,
+  input,
+  deviceId,
+  repository
+) {
   if (!callback) return;
   try {
-    await callback(input, deviceId);
+    await callback(input, deviceId, repository);
   } catch (err) {
     console.error(`[skillmeter] ${eventName}: ${phase} failed (${err.message})`);
   }
@@ -137,7 +163,12 @@ async function runHook(eventName, buildData, options = {}) {
     hasValidLicense: credstore.hasValidLicense(),
     repoOrgOwned: repoScopeDecision.allowed,
     orgConsent,
-    projectOptIn: getTelemetryOptIn(settingsRoot),
+    projectOptIn: repoScopeDecision.repoKey
+      ? telemetryStore.getRepositoryOverride(
+          repoScopeDecision.repoKey,
+          settingsRoot
+        )
+      : null,
   });
   if (options.onGate) {
     options.onGate({ gate, repoScopeDecision, orgConsent, cwd, input, eventName });
@@ -145,7 +176,18 @@ async function runHook(eventName, buildData, options = {}) {
     defaultGateMessaging(eventName, gate);
   }
   if (!gate.capture) {
-    await runOptionalCallback(eventName, "afterSkip", options.afterSkip, input, deviceId);
+    await runOptionalCallback(
+      eventName,
+      "afterSkip",
+      options.afterSkip,
+      input,
+      deviceId,
+      {
+        repoKey: repoScopeDecision.repoKey,
+        org: repoScopeDecision.remoteOrg,
+        gate,
+      }
+    );
     process.exit(0);
   }
 
@@ -196,10 +238,28 @@ async function runHook(eventName, buildData, options = {}) {
   };
   if (meta.secrets > 0 || meta.pii > 0) data._sanitization = meta;
 
-  logEvent(eventName, sessionId, data, deviceId);
+  const logged = logEvent(
+    eventName,
+    sessionId,
+    data,
+    deviceId,
+    repoScopeDecision.repoKey,
+    hashSalt
+  );
+  if (!logged) {
+    console.error(`[skillmeter] ${eventName}: skipped (policy changed before write)`);
+    process.exit(0);
+  }
   console.error(`[skillmeter] ${eventName}: logged (session=${sessionId.slice(0, 8)}…)`);
 
-  await runOptionalCallback(eventName, "afterLog", options.afterLog, input, deviceId);
+  await runOptionalCallback(
+    eventName,
+    "afterLog",
+    options.afterLog,
+    input,
+    deviceId,
+    { repoKey: repoScopeDecision.repoKey, org: repoScopeDecision.remoteOrg }
+  );
 }
 
 // ---------------------------------------------------------------------------

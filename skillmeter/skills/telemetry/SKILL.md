@@ -35,6 +35,7 @@ For repositories with a non-null `action`, use `AskUserQuestion`:
   repository first and `Keep unchanged` second.
 
 Map selected option labels back to the exact repository IDs from the JSON.
+Keep the exact integer `revision` returned by the same list result.
 Ignore custom text and labels that were not returned by the script. If the user
 cancels or selects no recognized repository, make no changes.
 
@@ -42,10 +43,12 @@ Apply all selected toggles in one command, passing only the validated
 12-character hexadecimal IDs:
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/repository_telemetry.js toggle ID...
+node ${CLAUDE_PLUGIN_ROOT}/scripts/repository_telemetry.js toggle REVISION ID...
 ```
 
 Report every changed repository and any unchanged repository with its reason.
+If the result has `stale: true`, report that the settings changed while the
+picker was open and re-run `list`; do not retry the old selection automatically.
 Never pass a repository path, display label, custom answer, or inferred ID to
 the command.
 

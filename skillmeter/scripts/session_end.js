@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 const { runHook } = require("./logger.js");
-const { sealEventLogAndTriggerDrain, sealFinalSessionArtifacts } = require("./lib/transfer");
+const {
+  discardSkippedSessionArtifacts,
+  sealFinalSessionArtifacts,
+} = require("./lib/transfer");
 
 // Non-blocking: seal + stage, then spawn a DETACHED drain that outlives this
 // exiting hook (same as the Stop hook). At session exit the hook must return
@@ -11,6 +14,6 @@ const { sealEventLogAndTriggerDrain, sealFinalSessionArtifacts } = require("./li
 runHook("SessionEnd", (input) => ({
   reason: input.reason,
 }), {
-  afterSkip: sealEventLogAndTriggerDrain,
+  afterSkip: discardSkippedSessionArtifacts,
   afterLog: sealFinalSessionArtifacts,
 }).catch(() => process.exit(1));

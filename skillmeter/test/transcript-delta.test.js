@@ -13,13 +13,19 @@ const { makeTempDir, setTestEnv, writeFile } = require("../testing/helpers");
 // transfer.js reads its dirs from CLAUDE_PLUGIN_DATA at require time, so point
 // it at a throwaway dir BEFORE requiring it.
 const DATA_DIR = makeTempDir("skm-delta-");
+const STATE_DIR = makeTempDir("skm-delta-state-");
 setTestEnv("CLAUDE_PLUGIN_DATA", DATA_DIR);
+setTestEnv("SKILLMETER_STATE_DIR", STATE_DIR);
 setTestEnv("SKILLMETER_TRANSCRIPT_CHUNK_MAX_BYTES", undefined);
 
 const d = require("../scripts/lib/transcript-delta");
 const transfer = require("../scripts/lib/transfer");
 
 const SALT = "deadbeefcafe";
+const TEST_REPOSITORY = {
+  repoKey: "github.com/skillbench-ai/example",
+  org: "skillbench-ai",
+};
 
 // ---- helpers ---------------------------------------------------------------
 function content(uuid, parentUuid = null, text = "hi") {
@@ -184,14 +190,27 @@ test("buildChunkHeaders: reset carries baseline; non-reset sends 0", () => {
   );
   assert.equal(plain["X-Chunk-Reset"], "0");
   assert.equal(plain["X-Prompt-ID"], undefined, "prompt id omitted when absent");
+
+  const idempotent = transfer.buildChunkHeaders(
+    {
+      transcriptId: "s.jsonl",
+      seq: 3,
+      reset: false,
+      repoKey: TEST_REPOSITORY.repoKey,
+    },
+    "dev1",
+    "tok",
+    Buffer.from("{}\n")
+  );
+  assert.match(idempotent["X-Idempotency-Key"], /^[0-9a-f]{64}$/);
 });
 
 // ---- transfer cursor + chunk fs round-trips --------------------------------
 test("writeCursor/readCursor round-trip", () => {
   const c = { transcriptId: "round.jsonl", lastUuid: "u9", seq: 4, updatedAt: 123 };
-  transfer.writeCursor(c);
-  assert.deepEqual(transfer.readCursor("round.jsonl"), c);
-  assert.equal(transfer.readCursor("missing.jsonl"), null);
+  transfer.writeCursor(c, TEST_REPOSITORY);
+  assert.deepEqual(transfer.readCursor("round.jsonl", TEST_REPOSITORY), c);
+  assert.equal(transfer.readCursor("missing.jsonl", TEST_REPOSITORY), null);
 });
 
 test("sealDeltaChunk writes body+meta and listDeltaChunks finds it", () => {
@@ -201,14 +220,15 @@ test("sealDeltaChunk writes body+meta and listDeltaChunks finds it", () => {
     reset: false,
     resetBaselineSeq: null,
     promptId: "p",
-  });
+  }, TEST_REPOSITORY);
   assert.ok(body && fs.existsSync(body), "body written");
   assert.ok(fs.existsSync(body.replace(/\.jsonl$/, ".meta.json")), "meta sidecar written");
   assert.equal(transfer.listDeltaChunks().length, before + 1);
 });
 
 test("listDeltaChunks excludes a body without a meta sidecar", () => {
-  const dir = path.join(DATA_DIR, "logs", "transcripts", "chunks");
+  const context = transfer.listRepositoryQueueContexts()[0];
+  const dir = context.chunks;
   fs.mkdirSync(dir, { recursive: true });
   const orphan = path.join(dir, "9999999999-1.jsonl");
   writeFile(orphan, "{}\n"); // no sibling .meta.json

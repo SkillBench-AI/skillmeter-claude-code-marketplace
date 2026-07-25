@@ -1,8 +1,8 @@
 /**
  * Repository telemetry inventory for `/skillmeter:telemetry list`.
  *
- * Discovery streams historical transcript JSONL and retains only top-level
- * cwd values long enough to resolve existing git roots. Public results contain
+ * Discovery streams historical transcript JSONL and retains structured local
+ * paths long enough to resolve existing git roots. Public results contain
  * a sanitized display name and HMAC id, never the local repository path.
  */
 
@@ -19,8 +19,9 @@ const {
   getRepoScopeDecision,
 } = require("./repo-scope");
 const { hashHmac } = require("./sanitize");
-const { getTelemetryOptIn, saveTelemetryOptIn } = require("./settings");
+const telemetryStore = require("./telemetry-store");
 const { resolveTelemetryGate } = require("./telemetry-policy");
+const { purgeRepositoryQueue } = require("./repository-queue");
 
 const SESSION_FILE_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/i;
@@ -115,6 +116,25 @@ async function collectTranscriptCwds(transcriptPath) {
         if (typeof record.cwd === "string" && record.cwd) {
           cwds.add(record.cwd);
         }
+        const addStructuredPaths = (value) => {
+          if (!value || typeof value !== "object") return;
+          if (Array.isArray(value)) {
+            for (const item of value) addStructuredPaths(item);
+            return;
+          }
+          for (const [key, child] of Object.entries(value)) {
+            if (
+              ["file_path", "notebook_path", "filePath", "trackingPath"].includes(key) &&
+              typeof child === "string" &&
+              child
+            ) {
+              cwds.add(child);
+            } else {
+              addStructuredPaths(child);
+            }
+          }
+        };
+        addStructuredPaths(record);
       } catch {
         // A partial or malformed record does not make repository discovery fail.
       }
@@ -172,8 +192,8 @@ async function discoverRepositoryRoots({
   return [...roots].sort();
 }
 
-function repositoryId(repoRoot, hashSalt) {
-  return hashHmac(canonicalRepositoryRoot(repoRoot), hashSalt);
+function repositoryId(repoKey, hashSalt) {
+  return hashHmac(repoKey, hashSalt);
 }
 
 function projectSettingLabel(value) {
@@ -210,7 +230,8 @@ function toggleDescription({ gate, projectSetting, org }) {
 
 function buildRepositoryTelemetryState(roots, {
   getScopeDecision = getRepoScopeDecision,
-  getProjectSetting = getTelemetryOptIn,
+  getProjectSetting = (repoKey, repoRoot) =>
+    telemetryStore.getRepositoryOverride(repoKey, repoRoot),
   getOrgConsent = credstore.getOrgTelemetryConsent,
   getGlobalDisabled = credstore.getTelemetryDisabled,
   hasValidLicense = credstore.hasValidLicense,
@@ -220,6 +241,7 @@ function buildRepositoryTelemetryState(roots, {
   const signedIn = hasValidLicense();
   let hashSalt = "";
   const repositories = [];
+  const discovered = new Map();
 
   for (const repoRoot of roots) {
     let scope;
@@ -230,7 +252,16 @@ function buildRepositoryTelemetryState(roots, {
     }
     if (!scope || !scope.allowed || !scope.remoteOrg) continue;
 
-    const projectSetting = getProjectSetting(repoRoot);
+    // Import every checkout before rendering. A later clone/worktree may carry
+    // a legacy OFF value, which must win over an earlier legacy ON.
+    getProjectSetting(scope.repoKey, repoRoot);
+    if (!discovered.has(scope.repoKey)) {
+      discovered.set(scope.repoKey, { repoRoot, scope });
+    }
+  }
+
+  for (const { repoRoot, scope } of discovered.values()) {
+    const projectSetting = getProjectSetting(scope.repoKey, "");
     const orgConsent = getOrgConsent(scope.remoteOrg);
     const gate = resolveTelemetryGate({
       globalDisabled,
@@ -245,12 +276,13 @@ function buildRepositoryTelemetryState(roots, {
         ? "enable"
         : null;
     if (!hashSalt) hashSalt = getHashSalt();
-    const id = repositoryId(repoRoot, hashSalt);
+    const id = repositoryId(scope.repoKey, hashSalt);
     const displayName = repositoryDisplayName(repoRoot, scope.remoteOrg);
 
     repositories.push({
       id,
       repoRoot,
+      repoKey: scope.repoKey,
       org: scope.remoteOrg,
       displayName,
       effective: gate.capture ? "enabled" : "disabled",
@@ -286,6 +318,7 @@ function buildRepositoryTelemetryState(roots, {
   );
 
   return {
+    revision: telemetryStore.getPolicyRevision(),
     globalDisabled,
     signedIn,
     repositories,
@@ -299,6 +332,7 @@ function buildRepositoryTelemetryState(roots, {
 
 function publicRepositoryState(state) {
   return {
+    revision: state.revision,
     globalDisabled: state.globalDisabled,
     signedIn: state.signedIn,
     repositories: state.repositories.map((repo) => ({
@@ -317,13 +351,16 @@ function publicRepositoryState(state) {
 }
 
 function applyRepositoryToggles(ids, state, {
-  saveProjectSetting = saveTelemetryOptIn,
+  saveProjectSetting = (repoKey, enabled, revision) =>
+    telemetryStore.setRepositoryOverride(repoKey, enabled, revision),
+  purgeProjectQueue = purgeRepositoryQueue,
 } = {}) {
   const repositoriesById = new Map(
     state.repositories.map((repo) => [repo.id, repo])
   );
   const results = [];
 
+  let revision = state.revision;
   for (const id of [...new Set(ids)]) {
     const repo = repositoriesById.get(id);
     if (!repo) {
@@ -342,24 +379,27 @@ function applyRepositoryToggles(ids, state, {
 
     const enabled = repo.action === "enable";
     try {
-      saveProjectSetting(repo.repoRoot, enabled);
+      saveProjectSetting(repo.repoKey, enabled, revision);
+      revision++;
+      if (!enabled) purgeProjectQueue(repo.repoKey);
       results.push({
         id,
         displayName: repo.displayName,
         changed: true,
         effective: enabled ? "enabled" : "disabled",
       });
-    } catch {
+    } catch (err) {
       results.push({
         id,
         displayName: repo.displayName,
         changed: false,
-        reason: "write_failed",
+        reason: err?.code === "STALE_POLICY" ? "stale_policy" : "write_failed",
       });
     }
   }
 
   return {
+    revision,
     changed: results.filter((result) => result.changed).length,
     results,
   };

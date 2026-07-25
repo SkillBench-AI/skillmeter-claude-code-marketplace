@@ -164,6 +164,14 @@ function resetConfigCache() {
  * Returns "" on non-GitHub remotes, empty strings, or unparsable input.
  */
 function extractGitHubOrgFromRemote(remoteUrl, options) {
+  const repository = extractGitHubRepositoryFromRemote(remoteUrl, options);
+  return repository ? repository.split("/")[0] : "";
+}
+
+/**
+ * Return canonical `owner/repository` for a GitHub remote.
+ */
+function extractGitHubRepositoryFromRemote(remoteUrl, options) {
   if (!remoteUrl || typeof remoteUrl !== "string") return "";
 
   const resolution = options || {
@@ -180,9 +188,13 @@ function extractGitHubOrgFromRemote(remoteUrl, options) {
     const scpMatch = rewritten.match(/^(?:[^@\s]+@)?([^:/\s]+):([^/]+)\/.+$/);
     if (scpMatch) {
       const host = aliases[scpMatch[1].toLowerCase()] || scpMatch[1];
-      return host.toLowerCase() === "github.com"
-        ? scpMatch[2].toLowerCase()
-        : "";
+      if (host.toLowerCase() !== "github.com") return "";
+      const repo = rewritten.slice(rewritten.indexOf(":") + 1)
+        .split(/[?#]/, 1)[0]
+        .replace(/^\/+|\/+$/g, "")
+        .replace(/\.git$/i, "")
+        .toLowerCase();
+      return /^[^/]+\/[^/]+$/.test(repo) ? repo : "";
     }
   }
 
@@ -194,7 +206,7 @@ function extractGitHubOrgFromRemote(remoteUrl, options) {
       : originalHost;
     const parts = url.pathname.split("/").filter(Boolean);
     if (host.toLowerCase() !== "github.com" || parts.length < 2) return "";
-    return parts[0].toLowerCase();
+    return `${parts[0]}/${parts[1].replace(/\.git$/i, "")}`.toLowerCase();
   } catch {
     return "";
   }
@@ -227,35 +239,43 @@ function resolveGitDir(repoRoot) {
  * fork-of-tenant setups (origin = personal fork, upstream = tenant) still
  * match.
  */
-function getRemoteUrlsForRepo(repoRoot) {
+function getRemoteEntriesForRepo(repoRoot) {
   const gitDir = resolveGitDir(repoRoot);
   if (!gitDir) return [];
 
   try {
-    const configPath = path.join(gitDir, "config");
+    let configRoot = gitDir;
+    const commonDirText = readText(path.join(gitDir, "commondir")).trim();
+    if (commonDirText) configRoot = path.resolve(gitDir, commonDirText);
+    const configPath = path.join(configRoot, "config");
     const configContent = fs.readFileSync(configPath, "utf8");
-    const urls = [];
-    let inRemoteSection = false;
+    const entries = [];
+    let remoteName = "";
 
     for (const line of configContent.split(/\r?\n/)) {
-      if (/^\s*\[remote ".+"\]\s*$/.test(line)) {
-        inRemoteSection = true;
+      const section = line.match(/^\s*\[remote "(.+)"\]\s*$/);
+      if (section) {
+        remoteName = section[1];
         continue;
       }
       if (/^\s*\[.+\]\s*$/.test(line)) {
-        inRemoteSection = false;
+        remoteName = "";
         continue;
       }
-      if (!inRemoteSection) continue;
+      if (!remoteName) continue;
 
       const urlMatch = line.match(/^\s*url\s*=\s*(.+?)\s*$/);
-      if (urlMatch) urls.push(urlMatch[1]);
+      if (urlMatch) entries.push({ name: remoteName, url: urlMatch[1] });
     }
 
-    return urls;
+    return entries;
   } catch {
     return [];
   }
+}
+
+function getRemoteUrlsForRepo(repoRoot) {
+  return getRemoteEntriesForRepo(repoRoot).map((entry) => entry.url);
 }
 
 /**
@@ -282,9 +302,13 @@ function getRepoScopeDecision(cwd) {
     return { allowed: false, scope: "unknown", classification: "no_repository" };
   }
 
-  const remoteOrgs = getRemoteUrlsForRepo(repoRoot)
-    .map((remoteUrl) => extractGitHubOrgFromRemote(remoteUrl))
-    .filter(Boolean);
+  const remotes = getRemoteEntriesForRepo(repoRoot)
+    .map((entry) => ({
+      ...entry,
+      repository: extractGitHubRepositoryFromRemote(entry.url),
+    }))
+    .filter((entry) => entry.repository);
+  const remoteOrgs = remotes.map((entry) => entry.repository.split("/")[0]);
 
   if (remoteOrgs.length === 0) {
     return {
@@ -295,14 +319,33 @@ function getRepoScopeDecision(cwd) {
     };
   }
 
-  const matchingOrg = remoteOrgs.find((org) => allowedOrgs.includes(org));
-  if (matchingOrg) {
+  const matching = remotes.filter((entry) =>
+    allowedOrgs.includes(entry.repository.split("/")[0])
+  );
+  const originMatches = matching.filter((entry) => entry.name === "origin");
+  const candidates = new Set(
+    (originMatches.length > 0 ? originMatches : matching)
+      .map((entry) => entry.repository)
+  );
+  if (candidates.size > 1) {
+    return {
+      allowed: false,
+      scope: "unknown",
+      classification: "ambiguous_github_repository",
+      repoRoot,
+    };
+  }
+  if (candidates.size === 1) {
+    const repository = [...candidates][0];
+    const matchingOrg = repository.split("/")[0];
     return {
       allowed: true,
       scope: "approved",
       classification: "github_org_match",
       repoRoot,
       remoteOrg: matchingOrg,
+      repoKey: `github.com/${repository}`,
+      repoName: repository.split("/")[1],
     };
   }
 
@@ -322,6 +365,8 @@ module.exports = {
   getInsteadOfRules,
   getSshHostAliases,
   extractGitHubOrgFromRemote,
+  extractGitHubRepositoryFromRemote,
+  getRemoteEntriesForRepo,
   getRemoteUrlsForRepo,
   getRepoScopeDecision,
   _resetConfigCache: resetConfigCache,
