@@ -15,8 +15,16 @@
 const fs = require("fs");
 const path = require("path");
 const credstore = require("./credstore.js");
-const { signinStatusBanner } = require("./lib/banner.js");
+const {
+  signinRepositoryInventoryBanner,
+  signinStatusBanner,
+} = require("./lib/banner.js");
 const { getRepoScopeDecision } = require("./lib/repo-scope");
+const {
+  loadRepositoryTelemetryState,
+  publicRepositoryState,
+} = require("./lib/repository-telemetry");
+const telemetryStore = require("./lib/telemetry-store");
 
 // Dedupe marker: FileChanged can fire more than once per change, and re-fires
 // on unrelated writes. We notify once per result `ts`. Kept next to the sentinel
@@ -37,7 +45,7 @@ function emit(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
 }
 
-function main() {
+async function main() {
   const result = credstore.readSigninResult();
   if (!result || result.status === "none") return;
 
@@ -55,16 +63,35 @@ function main() {
     const scope = getRepoScopeDecision(process.cwd());
     const org = credstore.getAllowedGitHubOrgs()[0] || "";
     const consent = org ? credstore.getOrgTelemetryConsent(org) : null;
+    const repositoryEnabled =
+      !credstore.getTelemetryDisabled() &&
+      scope.allowed &&
+      scope.remoteOrg === org &&
+      telemetryStore.getRepositoryOverride(scope.repoKey, scope.repoRoot) === true;
     const body = !org
       ? "Signed in — license has no telemetry organization"
       : consent === null
         ? `Signed in to @${org} — run /skillmeter:signin to choose telemetry`
         : consent
-          ? `Signed in — telemetry enabled for @${org}`
+          ? `Signed in to @${org} — choose repositories for telemetry`
           : `Signed in — telemetry off for @${org}`;
+    let repositories = [];
+    if (org) {
+      try {
+        const state = publicRepositoryState(
+          await loadRepositoryTelemetryState()
+        );
+        repositories = state.repositories.filter(
+          (repository) => repository.org === org
+        );
+      } catch {}
+    }
+    const messages = [signinStatusBanner(org, consent, repositoryEnabled)];
+    if (org) {
+      messages.push(signinRepositoryInventoryBanner(org, repositories));
+    }
     emit({
-      systemMessage:
-        signinStatusBanner(org, consent, scope.allowed && scope.remoteOrg === org),
+      systemMessage: messages.join("\n"),
       terminalSequence: osc777("SkillMeter", body),
     });
     return;
@@ -81,4 +108,4 @@ function main() {
   // "discarded" (signed out during poll) → intentional, no notification.
 }
 
-main();
+main().catch(() => {});

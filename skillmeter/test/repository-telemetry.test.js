@@ -7,7 +7,10 @@ const { test } = require("node:test");
 
 const {
   collectTranscriptCwds,
+  collectClaudeStateCwds,
+  discoverRepositoryRoots,
   getClaudeProjectsDir,
+  getClaudeStateFile,
   repositoryNameFromRemote,
   safeDisplayComponent,
 } = require("../scripts/lib/repository-telemetry");
@@ -163,6 +166,56 @@ test("Claude projects directory honors CLAUDE_CONFIG_DIR", () => {
   );
 });
 
+test("Claude state discovery reads only absolute registered project paths", () => {
+  const temp = makeTempDir("skm-claude-state-");
+  const stateFile = path.join(temp, ".claude.json");
+  writeJson(stateFile, {
+    projects: {
+      "/repo/from-projects": {},
+      "relative/project": {},
+    },
+    githubRepoPaths: {
+      "skillbench-ai/example": [
+        "/repo/from-github-cache",
+        "relative/cache",
+      ],
+      invalid: "not-an-array",
+    },
+  });
+
+  assert.equal(
+    getClaudeStateFile({
+      env: { HOME: "/home/tester" },
+      homeDir: "/unused",
+    }),
+    path.join("/home/tester", ".claude.json")
+  );
+  assert.deepEqual(
+    collectClaudeStateCwds(stateFile).sort(),
+    ["/repo/from-github-cache", "/repo/from-projects"]
+  );
+});
+
+test("repository discovery includes exact Claude project registry paths", async () => {
+  const temp = makeTempDir("skm-claude-state-repo-");
+  const repo = makeRepo(temp, "registered", "skillbench-ai");
+  const stateFile = path.join(temp, ".claude.json");
+  writeJson(stateFile, {
+    projects: {
+      [path.join(repo, "nested", "path")]: {},
+    },
+  });
+  writeFile(path.join(repo, "nested", "path", ".keep"));
+
+  const roots = await discoverRepositoryRoots({
+    projectsDir: path.join(temp, "missing-projects"),
+    claudeStateFile: stateFile,
+    currentCwd: path.join(temp, "outside"),
+  });
+
+  assert.deepEqual(roots, [fs.realpathSync.native(repo)]);
+});
+
 test("repository display components remove control and prompt syntax", () => {
   assert.equal(
     safeDisplayComponent("repo name\n`malicious`"),
@@ -235,8 +288,8 @@ test("repository list shows effective enabled and disabled org repositories", ()
     JSON.stringify(output.repositories, null, 2)
   );
   assert.deepEqual(output.summary, {
-    enabled: 2,
-    disabled: 1,
+    enabled: 1,
+    disabled: 2,
     actionable: 3,
   });
   assert.equal(output.repositories.length, 3);
@@ -244,7 +297,7 @@ test("repository list shows effective enabled and disabled org repositories", ()
     output.repositories.map((repo) => repo.optionLabel),
     [
       "OFF · @skillbench-ai/repo-a",
-      "ON · @skillbench-ai/repo-b",
+      "OFF · @skillbench-ai/repo-b",
       "ON · @skillbench-ai/repo-c",
     ]
   );
@@ -264,7 +317,7 @@ test("repository list shows effective enabled and disabled org repositories", ()
   );
   assert.deepEqual(
     [repoB.effective, repoB.mode, repoB.projectSetting, repoB.action],
-    ["enabled", "org_enabled", "inherit", "disable"]
+    ["disabled", "repository_consent_required", "not_selected", "enable"]
   );
   assert.deepEqual(
     [repoC.effective, repoC.mode, repoC.projectSetting, repoC.action],
@@ -317,6 +370,162 @@ test("repository toggle applies only a validated local repository ID", () => {
   );
   assert.equal(invalid.status, 1);
   assert.match(invalid.stderr, /valid repository IDs/);
+});
+
+test("repository list retains configured repositories after a checkout disappears", () => {
+  const fixture = testEnvironment();
+  const first = runNode(REPOSITORY_TELEMETRY_SCRIPT, ["list"], {
+    cwd: fixture.repoA,
+    env: fixture.env,
+  });
+  assert.equal(first.status, 0, first.stderr);
+  assert.ok(
+    JSON.parse(first.stdout).repositories.some(
+      (repository) =>
+        repository.displayName === "@skillbench-ai/repo-c" &&
+        repository.effective === "enabled"
+    )
+  );
+
+  fs.renameSync(
+    path.join(fixture.repoC, ".git"),
+    path.join(fixture.repoC, ".git-hidden")
+  );
+  const second = runNode(REPOSITORY_TELEMETRY_SCRIPT, ["list"], {
+    cwd: fixture.repoA,
+    env: fixture.env,
+  });
+  assert.equal(second.status, 0, second.stderr);
+  assert.ok(
+    JSON.parse(second.stdout).repositories.some(
+      (repository) =>
+        repository.displayName === "@skillbench-ai/repo-c" &&
+        repository.effective === "enabled"
+    )
+  );
+});
+
+test("onboarding atomically authorizes the org and applies one choice to the displayed repositories", () => {
+  const fixture = testEnvironment();
+  const consentScript = path.resolve(
+    __dirname,
+    "../scripts/org_telemetry_consent.js"
+  );
+  assert.equal(
+    runNode(consentScript, ["set", "skillbench-ai", "disabled"], {
+      env: fixture.env,
+    }).status,
+    0
+  );
+  const listed = JSON.parse(
+    runNode(REPOSITORY_TELEMETRY_SCRIPT, ["list"], {
+      cwd: fixture.repoA,
+      env: fixture.env,
+    }).stdout
+  );
+  const ids = listed.repositories.map((repo) => repo.id);
+
+  const onboarded = runNode(
+    REPOSITORY_TELEMETRY_SCRIPT,
+    [
+      "onboard",
+      String(listed.revision),
+      "skillbench-ai",
+      "enabled",
+      ...ids,
+    ],
+    { cwd: fixture.repoA, env: fixture.env }
+  );
+
+  assert.equal(onboarded.status, 0, onboarded.stderr);
+  const output = JSON.parse(onboarded.stdout);
+  assert.equal(output.organizationAuthorized, true);
+  assert.equal(output.revision, listed.revision + 1);
+  assert.equal(output.changed, 3);
+  const policy = readJson(
+    path.join(fixture.stateDir, "telemetry-policy.json")
+  );
+  assert.equal(policy.revision, listed.revision + 1);
+  assert.equal(policy.organizations["skillbench-ai"].enabled, true);
+  assert.ok(
+    [
+      "github.com/skillbench-ai/repo-a",
+      "github.com/skillbench-ai/repo-b",
+      "github.com/skillbench-ai/repo-c",
+    ].every((repoKey) => policy.repositories[repoKey].enabled === true)
+  );
+});
+
+test("onboarding No explicitly disables every displayed repository", () => {
+  const fixture = testEnvironment();
+  const listed = JSON.parse(
+    runNode(REPOSITORY_TELEMETRY_SCRIPT, ["list"], {
+      cwd: fixture.repoA,
+      env: fixture.env,
+    }).stdout
+  );
+  const result = runNode(
+    REPOSITORY_TELEMETRY_SCRIPT,
+    [
+      "onboard",
+      String(listed.revision),
+      "skillbench-ai",
+      "disabled",
+      ...listed.repositories.map((repo) => repo.id),
+    ],
+    { cwd: fixture.repoA, env: fixture.env }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  const policy = readJson(
+    path.join(fixture.stateDir, "telemetry-policy.json")
+  );
+  assert.equal(policy.organizations["skillbench-ai"].enabled, true);
+  assert.ok(
+    Object.values(policy.repositories).every(
+      (repository) => repository.enabled === false
+    )
+  );
+});
+
+test("onboarding rejects a stale displayed list without changing org consent", () => {
+  const fixture = testEnvironment();
+  const listed = JSON.parse(
+    runNode(REPOSITORY_TELEMETRY_SCRIPT, ["list"], {
+      cwd: fixture.repoA,
+      env: fixture.env,
+    }).stdout
+  );
+  const consentScript = path.resolve(
+    __dirname,
+    "../scripts/org_telemetry_consent.js"
+  );
+  assert.equal(
+    runNode(consentScript, ["set", "skillbench-ai", "disabled"], {
+      env: fixture.env,
+    }).status,
+    0
+  );
+
+  const result = runNode(
+    REPOSITORY_TELEMETRY_SCRIPT,
+    [
+      "onboard",
+      String(listed.revision),
+      "skillbench-ai",
+      "enabled",
+      ...listed.repositories.map((repo) => repo.id),
+    ],
+    { cwd: fixture.repoA, env: fixture.env }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).stale, true);
+  assert.equal(
+    readJson(path.join(fixture.stateDir, "telemetry-policy.json"))
+      .organizations["skillbench-ai"].enabled,
+    false
+  );
 });
 
 test("per-project telemetry commands write the repository SSOT from a nested cwd", () => {
@@ -451,6 +660,14 @@ test("telemetry skill routes list through the repository toggle UI", () => {
   );
   assert.match(TELEMETRY_SKILL, /multiSelect: true/);
   assert.match(TELEMETRY_SKILL, /Space selects changes/);
+  assert.match(TELEMETRY_SKILL, /```!\s+node .*repository_telemetry\.js list/);
+  assert.match(TELEMETRY_SKILL, /Show exactly one question per `AskUserQuestion` call/);
+  assert.match(TELEMETRY_SKILL, /Header: `Repos X\/N`/);
+  assert.match(
+    TELEMETRY_SKILL,
+    /array\s+of labels or as one comma-joined string/
+  );
+  assert.doesNotMatch(TELEMETRY_SKILL, /at most four questions per tool call/);
   assert.match(
     TELEMETRY_SKILL,
     /repository_telemetry\.js toggle REVISION ID\.\.\./

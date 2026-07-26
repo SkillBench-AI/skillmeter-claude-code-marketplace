@@ -13,6 +13,7 @@ const { PLUGIN_ROOT, PLUGIN_VERSION } = require("./lib/paths");
 const {
   signInRequiredBanner,
   telemetryConsentRequiredBanner,
+  telemetryRepositoryRequiredBanner,
   telemetryActiveBanner,
   telemetrySentNotice,
   telemetryFailedNotice,
@@ -97,6 +98,14 @@ function runSessionStartHook() {
         lines.push(signInRequiredBanner());
       } else if (gate.mode === "org_consent_required") {
         lines.push(telemetryConsentRequiredBanner(repoScopeDecision.remoteOrg));
+      } else if (gate.mode === "repository_consent_required") {
+        const repository = repoScopeDecision.repoName
+          ? `@${repoScopeDecision.remoteOrg}/${repoScopeDecision.repoName}`
+          : "";
+        lines.push(telemetryRepositoryRequiredBanner(
+          repoScopeDecision.remoteOrg,
+          repository
+        ));
       } else if (gate.capture && repoScopeDecision.allowed) {
         // Telemetry actually captures only when the repo is in scope too (the
         // hard repo-scope block downstream); show "active" only then.
@@ -108,6 +117,12 @@ function runSessionStartHook() {
       // stderr notices + SessionStart-only side effects (wording unchanged).
       if (gate.mode === "project_disabled") {
         process.stderr.write(`SkillMeter v${PLUGIN_VERSION} (telemetry disabled for this project)\n`);
+        return;
+      }
+      if (gate.mode === "repository_consent_required") {
+        process.stderr.write(
+          `SkillMeter v${PLUGIN_VERSION} (repository telemetry choice required)\n`
+        );
         return;
       }
       if (gate.mode === "org_consent_required") {
@@ -123,10 +138,7 @@ function runSessionStartHook() {
         return;
       }
       if (gate.capture) {
-        const note = gate.mode === "org_enabled"
-          ? `(telemetry enabled for @${repoScopeDecision.remoteOrg})`
-          : "(activated)";
-        process.stderr.write(`SkillMeter v${PLUGIN_VERSION} ${note}\n`);
+        process.stderr.write(`SkillMeter v${PLUGIN_VERSION} (activated)\n`);
         retryFailedLogs();
         retryFailedTranscripts();
         cleanupStaleFiles();

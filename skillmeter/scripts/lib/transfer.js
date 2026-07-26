@@ -838,6 +838,7 @@ module.exports = {
   writeCursor,
   sealDeltaChunk,
   stageTranscriptDelta,
+  advanceCursorToTranscriptTail,
   listDeltaChunks,
   buildChunkHeaders,
   sealFinalSessionArtifacts,

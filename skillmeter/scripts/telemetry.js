@@ -57,7 +57,7 @@ function orgLine() {
   if (orgs.length === 0) return "not available";
   return orgs.map((org) => {
     const consent = credstore.getOrgTelemetryConsent(org);
-    const state = consent === true ? "enabled" : consent === false ? "disabled" : "choice required";
+    const state = consent === true ? "authorized" : consent === false ? "disabled" : "choice required";
     return `@${org} ${state}`;
   }).join(", ");
 }

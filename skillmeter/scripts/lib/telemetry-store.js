@@ -355,6 +355,43 @@ function setRepositoryOverride(repoKey, enabled, expectedRevision = null) {
   }, expectedRevision).policy.repositories[normalized];
 }
 
+function authorizeOrganizationRepositories(
+  org,
+  repoKeys,
+  enabled,
+  expectedRevision = null
+) {
+  const normalizedOrg = normalizeOrg(org);
+  if (!normalizedOrg) throw new Error("A GitHub organization is required.");
+  if (!Array.isArray(repoKeys) || typeof enabled !== "boolean") {
+    throw new Error("A repository selection is required.");
+  }
+  const normalizedKeys = [...new Set(repoKeys.map(normalizeRepoKey))];
+  if (
+    normalizedKeys.some(
+      (repoKey) => !repoKey || repoKey.split("/")[1] !== normalizedOrg
+    )
+  ) {
+    throw new Error("Every repository must belong to the authorized organization.");
+  }
+  return mutatePolicy((policy) => {
+    const decidedAt = Date.now();
+    policy.organizations[normalizedOrg] = {
+      enabled: true,
+      consent_version: 1,
+      decided_at: decidedAt,
+      source: "user",
+    };
+    for (const repoKey of normalizedKeys) {
+      policy.repositories[repoKey] = {
+        enabled,
+        decided_at: decidedAt,
+        source: "user",
+      };
+    }
+  }, expectedRevision).policy;
+}
+
 function getPolicyRevision() {
   return readPolicy().revision;
 }
@@ -373,5 +410,6 @@ module.exports = {
   setOrganizationConsent,
   getRepositoryOverride,
   setRepositoryOverride,
+  authorizeOrganizationRepositories,
   getPolicyRevision,
 };

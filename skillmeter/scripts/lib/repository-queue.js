@@ -78,8 +78,8 @@ function queueContextForPath(filePath) {
 function queueDisposition(context) {
   const policy = telemetryStore.readPolicy();
   if (policy.global.enabled === false) return "pause";
-  if (policy.organizations[context.org]?.enabled === false) return "delete";
-  if (policy.repositories[context.repoKey]?.enabled === false) return "delete";
+  if (policy.organizations[context.org]?.enabled !== true) return "delete";
+  if (policy.repositories[context.repoKey]?.enabled !== true) return "delete";
   return "send";
 }
 

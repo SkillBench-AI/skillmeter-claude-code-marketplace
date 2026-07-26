@@ -11,6 +11,10 @@
 const credstore = require("./credstore.js");
 const { trySilentGhActivate } = require("./lib/license-activation");
 const { readStdinJson } = require("./lib/io");
+const {
+  loadRepositoryTelemetryState,
+  publicRepositoryState,
+} = require("./lib/repository-telemetry");
 const path = require("path");
 
 const SIGNIN_COMMAND = path.join(__dirname, "..", "bin", "signin");
@@ -48,7 +52,18 @@ function isSigninCommand(input) {
   return input.command_name === "signin" && input.command_source === "plugin";
 }
 
-function signedInContext() {
+async function signedInContext(cwd = process.cwd()) {
+  let repositoryTelemetry;
+  try {
+    repositoryTelemetry = publicRepositoryState(
+      await loadRepositoryTelemetryState({ currentCwd: cwd })
+    );
+  } catch {
+    repositoryTelemetry = {
+      scanFailed: true,
+      repositories: [],
+    };
+  }
   const state = {
     status: "signed_in",
     globalTelemetryDisabled: credstore.getTelemetryDisabled(),
@@ -56,6 +71,7 @@ function signedInContext() {
       org,
       consent: credstore.getOrgTelemetryConsent(org),
     })),
+    repositoryTelemetry,
   };
   return `SkillMeter sign-in state JSON:\n${JSON.stringify(state)}`;
 }
@@ -70,7 +86,7 @@ async function main() {
 
   const existingToken = credstore.getLicenseToken();
   if (existingToken && !credstore.isLicenseTokenExpired(existingToken)) {
-    addContext(signedInContext());
+    addContext(await signedInContext(input.cwd || process.cwd()));
     return;
   }
 
@@ -82,7 +98,7 @@ async function main() {
 
   const jwt = await trySilentGhActivate(deviceId);
   if (jwt) {
-    addContext(signedInContext());
+    addContext(await signedInContext(input.cwd || process.cwd()));
     return;
   }
 

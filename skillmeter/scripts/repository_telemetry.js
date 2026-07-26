@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const {
+  applyOnboardingSelection,
   applyRepositoryToggles,
   loadRepositoryTelemetryState,
   publicRepositoryState,
@@ -14,8 +15,8 @@ function fail(message) {
 async function main() {
   const [action, ...args] = process.argv.slice(2);
 
-  if (action !== "list" && action !== "toggle") {
-    fail("usage: repository_telemetry.js <list|toggle REVISION REPOSITORY_ID...>");
+  if (!["list", "toggle", "onboard"].includes(action)) {
+    fail("usage: repository_telemetry.js <list|toggle|onboard> ...");
   }
 
   const state = await loadRepositoryTelemetryState();
@@ -25,15 +26,35 @@ async function main() {
     return;
   }
 
-  const [revisionArg, ...ids] = args;
+  const [revisionArg, secondArg, thirdArg, ...remainingArgs] = args;
+  const settingArg = action === "onboard" ? thirdArg : "";
+  const orgArg = action === "onboard"
+    ? String(secondArg || "").trim().toLowerCase()
+    : "";
+  const ids = action === "toggle"
+    ? [secondArg, thirdArg, ...remainingArgs].filter(Boolean)
+    : remainingArgs;
   const revision = Number(revisionArg);
   if (
     !Number.isSafeInteger(revision) ||
     revision < 0 ||
-    ids.length === 0 ||
+    (action === "toggle" && ids.length === 0) ||
     ids.some((id) => !/^[0-9a-f]{12}$/.test(id))
   ) {
-    fail("toggle requires a policy revision and one or more valid repository IDs.");
+    fail(`${action} requires a policy revision and one or more valid repository IDs.`);
+  }
+  if (
+    action === "onboard" &&
+    settingArg !== "enabled" &&
+    settingArg !== "disabled"
+  ) {
+    fail(`${action} requires \`enabled\` or \`disabled\`.`);
+  }
+  if (action === "onboard") {
+    const allowedOrgs = require("./credstore").getAllowedGitHubOrgs();
+    if (!orgArg || !allowedOrgs.includes(orgArg)) {
+      fail("onboarding organization is not present in the current valid license.");
+    }
   }
   if (revision !== state.revision) {
     process.stdout.write(JSON.stringify({
@@ -45,7 +66,14 @@ async function main() {
     return;
   }
 
-  const result = applyRepositoryToggles(ids, state);
+  const result = action === "onboard"
+    ? applyOnboardingSelection(
+        orgArg,
+        ids,
+        settingArg === "enabled",
+        state
+      )
+    : applyRepositoryToggles(ids, state);
   process.stdout.write(JSON.stringify(result) + "\n");
 }
 

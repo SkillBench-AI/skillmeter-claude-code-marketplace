@@ -44,7 +44,9 @@ function main() {
   credstore.setOrgTelemetryConsent(org, enabled);
   if (!enabled) purgeOrganizationQueues(org);
   process.stdout.write(
-    `SkillMeter: telemetry ${enabled ? "enabled" : "disabled"} for @${org}.\n`
+    enabled
+      ? `SkillMeter: telemetry authorized for @${org}; repositories still require explicit enablement.\n`
+      : `SkillMeter: telemetry disabled for @${org}.\n`
   );
 }
 

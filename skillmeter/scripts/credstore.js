@@ -214,7 +214,7 @@ function isTelemetryTransmissionAllowed(repoKey = "") {
     if (!normalizedKey) return false;
     const org = normalizedKey.split("/")[1];
     if (!orgs.map(normalizeOrg).includes(org)) return false;
-    if (policy.repositories[normalizedKey]?.enabled === false) return false;
+    if (policy.repositories[normalizedKey]?.enabled !== true) return false;
   }
   return true;
 }

@@ -34,6 +34,13 @@ function getClaudeProjectsDir({
   return path.join(configDir, "projects");
 }
 
+function getClaudeStateFile({
+  env = process.env,
+  homeDir = os.homedir(),
+} = {}) {
+  return path.join(env.HOME || homeDir, ".claude.json");
+}
+
 function safeDirectoryEntries(directory) {
   try {
     return fs.readdirSync(directory, { withFileTypes: true });
@@ -149,11 +156,53 @@ async function collectTranscriptCwds(transcriptPath) {
   return [...cwds];
 }
 
+function collectClaudeStateCwds(stateFile) {
+  // Claude Code keeps exact project paths in its machine-local state. This is
+  // an optional discovery hint, not a trust boundary: every candidate must
+  // still resolve to an existing git root and pass the licensed-remote check.
+  // Malformed, relative, or stale entries are ignored.
+  let state;
+  try {
+    state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+  } catch {
+    return [];
+  }
+  if (!state || typeof state !== "object" || Array.isArray(state)) return [];
+
+  const cwds = new Set();
+  if (
+    state.projects &&
+    typeof state.projects === "object" &&
+    !Array.isArray(state.projects)
+  ) {
+    for (const projectPath of Object.keys(state.projects)) {
+      if (path.isAbsolute(projectPath)) cwds.add(projectPath);
+    }
+  }
+  if (
+    state.githubRepoPaths &&
+    typeof state.githubRepoPaths === "object" &&
+    !Array.isArray(state.githubRepoPaths)
+  ) {
+    for (const repoPaths of Object.values(state.githubRepoPaths)) {
+      if (!Array.isArray(repoPaths)) continue;
+      for (const repoPath of repoPaths) {
+        if (typeof repoPath === "string" && path.isAbsolute(repoPath)) {
+          cwds.add(repoPath);
+        }
+      }
+    }
+  }
+  return [...cwds];
+}
+
 async function discoverRepositoryRoots({
   projectsDir = getClaudeProjectsDir(),
+  claudeStateFile = getClaudeStateFile(),
   currentCwd = process.cwd(),
   findRepoRoot = findGitRoot,
   collectCwds = collectTranscriptCwds,
+  collectStateCwds = collectClaudeStateCwds,
 } = {}) {
   const roots = new Set();
   const cwdCache = new Map();
@@ -173,6 +222,7 @@ async function discoverRepositoryRoots({
   }
 
   addCwd(currentCwd);
+  for (const cwd of collectStateCwds(claudeStateFile)) addCwd(cwd);
 
   for (const projectEntry of safeDirectoryEntries(projectsDir)) {
     if (!projectEntry.isDirectory()) continue;
@@ -199,7 +249,7 @@ function repositoryId(repoKey, hashSalt) {
 function projectSettingLabel(value) {
   if (value === true) return "enabled";
   if (value === false) return "disabled";
-  return "inherit";
+  return "not_selected";
 }
 
 function toggleDescription({ gate, projectSetting, org }) {
@@ -212,6 +262,9 @@ function toggleDescription({ gate, projectSetting, org }) {
 
   if (gate.mode === "project_disabled") {
     return "Disabled by repository override. Select to turn on.";
+  }
+  if (gate.mode === "repository_consent_required") {
+    return "Off until this repository is explicitly selected. Select to turn on.";
   }
   if (gate.mode === "global_disabled") {
     return "Disabled by the global telemetry kill-switch.";
@@ -236,6 +289,9 @@ function buildRepositoryTelemetryState(roots, {
   getGlobalDisabled = credstore.getTelemetryDisabled,
   hasValidLicense = credstore.hasValidLicense,
   getHashSalt = credstore.getOrCreateHashSalt,
+  getConfiguredRepositories = () =>
+    telemetryStore.readPolicy().repositories,
+  getAllowedOrgs = credstore.getAllowedGitHubOrgs,
 } = {}) {
   const globalDisabled = getGlobalDisabled();
   const signedIn = hasValidLicense();
@@ -260,6 +316,34 @@ function buildRepositoryTelemetryState(roots, {
     }
   }
 
+  // The policy SSOT may retain an explicit setting after a checkout or Claude
+  // project entry disappears. Keep those configured repositories visible so
+  // `/telemetry list` never hides an ON/OFF decision merely because discovery
+  // can no longer resolve a local path.
+  let configuredRepositories = {};
+  try {
+    configuredRepositories = getConfiguredRepositories() || {};
+  } catch {}
+  let allowedOrgs = new Set();
+  try {
+    allowedOrgs = new Set(getAllowedOrgs());
+  } catch {}
+  for (const [rawRepoKey, record] of Object.entries(configuredRepositories)) {
+    if (typeof record?.enabled !== "boolean") continue;
+    const repoKey = telemetryStore.normalizeRepoKey(rawRepoKey);
+    const [, org, repoName] = repoKey.split("/");
+    if (!repoKey || !allowedOrgs.has(org) || discovered.has(repoKey)) continue;
+    discovered.set(repoKey, {
+      repoRoot: "",
+      scope: {
+        allowed: true,
+        remoteOrg: org,
+        repoKey,
+        repoName,
+      },
+    });
+  }
+
   for (const { repoRoot, scope } of discovered.values()) {
     const projectSetting = getProjectSetting(scope.repoKey, "");
     const orgConsent = getOrgConsent(scope.remoteOrg);
@@ -272,12 +356,15 @@ function buildRepositoryTelemetryState(roots, {
     });
     const action = gate.capture
       ? "disable"
-      : gate.mode === "project_disabled"
+      : ["project_disabled", "repository_consent_required"].includes(gate.mode)
         ? "enable"
         : null;
     if (!hashSalt) hashSalt = getHashSalt();
     const id = repositoryId(scope.repoKey, hashSalt);
-    const displayName = repositoryDisplayName(repoRoot, scope.remoteOrg);
+    const displayName = repoRoot
+      ? repositoryDisplayName(repoRoot, scope.remoteOrg)
+      : `@${safeDisplayComponent(scope.remoteOrg)}/` +
+        safeDisplayComponent(scope.repoName);
 
     repositories.push({
       id,
@@ -405,6 +492,69 @@ function applyRepositoryToggles(ids, state, {
   };
 }
 
+function applyOnboardingSelection(org, ids, enabled, state, {
+  saveOnboardingSelection = (organization, repoKeys, value, revision) =>
+    telemetryStore.authorizeOrganizationRepositories(
+      organization,
+      repoKeys,
+      value,
+      revision
+    ),
+  purgeProjectQueue = purgeRepositoryQueue,
+} = {}) {
+  const repositoriesById = new Map(
+    state.repositories.map((repo) => [repo.id, repo])
+  );
+  const selected = [];
+  for (const id of [...new Set(ids)]) {
+    const repo = repositoriesById.get(id);
+    if (!repo || repo.org !== org) {
+      return {
+        revision: state.revision,
+        changed: 0,
+        results: [{ id, changed: false, reason: "unknown_repository" }],
+      };
+    }
+    selected.push(repo);
+  }
+
+  try {
+    saveOnboardingSelection(
+      org,
+      selected.map((repo) => repo.repoKey),
+      enabled,
+      state.revision
+    );
+    if (!enabled) {
+      for (const repo of selected) purgeProjectQueue(repo.repoKey);
+    }
+    return {
+      revision: state.revision + 1,
+      changed: selected.length,
+      organizationAuthorized: true,
+      results: selected.map((repo) => ({
+        id: repo.id,
+        displayName: repo.displayName,
+        changed: true,
+        effective: enabled ? "enabled" : "disabled",
+      })),
+    };
+  } catch (err) {
+    const stale = err?.code === "STALE_POLICY";
+    return {
+      revision: state.revision,
+      changed: 0,
+      stale,
+      results: selected.map((repo) => ({
+        id: repo.id,
+        displayName: repo.displayName,
+        changed: false,
+        reason: stale ? "stale_policy" : "write_failed",
+      })),
+    };
+  }
+}
+
 async function loadRepositoryTelemetryState(options = {}) {
   const roots = await discoverRepositoryRoots(options);
   return buildRepositoryTelemetryState(roots, options);
@@ -413,15 +563,18 @@ async function loadRepositoryTelemetryState(options = {}) {
 module.exports = {
   SESSION_FILE_RE,
   getClaudeProjectsDir,
+  getClaudeStateFile,
   canonicalRepositoryRoot,
   safeDisplayComponent,
   repositoryNameFromRemote,
   repositoryDisplayName,
   collectTranscriptCwds,
+  collectClaudeStateCwds,
   discoverRepositoryRoots,
   repositoryId,
   buildRepositoryTelemetryState,
   publicRepositoryState,
   applyRepositoryToggles,
+  applyOnboardingSelection,
   loadRepositoryTelemetryState,
 };

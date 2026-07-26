@@ -21,6 +21,7 @@ const credstore = require("./credstore.js");
 const { signinStatusBanner } = require("./lib/banner.js");
 const { startSpinner } = require("./lib/spinner.js");
 const { getRepoScopeDecision } = require("./lib/repo-scope");
+const telemetryStore = require("./lib/telemetry-store");
 const { postBearerJson } = require("./lib/http");
 const {
   STATE_DIR,
@@ -63,7 +64,12 @@ function showSigninStatus(cwd = process.cwd()) {
   const org = credstore.getAllowedGitHubOrgs()[0] || "";
   const consent = org ? credstore.getOrgTelemetryConsent(org) : null;
   const scope = getRepoScopeDecision(cwd);
-  say(signinStatusBanner(org, consent, scope.allowed && scope.remoteOrg === org));
+  const repositoryEnabled =
+    !credstore.getTelemetryDisabled() &&
+    scope.allowed &&
+    scope.remoteOrg === org &&
+    telemetryStore.getRepositoryOverride(scope.repoKey, scope.repoRoot) === true;
+  say(signinStatusBanner(org, consent, repositoryEnabled));
   if (org && consent === null) {
     say(`Run /skillmeter:signin to choose whether to enable telemetry for @${org}.`);
   }

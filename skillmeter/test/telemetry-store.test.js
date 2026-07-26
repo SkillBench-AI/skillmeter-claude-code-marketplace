@@ -197,6 +197,20 @@ test("repository OFF purges queued chunks before fetch", async (t) => {
   assert.equal(fs.existsSync(body), false);
 });
 
+test("an unset repository queue is deleted and never transmitted", () => {
+  const repoKey = "github.com/skillbench-ai/not-selected";
+  const body = transfer.sealDeltaChunk(
+    "not-selected.jsonl",
+    [JSON.stringify({ uuid: "not-selected-1" })],
+    { seq: 1, reset: false, resetBaselineSeq: null },
+    { repoKey, org: "skillbench-ai" }
+  );
+  assert.ok(body && fs.existsSync(body));
+
+  transfer.purgeDisallowedQueues();
+  assert.equal(fs.existsSync(body), false);
+});
+
 test("global OFF pauses queues without deleting them", async (t) => {
   const repoKey = "github.com/skillbench-ai/pause";
   store.setRepositoryOverride(repoKey, true);

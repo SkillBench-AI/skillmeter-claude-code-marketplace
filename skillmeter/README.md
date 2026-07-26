@@ -299,12 +299,35 @@ The tracked org is decided by the license activator, not the client — there is
 
 ### Organization consent and repository overrides
 
-After sign-in, organization telemetry remains off until the user makes the organization-level choice. An eligible repository then resolves in three states:
+After sign-in, organization telemetry remains off until the user makes the
+organization-level choice. On first Allow, SkillMeter scans known local
+repositories owned by that organization, shows the exact repository names, and
+asks one Yes/No question. Yes explicitly enables every displayed repository;
+No explicitly keeps every displayed repository off. Organization authorization
+alone never starts capture.
+
+An eligible repository then resolves in three states:
 
 - **Explicitly disabled** — capture stops and unsent payloads for that repository are deleted.
 - **Explicitly enabled** — capture is allowed, subject to the global, sign-in, ownership, and organization gates.
-- **Unset** — inherits the organization decision.
+- **Unset** — remains off and asks for an explicit repository choice on first entry.
 
-Use `/skillmeter:telemetry list` to review and toggle known repositories. The machine-global kill-switch overrides all repository and organization decisions; unlike an org/repository OFF choice, it pauses queued transfers without deleting them.
+Use `/skillmeter:telemetry list` to review and toggle known repositories.
+Discovery combines the current working directory, structured paths found in
+Claude transcripts, and Claude Code's machine-local project registry. Registry
+entries are treated only as hints: every path must still exist, resolve to a git
+root, and pass the licensed GitHub remote check. Clone and worktree paths are
+deduplicated by canonical GitHub repository identity.
+
+The native Claude Code question UI supports 2-4 options per question, so longer
+repository inventories are shown as sequential `Repos X/N` pages rather than a
+single unbounded picker. The machine-global kill-switch overrides all repository
+and organization decisions; unlike an org/repository OFF choice, it pauses
+queued transfers without deleting them.
+
+Repositories discovered after onboarding are not enabled automatically. Entering
+one shows a repository setup banner; use `/skillmeter:telemetry list` to enable
+it. Capture and queue transmission both require explicit organization and
+repository authorization.
 
 The tracked org follows your license — re-run `/skillmeter:signin` to pick up a re-issued license.

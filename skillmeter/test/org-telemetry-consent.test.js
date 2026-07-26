@@ -33,21 +33,21 @@ const CONSENT_UI_CASES = [
     state: "unset",
     sectionStart: 'For an org whose `consent` is `null`',
     sectionEnd: 'For an org whose `consent` is `true`',
-    enableLabel: "Label: `Enable for @ORG`",
+    enableLabel: "Label: `Allow for @ORG`",
     deferLabel: "Label: `Keep off for now`",
   },
   {
     state: "enabled",
     sectionStart: 'For an org whose `consent` is `true`',
     sectionEnd: 'For an org whose `consent` is `false`',
-    enableLabel: "Label: `Keep enabled`",
+    enableLabel: "Label: `Keep authorized`",
     deferLabel: "Label: `Turn telemetry off`",
   },
   {
     state: "disabled",
     sectionStart: 'For an org whose `consent` is `false`',
     sectionEnd: "If `orgs` is empty",
-    enableLabel: "Label: `Enable for @ORG`",
+    enableLabel: "Label: `Authorize @ORG`",
     deferLabel: "Label: `Keep off for now`",
   },
 ];
@@ -67,6 +67,39 @@ for (const uiCase of CONSENT_UI_CASES) {
   });
 }
 
+test("first sign-in scans exact repositories and offers one Yes/No bulk choice", () => {
+  assert.match(
+    SIGNIN_SKILL,
+    /`Repositories found:` and every `repositoryTelemetry\.repositories` entry/
+  );
+  assert.match(SIGNIN_SKILL, /repository_telemetry\.js list/);
+  assert.match(SIGNIN_SKILL, /every matching repository's exact `displayName`/);
+  assert.match(SIGNIN_SKILL, /one per line/);
+  assert.match(SIGNIN_SKILL, /call `AskUserQuestion` exactly once/);
+  assert.doesNotMatch(SIGNIN_SKILL, /multiSelect: true/);
+  const yes = "Label: `Yes, enable telemetry`";
+  const no = "Label: `No, keep telemetry off`";
+  assert.ok(SIGNIN_SKILL.indexOf(yes) < SIGNIN_SKILL.indexOf(no));
+  assert.match(
+    SIGNIN_SKILL,
+    /repository_telemetry\.js onboard REVISION "ORG" enabled ID\.\.\./
+  );
+  assert.match(
+    SIGNIN_SKILL,
+    /repository_telemetry\.js onboard REVISION "ORG" disabled ID\.\.\./
+  );
+  assert.match(
+    SIGNIN_SKILL,
+    /both the organization and repository settings remain\s+unchanged/
+  );
+  assert.match(SIGNIN_SKILL, /`Telemetry ON \(N\)`/);
+  assert.match(SIGNIN_SKILL, /`Telemetry OFF \(N\)`/);
+  assert.match(
+    SIGNIN_SKILL,
+    /the ON list must contain every repository that was displayed/
+  );
+});
+
 const ENABLED_POLICY = {
   globalDisabled: false,
   hasValidLicense: true,
@@ -76,7 +109,11 @@ const ENABLED_POLICY = {
 };
 
 const POLICY_CASES = [
-  ["org default enables capture", {}, { capture: true, mode: "org_enabled" }],
+  [
+    "org authorization still requires a repository choice",
+    {},
+    { capture: false, mode: "repository_consent_required" },
+  ],
   [
     "explicit project enable records its mode",
     { projectOptIn: true },
@@ -150,6 +187,7 @@ test("org consent CLI validates the JWT org and persists the explicit choice", (
 
 test("signin expansion emits an explicit pending-consent state for a new sign-in", () => {
   const stateDir = makeTempDir("skm-org-consent-");
+  const claudeConfigDir = makeTempDir("skm-org-consent-");
   writeJson(path.join(stateDir, "credentials.json"), {
     license_jwt: licenseJwt(),
     org_telemetry_migration_version: 1,
@@ -161,7 +199,11 @@ test("signin expansion emits an explicit pending-consent state for a new sign-in
   );
   const result = runNode(script, [], {
     cwd: path.resolve(__dirname, "../.."),
-    env: { ...process.env, SKILLMETER_STATE_DIR: stateDir },
+    env: {
+      ...process.env,
+      CLAUDE_CONFIG_DIR: claudeConfigDir,
+      SKILLMETER_STATE_DIR: stateDir,
+    },
     input: JSON.stringify({
       command_name: "skillmeter:signin",
       command_source: "plugin",
@@ -175,6 +217,66 @@ test("signin expansion emits an explicit pending-consent state for a new sign-in
   assert.match(context, /SkillMeter sign-in state JSON:/);
   const state = JSON.parse(context.split("SkillMeter sign-in state JSON:\n")[1]);
   assert.deepEqual(state.orgs, [{ org: "skillbench-ai", consent: null }]);
+  assert.equal(typeof state.repositoryTelemetry.revision, "number");
+  assert.ok(
+    state.repositoryTelemetry.repositories.some(
+      (repository) =>
+        repository.displayName ===
+          "@skillbench-ai/skillmeter-claude-code-marketplace" &&
+        repository.effective === "disabled"
+    )
+  );
+  assert.ok(
+    state.repositoryTelemetry.repositories.every(
+      (repository) => !("repoRoot" in repository)
+    )
+  );
+});
+
+test("FileChanged sign-in success immediately shows every discovered repository", () => {
+  const stateDir = makeTempDir("skm-signin-result-");
+  const claudeConfigDir = makeTempDir("skm-signin-result-");
+  const repo = makeTempDir("skm-signin-result-");
+  fs.mkdirSync(path.join(repo, ".git"));
+  writeFile(
+    path.join(repo, ".git", "config"),
+    '[remote "origin"]\n\turl = https://github.com/SkillBench-AI/visible.git\n'
+  );
+  writeJson(path.join(stateDir, "credentials.json"), {
+    device_id: "TEST-DEVICE",
+    hash_salt: "0123456789abcdef0123456789abcdef",
+    license_jwt: licenseJwt(),
+    org_telemetry_migration_version: 1,
+  });
+  writeJson(path.join(stateDir, "signin-result.json"), {
+    status: "success",
+    ts: Date.now(),
+  });
+
+  const result = runNode(
+    path.resolve(__dirname, "../scripts/on_signin_result.js"),
+    [],
+    {
+      cwd: repo,
+      env: {
+        ...process.env,
+        CLAUDE_CONFIG_DIR: claudeConfigDir,
+        SKILLMETER_STATE_DIR: stateDir,
+      },
+    }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.match(output.systemMessage, /\[ REPOSITORY REVIEW \]/);
+  assert.match(output.systemMessage, /Telemetry ON  0/);
+  assert.match(output.systemMessage, /Discovered    1/);
+  assert.match(output.systemMessage, /○ OFF  @skillbench-ai\/visible/);
+  assert.doesNotMatch(output.systemMessage, new RegExp(repo));
+  assert.match(
+    output.terminalSequence,
+    /Signed in to @skillbench-ai — run \/skillmeter:signin to choose telemetry/
+  );
 });
 
 test("transmission authorization requires org consent and honors the global kill-switch", () => {
@@ -202,6 +304,29 @@ test("transmission authorization requires org consent and honors the global kill
   });
   assert.equal(enabled.status, 0, enabled.stderr);
   assert.equal(runProbe().stdout, "true");
+
+  const repositoryProbe = [
+    "const c=require('./skillmeter/scripts/credstore');",
+    "process.stdout.write(String(c.isTelemetryTransmissionAllowed(",
+    "'github.com/skillbench-ai/example')));",
+  ].join("");
+  const runRepositoryProbe = () => runNode("-e", [repositoryProbe], {
+    cwd: path.resolve(__dirname, "../.."),
+    env: { ...process.env, SKILLMETER_STATE_DIR: stateDir },
+  });
+  assert.equal(runRepositoryProbe().stdout, "false");
+  const enableRepository = [
+    "const s=require('./skillmeter/scripts/lib/telemetry-store');",
+    "s.setRepositoryOverride('github.com/skillbench-ai/example',true);",
+  ].join("");
+  assert.equal(
+    runNode("-e", [enableRepository], {
+      cwd: path.resolve(__dirname, "../.."),
+      env: { ...process.env, SKILLMETER_STATE_DIR: stateDir },
+    }).status,
+    0
+  );
+  assert.equal(runRepositoryProbe().stdout, "true");
 
   const telemetryScript = path.resolve(__dirname, "../scripts/telemetry.js");
   const disabled = runNode(telemetryScript, ["disable-global"], {
@@ -239,7 +364,7 @@ test("SessionStart does not silently activate a token-less install", () => {
   assert.equal(policy.migration.credentials_version, 1);
 });
 
-test("hook capture stays off until org consent is enabled", () => {
+test("hook capture stays off until both org and repository are enabled", () => {
   const stateDir = makeTempDir("skm-org-consent-");
   const dataDir = makeTempDir("skm-org-consent-");
   const repo = makeTempDir("skm-org-consent-");
@@ -280,6 +405,21 @@ test("hook capture stays off until org consent is enabled", () => {
     { env }
   );
   assert.equal(consent.status, 0, consent.stderr);
+  const repositoryBlocked = runNode(
+    hook,
+    ["UserPromptSubmit"],
+    { cwd: repo, env, input }
+  );
+  assert.equal(repositoryBlocked.status, 0, repositoryBlocked.stderr);
+  assert.match(repositoryBlocked.stderr, /repository telemetry choice required/);
+
+  const repositoryConsent = runNode(
+    path.resolve(__dirname, "../scripts/telemetry.js"),
+    ["enable"],
+    { cwd: repo, env }
+  );
+  assert.equal(repositoryConsent.status, 0, repositoryConsent.stderr);
+
   const allowed = runNode(hook, ["UserPromptSubmit"], { cwd: repo, env, input });
   assert.equal(allowed.status, 0, allowed.stderr);
   assert.match(allowed.stderr, /logged/);
@@ -289,6 +429,75 @@ test("hook capture stays off until org consent is enabled", () => {
       fs.existsSync(path.join(repositoryRoot, entry, "events.jsonl"))
     )
   );
+});
+
+test("a skipped unselected-repository hook advances the transcript privacy cursor", () => {
+  const stateDir = makeTempDir("skm-repo-choice-cursor-");
+  const dataDir = makeTempDir("skm-repo-choice-cursor-");
+  const repo = makeTempDir("skm-repo-choice-cursor-");
+  fs.mkdirSync(path.join(repo, ".git"));
+  writeFile(
+    path.join(repo, ".git", "config"),
+    '[remote "origin"]\n\turl = https://github.com/SkillBench-AI/cursor.git\n'
+  );
+  const transcriptPath = path.join(repo, "session.jsonl");
+  writeFile(
+    transcriptPath,
+    [
+      JSON.stringify({ type: "user", uuid: "before-choice-1" }),
+      JSON.stringify({ type: "assistant", uuid: "before-choice-2" }),
+      "",
+    ].join("\n")
+  );
+  writeJson(path.join(stateDir, "credentials.json"), {
+    device_id: "TEST-DEVICE",
+    hash_salt: "0123456789abcdef0123456789abcdef",
+    license_jwt: licenseJwt(),
+    org_telemetry_migration_version: 1,
+    org_telemetry_consents: {
+      "skillbench-ai": {
+        enabled: true,
+        policy_version: 1,
+        source: "user",
+      },
+    },
+  });
+  const env = {
+    ...process.env,
+    SKILLMETER_STATE_DIR: stateDir,
+    CLAUDE_PLUGIN_DATA: dataDir,
+  };
+
+  const result = runNode(
+    path.resolve(__dirname, "../scripts/hook.js"),
+    ["UserPromptSubmit"],
+    {
+      cwd: repo,
+      env,
+      input: JSON.stringify({
+        session_id: "repo-choice-cursor",
+        cwd: repo,
+        transcript_path: transcriptPath,
+        prompt: "hello",
+      }),
+    }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /repository telemetry choice required/);
+  const repositoryQueues = path.join(dataDir, "logs", "repositories");
+  const [queueId] = fs.readdirSync(repositoryQueues);
+  const cursor = readJson(
+    path.join(
+      repositoryQueues,
+      queueId,
+      "transcripts",
+      "cursors",
+      "session.jsonl.json"
+    )
+  );
+  assert.equal(cursor.lastUuid, "before-choice-2");
+  assert.equal(cursor.discarded, true);
 });
 
 test("organization OFF deletes its repository queue and skipped hooks do not recreate it", () => {
@@ -314,6 +523,14 @@ test("organization OFF deletes its repository queue and skipped hooks do not rec
   const consentScript = path.resolve(__dirname, "../scripts/org_telemetry_consent.js");
   assert.equal(
     runNode(consentScript, ["set", "skillbench-ai", "enabled"], { env }).status,
+    0
+  );
+  assert.equal(
+    runNode(
+      path.resolve(__dirname, "../scripts/telemetry.js"),
+      ["enable"],
+      { cwd: repo, env }
+    ).status,
     0
   );
   const hook = path.resolve(__dirname, "../scripts/hook.js");

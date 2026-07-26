@@ -100,6 +100,7 @@ function defaultGateMessaging(eventName, gate) {
       org_consent_required: "organization telemetry choice required",
       org_disabled: "telemetry disabled for this organization",
       project_disabled: "telemetry disabled for this project",
+      repository_consent_required: "repository telemetry choice required",
     };
     const reason = reasons[gate.mode] || "telemetry not enabled";
     console.error(`[skillmeter] ${eventName}: skipped (${reason})`);
@@ -176,6 +177,18 @@ async function runHook(eventName, buildData, options = {}) {
     defaultGateMessaging(eventName, gate);
   }
   if (!gate.capture) {
+    // Keep the transcript cursor at the disabled-period tail. If the user
+    // enables this repository later, content written before that explicit
+    // choice must not become an accidental first upload.
+    if (input.transcript_path && repoScopeDecision.repoKey) {
+      try {
+        const { advanceCursorToTranscriptTail } = require("./lib/transfer");
+        advanceCursorToTranscriptTail(input.transcript_path, {
+          repoKey: repoScopeDecision.repoKey,
+          org: repoScopeDecision.remoteOrg,
+        });
+      } catch {}
+    }
     await runOptionalCallback(
       eventName,
       "afterSkip",

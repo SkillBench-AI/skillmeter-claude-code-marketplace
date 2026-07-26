@@ -51,9 +51,48 @@ function telemetryConsentRequiredBanner(org) {
   ]);
 }
 
+function telemetryRepositoryRequiredBanner(org, repository = "") {
+  const lines = [
+    "[ REPOSITORY SETUP ]",
+    "",
+    orgLine(org),
+  ];
+  if (repository) lines.push(`Repository    ${repository}`);
+  lines.push(
+    "Status        OFF — repository not selected",
+    "",
+    "→ /skillmeter:telemetry list"
+  );
+  return card(lines);
+}
+
+function signinRepositoryInventoryBanner(org, repositories = []) {
+  const enabled = repositories.filter(
+    (repository) => repository.effective === "enabled"
+  );
+  const lines = [
+    "[ REPOSITORY REVIEW ]",
+    "",
+    orgLine(org),
+    `Telemetry ON  ${enabled.length}`,
+    `Discovered    ${repositories.length}`,
+    "",
+  ];
+  if (repositories.length === 0) {
+    lines.push("No local organization repositories found.");
+  } else {
+    for (const repository of repositories) {
+      const marker = repository.effective === "enabled" ? "✓ ON " : "○ OFF";
+      lines.push(`${marker}  ${repository.displayName}`);
+    }
+  }
+  lines.push("", "→ /skillmeter:signin to review");
+  return card(lines);
+}
+
 // Shown after sign-in and whenever /skillmeter:signin manages an existing
 // consent. Authentication is deliberately distinct from telemetry permission.
-function signinStatusBanner(org, consent, scopeAllowed = false) {
+function signinStatusBanner(org, consent, repositoryEnabled = false) {
   if (!org) {
     return card([
       "[ SIGNED IN ]",
@@ -72,14 +111,15 @@ function signinStatusBanner(org, consent, scopeAllowed = false) {
       manageLine("/skillmeter:signin"),
     ]);
   }
-  if (scopeAllowed) return telemetryActiveBanner(org);
+  if (repositoryEnabled) return telemetryActiveBanner(org);
   return card([
-    "[ SIGNED IN ]",
+    "[ REPOSITORY OFF ]",
     "",
     orgLine(org),
-    "Telemetry is enabled for organization repositories.",
+    "Organization authorized.",
+    "No repository telemetry is active here.",
     "",
-    manageLine("/skillmeter:signin"),
+    manageLine("/skillmeter:telemetry list"),
   ]);
 }
 
@@ -129,6 +169,8 @@ module.exports = {
   signinStatusBanner,
   signInRequiredBanner,
   telemetryConsentRequiredBanner,
+  telemetryRepositoryRequiredBanner,
+  signinRepositoryInventoryBanner,
   telemetryActiveBanner,
   telemetrySentNotice,
   telemetryFailedNotice,

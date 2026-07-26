@@ -1,9 +1,9 @@
 /**
  * Pure telemetry capture policy.
  *
- * Org consent is the parent authorization. Project settings may opt a repo out
- * (or record an explicit opt-in), but can never override missing/disabled org
- * consent. Network drainers separately enforce the same global + org boundary.
+ * Org consent is the parent authorization. A repository must also have an
+ * explicit opt-in; an unset repository stays off until the user selects it.
+ * Network drainers separately enforce the same global + org + repo boundary.
  */
 
 function resolveTelemetryGate({
@@ -19,10 +19,10 @@ function resolveTelemetryGate({
   if (orgConsent === null) return { capture: false, mode: "org_consent_required" };
   if (orgConsent !== true) return { capture: false, mode: "org_disabled" };
   if (projectOptIn === false) return { capture: false, mode: "project_disabled" };
-  return {
-    capture: true,
-    mode: projectOptIn === true ? "project_enabled" : "org_enabled",
-  };
+  if (projectOptIn !== true) {
+    return { capture: false, mode: "repository_consent_required" };
+  }
+  return { capture: true, mode: "project_enabled" };
 }
 
 module.exports = { resolveTelemetryGate };
