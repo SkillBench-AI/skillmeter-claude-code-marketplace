@@ -8,7 +8,9 @@
     {
       "name": "skillmeter",
       "source": "./skillmeter",
-      "description": "Tracks Claude Code session activity and sends anonymized telemetry to the SkillBench platform for developer skill analytics."
+      "description": "Sends opt-in, sanitized Claude Code workflow and conversation telemetry to SkillBench for organization-level developer skill analytics.",
+      "category": "development",
+      "homepage": "https://skillbench.com"
     }
   ]
 }

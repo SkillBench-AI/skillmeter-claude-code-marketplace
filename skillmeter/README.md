@@ -1,6 +1,15 @@
-# Skillmeter
+# SkillMeter
 
-A Claude Code plugin that tracks session activity and tool usage, providing privacy-scoped telemetry (secrets redacted, paths hashed, opt-in + repo-scope gated) to the [SkillBench](https://skillbench.com) platform for developer skill analytics.
+A Claude Code plugin that sends opt-in, repository-scoped workflow and
+conversation telemetry to the [SkillBench](https://skillbench.com) platform for
+organization-level developer skill analytics.
+
+Before enabling telemetry, review the repository-level
+[privacy notice](https://github.com/SkillBench-AI/skillmeter-claude-code-marketplace/blob/main/PRIVACY.md),
+[security policy](https://github.com/SkillBench-AI/skillmeter-claude-code-marketplace/blob/main/SECURITY.md),
+and [support information](https://github.com/SkillBench-AI/skillmeter-claude-code-marketplace/blob/main/SUPPORT.md).
+Sanitization reduces exposure but does not make arbitrary conversation or
+developer-authored content anonymous.
 
 ## Data Flow
 
@@ -75,7 +84,7 @@ A Claude Code plugin that tracks session activity and tool usage, providing priv
                  │  POST /logs/claude                     │
                  │                                        │
                  │  Hostname is read from the JWT's       │
-                 │  `telemetry_endpoint` claim, minted    │
+                 │  JWT `aud` claim, minted               │
                  │  by the activation Lambda against the  │
                  │  tenant slug at issuance time.         │
                  │                                        │
@@ -116,13 +125,19 @@ skillmeter/
 
 ## Hook Events
 
-| Hook               | Trigger                        | Data Collected                                       |
-|---------------------|-------------------------------|------------------------------------------------------|
-| `SessionStart`      | Claude Code session begins    | `session_id`, `permission_mode`, `source`, `model`, `agent_type`, [`harness`](#harness-metadata) |
-| `UserPromptSubmit`  | User submits a prompt         | `prompt`, `permission_mode`, hashed `transcript_path`|
-| `PostToolUse`       | After Edit/Write/Read/WebSearch/WebFetch | `tool_name`, `tool_use_id`, hashed `file_path`|
-| `Stop`              | User interrupts Claude        | `permission_mode`, `stop_hook_active`                |
-| `SessionEnd`        | Session ends                  | `permission_mode`, `reason`, full conversation       |
+Selected high-impact hooks are summarized below. See
+[`hooks/hooks.json`](hooks/hooks.json) and
+[`scripts/lib/hook-registry.js`](scripts/lib/hook-registry.js) for the complete
+event list and payload mapping.
+
+| Hook               | Trigger                     | Data collected |
+|--------------------|-----------------------------|----------------|
+| `SessionStart`     | Claude Code session begins  | Session/runtime fields and [harness data](#harness-data) |
+| `UserPromptSubmit` | User submits a prompt       | Prompt text, permission mode, pseudonymous transcript identifier |
+| `PreToolUse`       | Before a tool runs          | Tool name, input, and tool-use identifier |
+| `PostToolUse`      | After a tool runs           | Tool name, input, response, and tool-use identifier |
+| `Stop`             | A turn stops                | Stop state, assistant message exposed by the hook, event queue, and transcript delta |
+| `SessionEnd`       | Session ends                | End reason, event queue, and transcript delta |
 
 ## Log Entry Format
 
@@ -143,20 +158,24 @@ Each line in `events.jsonl` is a self-contained JSON object:
 }
 ```
 
-## Harness Metadata
+## Harness Data
 
 To judge a session fairly, analysis needs to know whether the developer was
 working *bare* or with a sophisticated **harness** — the instruction files,
 skills, hooks, plugins, and orchestration wrapped around the agent. The
-`SessionStart` event carries a `harness` block describing the **presence and
-shape** of that scaffolding. It is **metadata only**: SkillMeter never collects
-raw `CLAUDE.md` / `AGENTS.md` / skill / hook-config contents.
+`SessionStart` event carries a `harness` block describing that scaffolding.
+Most fields are presence, count, name, enum, or size-bucket signals. The current
+implementation also collects selected developer-authored content: custom
+project/user `SKILL.md` descriptions and bodies (bounded by size/count limits)
+and permission rule strings. It does not intentionally collect raw
+`CLAUDE.md`, `CLAUDE.local.md`, or `AGENTS.md` bodies.
 
 Detection is split by what is actually observable:
 
 - **Level 1 (filesystem-detectable, collected today):** instruction-file
-  presence, skills, hooks, and plugin/agent info — probed once at session start
-  by [`scripts/harness.js`](scripts/harness.js).
+  presence/shape, custom skill content, permission rules, skills, hooks, and
+  plugin/agent info — probed once at session start by
+  [`scripts/harness.js`](scripts/harness.js).
 - **Level 2 (architecture-level, NOT detectable):** external orchestration and
   multi-agent setups. These can't be inferred from the filesystem or transcript,
   so they are reported as the explicit string `"unknown"` rather than a
@@ -215,7 +234,20 @@ Sanitization integration (SBEE-165, Phase 2):
 - Detection is filesystem-only, depth-bounded, and fail-safe: any error leaves
   the safe `unknown`/empty defaults in place and never breaks the session.
 
-## Privacy
+## Privacy and data access
+
+The complete disclosure, including purposes, destinations, local retention,
+server-side requests, and user controls, is in the
+[SkillMeter plugin privacy notice](https://github.com/SkillBench-AI/skillmeter-claude-code-marketplace/blob/main/PRIVACY.md).
+
+The current plugin can process and transmit free-form content:
+
+- prompts, notification text, and assistant messages exposed by hooks;
+- tool inputs, tool responses, and errors;
+- task descriptions/metadata and compaction instructions;
+- sanitized Claude transcript records;
+- custom project/user skill descriptions and bodies; and
+- permission rule strings and developer-authored component names.
 
 Every event payload and every transcript line is scrubbed before it leaves the
 machine, by one shared boundary (`lib/sanitize.js`):
@@ -232,7 +264,13 @@ machine, by one shared boundary (`lib/sanitize.js`):
 - **Path-bearing tool fields** (`file_path`, `path`, `command`, …) and the
   `cwd` / `repo_root` / `repo_remote_org` fields are HMAC-hashed wholesale.
 - **Device ID** is a random UUID stored in `~/.skillbench/credentials.json`, not derived from hardware.
-- **Harness metadata** (`SessionStart`) is presence/shape only and runs through the same sanitizer; see [Harness Metadata](#harness-metadata).
+- **Harness data** (`SessionStart`) runs through the same sanitizer; see
+  [Harness Data](#harness-data).
+
+These controls are defense in depth. Pattern-based secret/PII detection can
+have false negatives, and sanitization does not make arbitrary content
+anonymous. Enable telemetry only where the organization and repository data
+can be processed by SkillBench.
 
 ## Log Transfer
 
