@@ -43,6 +43,16 @@ const {
   purgeOrganizationQueues,
   purgeDisallowedQueues,
 } = require("./repository-queue");
+const {
+  listOrganizationAuditQueueContexts,
+  organizationAuditContextForPath,
+  organizationAuditDisposition,
+  clearOrganizationAuditPayloads,
+  currentOrganizationAuditContext,
+  purgeOrganizationAuditQueues,
+  purgeDisallowedOrganizationAuditQueues,
+} = require("./organization-audit-queue");
+const { cleanupStaleSessionContexts } = require("./cwd-context");
 
 // Async gzip for transcript uploads — keeps the hook's event loop responsive
 // while compressing multi-MB transcripts. Sync variants are still used for
@@ -104,21 +114,33 @@ function idempotencyKey(repoKey, body) {
 // reported as send failures (the not-signed-in banner already covers those).
 async function transferEventLog(logFile, timeoutMs = EVENT_TIMEOUT) {
   if (!logFile || !fs.existsSync(logFile)) return { ok: false };
-  const context = queueContextForPath(logFile);
+  const repositoryContext = queueContextForPath(logFile);
+  const organizationContext = repositoryContext
+    ? null
+    : organizationAuditContextForPath(logFile);
+  const context = repositoryContext || organizationContext;
   if (!context) {
     try { fs.unlinkSync(logFile); } catch {}
     return { ok: false };
   }
-  const disposition = queueDisposition(context);
+  const organizationScoped = !!organizationContext;
+  const disposition = organizationScoped
+    ? organizationAuditDisposition(context)
+    : queueDisposition(context);
   if (disposition === "delete") {
-    purgeRepositoryQueue(context.repoKey);
+    if (organizationScoped) clearOrganizationAuditPayloads(context);
+    else purgeRepositoryQueue(context.repoKey);
     return { ok: false };
   }
+  const authorizationKey = organizationScoped ? "" : context.repoKey;
   if (
     disposition === "pause" ||
-    !credstore.isTelemetryTransmissionAllowed(context.repoKey)
+    !credstore.isTelemetryTransmissionAllowed(authorizationKey)
   ) {
-    console.error(`[skillmeter] Event log: telemetry not authorized for this repository — leaving for retry`);
+    const scope = organizationScoped ? "organization" : "repository";
+    console.error(
+      `[skillmeter] Event log: telemetry not authorized for this ${scope} — leaving for retry`
+    );
     return { ok: false };
   }
 
@@ -151,8 +173,12 @@ async function transferEventLog(logFile, timeoutMs = EVENT_TIMEOUT) {
 
   try {
     if (
-      queueDisposition(context) !== "send" ||
-      !credstore.isTelemetryTransmissionAllowed(context.repoKey)
+      (
+        organizationScoped
+          ? organizationAuditDisposition(context)
+          : queueDisposition(context)
+      ) !== "send" ||
+      !credstore.isTelemetryTransmissionAllowed(authorizationKey)
     ) {
       return { ok: false };
     }
@@ -162,7 +188,15 @@ async function transferEventLog(logFile, timeoutMs = EVENT_TIMEOUT) {
         "Content-Type": "application/x-ndjson",
         "Content-Encoding": "gzip",
         "X-Plugin-Version": PLUGIN_VERSION,
-        "X-Idempotency-Key": idempotencyKey(context.repoKey, fileContent),
+        "X-Idempotency-Key": idempotencyKey(
+          organizationScoped
+            ? `organization:${context.tenantFingerprint}`
+            : context.repoKey,
+          fileContent
+        ),
+        ...(organizationScoped
+          ? { "X-Telemetry-Scope": "organization" }
+          : {}),
         "Authorization": `Bearer ${token}`,
       },
       body: compressed,
@@ -220,6 +254,32 @@ function sealEventLog(repository) {
   }
 
   console.error(`[skillmeter] Event log seal failed: no unique batch name`);
+  return null;
+}
+
+function sealOrganizationAuditEventLog() {
+  const logFile = currentOrganizationAuditContext()?.eventLog || "";
+  if (!logFile || !fs.existsSync(logFile)) return null;
+
+  const baseTimestamp = Date.now();
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const sealedFile = `${logFile}.${baseTimestamp + attempt}`;
+    if (fs.existsSync(sealedFile)) continue;
+    try {
+      fs.renameSync(logFile, sealedFile);
+      console.error(
+        `[skillmeter] Sealed organization audit log: ${path.basename(sealedFile)}`
+      );
+      return sealedFile;
+    } catch (err) {
+      if (err && err.code === "ENOENT") return null;
+      if (err && err.code === "EEXIST") continue;
+      console.error(
+        `[skillmeter] Organization audit log seal failed: ${err.message}`
+      );
+      return null;
+    }
+  }
   return null;
 }
 
@@ -613,6 +673,7 @@ function discardSkippedSessionArtifacts(input, deviceId, repository) {
  */
 function sealFinalSessionArtifacts(input, deviceId, repository) {
   const sealedEventLog = sealEventLog(repository);
+  const sealedAuditLog = sealOrganizationAuditEventLog();
   let stagedTranscript = false;
 
   if (input && input.transcript_path && fs.existsSync(input.transcript_path)) {
@@ -628,13 +689,15 @@ function sealFinalSessionArtifacts(input, deviceId, repository) {
     console.error(`[skillmeter] No transcript to stage`);
   }
 
-  if (sealedEventLog || stagedTranscript) {
+  if (sealedEventLog || sealedAuditLog || stagedTranscript) {
     spawnDetachedDrain();
   }
 }
 
 function sealEventLogAndTriggerDrain(input, deviceId, repository) {
-  if (sealEventLog(repository)) {
+  const sealedEventLog = sealEventLog(repository);
+  const sealedAuditLog = sealOrganizationAuditEventLog();
+  if (sealedEventLog || sealedAuditLog) {
     spawnDetachedDrain();
   }
 }
@@ -673,7 +736,11 @@ function migrateLegacyQueue() {
 
 function listSealedEventLogs() {
   const files = [];
-  for (const context of listRepositoryQueueContexts()) {
+  const contexts = [
+    ...listRepositoryQueueContexts(),
+    ...listOrganizationAuditQueueContexts(),
+  ];
+  for (const context of contexts) {
     try {
       files.push(...fs.readdirSync(context.root)
         .filter((file) => /^events\.jsonl\.\d+$/.test(file))
@@ -713,6 +780,7 @@ async function drainFailedLogs(timeoutMs) {
   if (!lock) return { ok: 0, errors: [] };
   try {
     purgeDisallowedQueues();
+    purgeDisallowedOrganizationAuditQueues();
     const files = listSealedEventLogs();
     // Empty queue: do nothing — never fire a refresh on an idle daemon sweep.
     if (files.length === 0) return { ok: 0, errors: [] };
@@ -789,6 +857,16 @@ function cleanupStaleFiles() {
     } catch {}
   }
 
+  for (const context of listOrganizationAuditQueueContexts()) {
+    try {
+      for (const f of fs.readdirSync(context.root)) {
+        if (/^events\.jsonl\.\d+\.sent$/.test(f)) {
+          candidates.push(path.join(context.root, f));
+        }
+      }
+    } catch {}
+  }
+
   if (fs.existsSync(LOG_DIR)) {
     try {
       for (const f of fs.readdirSync(LOG_DIR)) {
@@ -830,6 +908,7 @@ function cleanupStaleFiles() {
   if (deleted > 0) {
     console.error(`[skillmeter] Cleaned up ${deleted} stale file(s) older than 30 days`);
   }
+  cleanupStaleSessionContexts(CLEANUP_MAX_AGE_MS, now);
 }
 
 module.exports = {
@@ -855,6 +934,10 @@ module.exports = {
   migrateLegacyQueue,
   purgeRepositoryQueue,
   purgeOrganizationQueues,
+  purgeOrganizationAuditQueues,
   purgeDisallowedQueues,
+  purgeDisallowedOrganizationAuditQueues,
   listRepositoryQueueContexts,
+  listOrganizationAuditQueueContexts,
+  sealOrganizationAuditEventLog,
 };

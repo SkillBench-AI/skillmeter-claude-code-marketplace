@@ -4,6 +4,12 @@ const {
   discardSkippedSessionArtifacts,
   sealFinalSessionArtifacts,
 } = require("./lib/transfer");
+const { clearSessionCwdContext } = require("./lib/cwd-context");
+const credstore = require("./credstore");
+
+function clearSessionContext(input) {
+  clearSessionCwdContext(input?.session_id, credstore.getHashSalt());
+}
 
 // Non-blocking: seal + stage, then spawn a DETACHED drain that outlives this
 // exiting hook (same as the Stop hook). At session exit the hook must return
@@ -16,4 +22,5 @@ runHook("SessionEnd", (input) => ({
 }), {
   afterSkip: discardSkippedSessionArtifacts,
   afterLog: sealFinalSessionArtifacts,
+  afterComplete: clearSessionContext,
 }).catch(() => process.exit(1));

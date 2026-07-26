@@ -26,7 +26,7 @@ For an org whose `consent` is `null`, ask:
   If none were found, add `No local @ORG repositories found.`
 - First option:
   - Label: `Allow for @ORG`
-  - Description: `Authorize repository telemetry for @ORG. You will review the exact local repositories before anything is enabled.`
+  - Description: `Authorize repository telemetry for @ORG plus path-HMAC-only diagnostics when events are excluded. You will review the exact local repositories before full event capture is enabled.`
 - Second option:
   - Label: `Keep off for now`
   - Description: `Keep telemetry off for @ORG. You can enable it later by running /skillmeter:signin again.`
@@ -35,7 +35,7 @@ For an org whose `consent` is `true`, ask the same question with:
 
 - First option:
   - Label: `Keep authorized`
-  - Description: `Keep @ORG authorized. Only repositories explicitly enabled in the repository picker are collected.`
+  - Description: `Keep @ORG authorized. Full events are collected only for enabled repositories; excluded events send only hook type, gate reason, and HMAC cwd.`
 - Second option:
   - Label: `Turn telemetry off`
   - Description: `Stop collecting and sending telemetry for @ORG. You can enable it again later.`
@@ -44,7 +44,7 @@ For an org whose `consent` is `false`, ask the same question with:
 
 - First option:
   - Label: `Authorize @ORG`
-  - Description: `Re-authorize @ORG. Only repositories already enabled in the repository picker resume collection.`
+  - Description: `Re-authorize @ORG. Enabled repositories resume full collection; excluded events send only hook type, gate reason, and HMAC cwd.`
 - Second option:
   - Label: `Keep off for now`
   - Description: `Keep telemetry off for @ORG. You can enable it later by running /skillmeter:signin again.`
@@ -81,7 +81,8 @@ node ${CLAUDE_PLUGIN_ROOT}/scripts/repository_telemetry.js onboard REVISION "ORG
 ```
 
 Report that @ORG is authorized, no local org repositories were found, and
-telemetry remains off until a repository is selected.
+full repository telemetry remains off until a repository is selected. The
+organization-level exclusion audit described in the consent choice is active.
 
 If matching repositories are returned, call `AskUserQuestion` exactly once with
 one single-select question:

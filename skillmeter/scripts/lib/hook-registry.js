@@ -75,20 +75,22 @@ module.exports = {
     tool_use_id: input.tool_use_id,
   }),
 
-  // MCP server requests user input mid-tool-call. Capture what/who; tool_input
-  // is path-hashed + secret-scrubbed centrally.
+  // MCP server requests user input mid-tool-call. Keep only structural
+  // metadata; message/requested_schema/url may contain arbitrary user or server
+  // content and are intentionally excluded.
   Elicitation: (input) => ({
-    server: input.server,
-    tool_name: input.tool_name,
-    tool_input: input.tool_input,
+    mcp_server_name: input.mcp_server_name,
+    mode: input.mode,
+    elicitation_id: input.elicitation_id,
   }),
 
-  // After the user answers an MCP elicitation. The raw `user_response` is
-  // deliberately NOT captured — it is arbitrary user-entered content (potential
-  // PII) that adds little analytic value; record only which tool/server.
+  // After the user answers an MCP elicitation. The raw `content` is
+  // deliberately NOT captured — it is arbitrary user-entered content.
   ElicitationResult: (input) => ({
-    server: input.server,
-    tool_name: input.tool_name,
+    mcp_server_name: input.mcp_server_name,
+    action: input.action,
+    mode: input.mode,
+    elicitation_id: input.elicitation_id,
   }),
 
   SubagentStart: (input) => ({
@@ -106,27 +108,32 @@ module.exports = {
 
   // Turn ended on an API error. Observation-only; Claude Code ignores our output.
   StopFailure: (input) => ({
-    error_type: input.error_type,
-    error_message: input.error_message,
+    error: input.error,
+    error_details: input.error_details,
     last_assistant_message: input.last_assistant_message,
   }),
 
   TeammateIdle: (input) => ({
-    agent_type: input.agent_type,
+    teammate_name: input.teammate_name,
+    team_name: input.team_name,
   }),
 
   // TaskCreated/TaskCompleted share task_id so the backend can compute task
   // lifetime by pairing create/complete timestamps.
   TaskCreated: (input) => ({
     task_id: input.task_id,
+    task_subject: input.task_subject,
     task_description: input.task_description,
-    task_metadata: input.task_metadata,
+    teammate_name: input.teammate_name,
+    team_name: input.team_name,
   }),
 
   TaskCompleted: (input) => ({
     task_id: input.task_id,
+    task_subject: input.task_subject,
     task_description: input.task_description,
-    completion_status: input.completion_status,
+    teammate_name: input.teammate_name,
+    team_name: input.team_name,
   }),
 
   InstructionsLoaded: (input) => ({
@@ -135,18 +142,15 @@ module.exports = {
   }),
 
   ConfigChange: (input) => ({
-    config_source: input.config_source,
+    source: input.source,
+    file_path: input.file_path,
   }),
 
-  // Working directory changed. `path` is a PATH_KEY, so the central scrub
-  // HMAC-hashes it (username/structure removed) before upload.
+  // Working directory changed. Both fields are PATH_KEYS, so the central scrub
+  // HMAC-hashes them (username/structure removed) before upload.
   CwdChanged: (input) => ({
-    path: input.path,
-  }),
-
-  WorktreeCreate: (input) => ({
-    worktree_name: input.worktree_name,
-    worktree_path: input.worktree_path,
+    old_cwd: input.old_cwd,
+    new_cwd: input.new_cwd,
   }),
 
   WorktreeRemove: (input) => ({
@@ -158,14 +162,14 @@ module.exports = {
     custom_instructions: input.custom_instructions,
   }),
 
-  // Pairs with PreCompact to measure compaction duration/frequency.
+  // Pairs with PreCompact to measure compaction duration/frequency. The
+  // official compact_summary field is conversation content and is excluded.
   PostCompact: (input) => ({
     trigger: input.trigger,
-    custom_instructions: input.custom_instructions,
   }),
 
   // Claude Code started with --init / --maintenance.
   Setup: (input) => ({
-    setup_type: input.setup_type,
+    trigger: input.trigger,
   }),
 };

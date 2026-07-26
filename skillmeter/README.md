@@ -158,6 +158,28 @@ Each line in `events.jsonl` is a self-contained JSON object:
 }
 ```
 
+When organization telemetry is authorized but the cwd gate excludes a hook,
+the separate organization audit queue uses this fixed minimal shape:
+
+```json
+{
+  "timestamp": "2026-07-26T12:34:56.000Z",
+  "level": "info",
+  "hook_event_name": "TelemetryCaptureExcluded",
+  "telemetry_scope": "organization",
+  "session_id": "93211d63-9b55-429e-b644-f7eea382db61",
+  "device_id": "2B66EC2C-494D-410C-93DC-3BD9B75BD363",
+  "data": {
+    "source_hook_event_name": "PostToolUse",
+    "gate_mode": "out_of_scope",
+    "cwd": "a61e0f34c291"
+  }
+}
+```
+
+The `data` object is allow-listed; it is not derived by copying the blocked
+hook payload and removing fields.
+
 ## Harness Data
 
 To judge a session fairly, analysis needs to know whether the developer was
@@ -327,7 +349,8 @@ Resolution order is env var → settings file → built-in default. Typically yo
 
 Telemetry is gated to repositories owned by the GitHub org your license was validated for. That org is decided by the license activator and carried in the license JWT's `org` claim (read via `getAllowedGitHubOrgs` → `getLicenseOrgs`); the client does not fetch or persist a GitHub org list. A matching `origin` is preferred. If no matching origin exists, a unique matching remote is accepted; multiple distinct matching repositories fail closed as ambiguous.
 
-Events are dropped — even in workdirs where the user ran `/skillmeter:telemetry enable` — for:
+Full hook payloads are dropped — even in workdirs where the user ran
+`/skillmeter:telemetry enable` — for:
 
 - directories that are not inside a Git repository
 - repositories without a recognizable GitHub remote
@@ -342,11 +365,18 @@ organization-level choice. On first Allow, SkillMeter scans known local
 repositories owned by that organization, shows the exact repository names, and
 asks one Yes/No question. Yes explicitly enables every displayed repository;
 No explicitly keeps every displayed repository off. Organization authorization
-alone never starts capture.
+alone never starts full hook-event capture. While organization authorization is
+on, an event excluded by the cwd gate produces only a
+`TelemetryCaptureExcluded` audit record containing the source hook type, gate
+reason, and HMAC-hashed cwd. The original hook payload, raw path, repository
+name, organization name, prompt, tool data, and transcript path are not copied
+into that organization-scoped queue.
 
 An eligible repository then resolves in three states:
 
-- **Explicitly disabled** — capture stops and unsent payloads for that repository are deleted.
+- **Explicitly disabled** — full hook capture stops and unsent payloads for that
+  repository are deleted; the organization-level minimal exclusion audit
+  remains active while organization authorization is on.
 - **Explicitly enabled** — capture is allowed, subject to the global, sign-in, ownership, and organization gates.
 - **Unset** — remains off and asks for an explicit repository choice on first entry.
 
@@ -365,7 +395,9 @@ queued transfers without deleting them.
 
 Repositories discovered after onboarding are not enabled automatically. Entering
 one shows a repository setup banner; use `/skillmeter:telemetry list` to enable
-it. Capture and queue transmission both require explicit organization and
-repository authorization.
+it. Full event capture and repository-queue transmission both require explicit
+organization and repository authorization. The minimal exclusion audit
+described above requires organization authorization but never repository
+authorization.
 
 The tracked org follows your license — re-run `/skillmeter:signin` to pick up a re-issued license.

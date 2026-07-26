@@ -145,6 +145,11 @@ const POLICY_CASES = [
     { capture: false, mode: "not_signed_in" },
   ],
   [
+    "missing cwd blocks capture before repository ownership",
+    { cwdAvailable: false },
+    { capture: false, mode: "cwd_unavailable" },
+  ],
+  [
     "global kill-switch has highest precedence",
     { globalDisabled: true, hasValidLicense: false, repoOrgOwned: false },
     { capture: false, mode: "global_disabled" },

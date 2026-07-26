@@ -30,6 +30,8 @@ const telemetryStore = require("./lib/telemetry-store");
 const { repositoryQueuePaths } = require("./lib/paths");
 const { getRepoScopeDecision } = require("./lib/repo-scope");
 const { resolveTelemetryGate } = require("./lib/telemetry-policy");
+const { appendCaptureExcluded } = require("./lib/organization-audit-queue");
+const { observeSessionCwd } = require("./lib/cwd-context");
 
 // ---------------------------------------------------------------------------
 // Structured event log — the per-event NDJSON written to events.jsonl. The
@@ -96,6 +98,7 @@ function defaultGateMessaging(eventName, gate) {
     const reasons = {
       global_disabled: "telemetry globally disabled",
       not_signed_in: "not signed in",
+      cwd_unavailable: "hook cwd missing or invalid",
       out_of_scope: "repository outside the licensed org",
       org_consent_required: "organization telemetry choice required",
       org_disabled: "telemetry disabled for this organization",
@@ -136,6 +139,7 @@ async function runOptionalCallback(
  *   runHook exits when gate.capture is false regardless. Without it, default stderr messaging is used.
  * @param {function} [options.afterSkip] - Called before exit when the event is skipped after stdin is read.
  * @param {function} [options.afterLog] - Called after the event is logged.
+ * @param {function} [options.afterComplete] - Called before exit after either skip or log.
  */
 async function runHook(eventName, buildData, options = {}) {
   const deviceId = getDeviceId();
@@ -150,11 +154,28 @@ async function runHook(eventName, buildData, options = {}) {
     process.exit(0);
   }
 
-  const cwd = input.cwd || process.cwd();
+  const cwd =
+    typeof input.cwd === "string" &&
+    input.cwd.length > 0 &&
+    path.isAbsolute(input.cwd)
+      ? input.cwd
+      : "";
+  let cwdAvailable = false;
+  if (cwd) {
+    try {
+      cwdAvailable = fs.statSync(cwd).isDirectory();
+    } catch {}
+  }
 
   // Resolve repo ownership and the parent org consent before considering the
   // per-project override. Project `true` can never bypass missing org consent.
-  const repoScopeDecision = getRepoScopeDecision(cwd);
+  const repoScopeDecision = cwdAvailable
+    ? getRepoScopeDecision(cwd)
+    : {
+        allowed: false,
+        scope: "unknown",
+        classification: "invalid_cwd",
+      };
   const orgConsent = repoScopeDecision.remoteOrg
     ? credstore.getOrgTelemetryConsent(repoScopeDecision.remoteOrg)
     : null;
@@ -162,6 +183,7 @@ async function runHook(eventName, buildData, options = {}) {
   const gate = resolveTelemetryGate({
     globalDisabled: credstore.getTelemetryDisabled(),
     hasValidLicense: credstore.hasValidLicense(),
+    cwdAvailable,
     repoOrgOwned: repoScopeDecision.allowed,
     orgConsent,
     projectOptIn: repoScopeDecision.repoKey
@@ -176,7 +198,36 @@ async function runHook(eventName, buildData, options = {}) {
   } else {
     defaultGateMessaging(eventName, gate);
   }
+
+  const sessionId = input.session_id || "unknown";
+  const organizationAuditAllowed =
+    credstore.hasValidLicense() &&
+    credstore.isTelemetryTransmissionAllowed("");
+  const hashSalt =
+    gate.capture || organizationAuditAllowed
+      ? getOrCreateHashSalt()
+      : "";
+  if (hashSalt) {
+    observeSessionCwd({
+      sessionId: input.session_id,
+      cwd,
+      repoKey: repoScopeDecision.repoKey,
+      classification: repoScopeDecision.classification,
+      hashSalt,
+    });
+  }
+
   if (!gate.capture) {
+    if (hashSalt) {
+      appendCaptureExcluded({
+        sourceEventName: eventName,
+        gateMode: gate.mode,
+        sessionId,
+        cwd,
+        deviceId,
+        hashSalt,
+      });
+    }
     // Keep the transcript cursor at the disabled-period tail. If the user
     // enables this repository later, content written before that explicit
     // choice must not become an accidental first upload.
@@ -201,13 +252,35 @@ async function runHook(eventName, buildData, options = {}) {
         gate,
       }
     );
+    await runOptionalCallback(
+      eventName,
+      "afterComplete",
+      options.afterComplete,
+      input,
+      deviceId,
+      {
+        repoKey: repoScopeDecision.repoKey,
+        org: repoScopeDecision.remoteOrg,
+        gate,
+      }
+    );
     process.exit(0);
   }
 
-  const sessionId = input.session_id || "unknown";
-  const hashSalt = getOrCreateHashSalt();
   if (!hashSalt) {
     console.error(`[skillmeter] ${eventName}: skipped (no hash salt)`);
+    await runOptionalCallback(
+      eventName,
+      "afterComplete",
+      options.afterComplete,
+      input,
+      deviceId,
+      {
+        repoKey: repoScopeDecision.repoKey,
+        org: repoScopeDecision.remoteOrg,
+        gate,
+      }
+    );
     process.exit(0);
   }
 
@@ -261,6 +334,18 @@ async function runHook(eventName, buildData, options = {}) {
   );
   if (!logged) {
     console.error(`[skillmeter] ${eventName}: skipped (policy changed before write)`);
+    await runOptionalCallback(
+      eventName,
+      "afterComplete",
+      options.afterComplete,
+      input,
+      deviceId,
+      {
+        repoKey: repoScopeDecision.repoKey,
+        org: repoScopeDecision.remoteOrg,
+        gate,
+      }
+    );
     process.exit(0);
   }
   console.error(`[skillmeter] ${eventName}: logged (session=${sessionId.slice(0, 8)}…)`);
@@ -272,6 +357,14 @@ async function runHook(eventName, buildData, options = {}) {
     input,
     deviceId,
     { repoKey: repoScopeDecision.repoKey, org: repoScopeDecision.remoteOrg }
+  );
+  await runOptionalCallback(
+    eventName,
+    "afterComplete",
+    options.afterComplete,
+    input,
+    deviceId,
+    { repoKey: repoScopeDecision.repoKey, org: repoScopeDecision.remoteOrg, gate }
   );
 }
 

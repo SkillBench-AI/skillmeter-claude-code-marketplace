@@ -56,7 +56,8 @@ test("unselected repository card stays off and names only the remote identity", 
   assertCard(value);
   assert.match(value, /\[ REPOSITORY SETUP \]/);
   assert.match(value, /Repository    @skillbench-ai\/example/);
-  assert.match(value, /OFF — repository not selected/);
+  assert.match(value, /OFF — full repository telemetry not selected/);
+  assert.match(value, /Excluded hooks send HMAC cwd only/);
   assert.match(value, /→ \/skillmeter:telemetry list/);
 });
 
@@ -93,7 +94,8 @@ test("signed-in consent states reuse the matching cards", () => {
   assertCard(authorized);
   assert.match(authorized, /\[ REPOSITORY OFF \]/);
   assert.match(authorized, /Organization authorized/);
-  assert.match(authorized, /No repository telemetry is active here/);
+  assert.match(authorized, /No full repository telemetry is active here/);
+  assert.match(authorized, /Excluded hooks send type, reason, and HMAC cwd/);
 
   const disabled = signinStatusBanner("skillbench-ai", false);
   assertCard(disabled);

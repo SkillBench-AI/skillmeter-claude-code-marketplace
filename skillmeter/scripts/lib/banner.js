@@ -59,7 +59,8 @@ function telemetryRepositoryRequiredBanner(org, repository = "") {
   ];
   if (repository) lines.push(`Repository    ${repository}`);
   lines.push(
-    "Status        OFF — repository not selected",
+    "Status        OFF — full repository telemetry not selected",
+    "Audit         Excluded hooks send HMAC cwd only",
     "",
     "→ /skillmeter:telemetry list"
   );
@@ -117,7 +118,8 @@ function signinStatusBanner(org, consent, repositoryEnabled = false) {
     "",
     orgLine(org),
     "Organization authorized.",
-    "No repository telemetry is active here.",
+    "No full repository telemetry is active here.",
+    "Excluded hooks send type, reason, and HMAC cwd.",
     "",
     manageLine("/skillmeter:telemetry list"),
   ]);

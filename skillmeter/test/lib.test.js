@@ -19,7 +19,11 @@ const {
 setTestEnv("SKILLMETER_BACKEND_URL", undefined);
 
 const io = require("../scripts/lib/io");
-const { isJwtExpired, getEndpointFromTokenAllowExpired } = require("../scripts/lib/jwt");
+const {
+  isJwtExpired,
+  getEndpointFromTokenAllowExpired,
+  getLicenseAudiences,
+} = require("../scripts/lib/jwt");
 
 // --- io.safeReadJson -------------------------------------------------------
 
@@ -117,6 +121,16 @@ test("returns null when no `aud` URL is present", () => {
   assert.equal(getEndpointFromTokenAllowExpired(null), null);
 });
 
+test("getLicenseAudiences returns a stable sorted unique tenant identity", () => {
+  const token = makeJwt({
+    aud: ["https://b.example", "https://a.example", "https://b.example"],
+  });
+  assert.deepEqual(getLicenseAudiences(token), [
+    "https://a.example",
+    "https://b.example",
+  ]);
+});
+
 // --- hook dispatch registry ↔ hooks.json contract --------------------------
 
 test("every hook.js-dispatched event has a matching registry mapper", () => {
@@ -150,29 +164,53 @@ test("every hook.js-dispatched event has a matching registry mapper", () => {
 test("registry mappers return an object and can use ctx", () => {
   const registry = require("../scripts/lib/hook-registry");
   const ctx = { getTranscriptId: (p) => (p ? require("path").basename(p) : "") };
-  assert.deepEqual(
-    registry.WorktreeCreate({ worktree_name: "wt", worktree_path: "/p" }),
-    { worktree_name: "wt", worktree_path: "/p" }
-  );
   assert.equal(
     registry.SubagentStop({ agent_transcript_path: "/x/y-uuid.jsonl" }, ctx).agent_transcript_path,
     "y-uuid.jsonl"
   );
 });
 
-test("newly added events map their documented fields", () => {
+test("WorktreeCreate is not registered as an observation hook", () => {
   const registry = require("../scripts/lib/hook-registry");
-  assert.deepEqual(registry.Setup({ setup_type: "init" }), { setup_type: "init" });
-  assert.deepEqual(registry.CwdChanged({ path: "/a/b" }), { path: "/a/b" });
-  assert.equal(registry.Elicitation({ server: "s", tool_name: "t", tool_input: {} }).server, "s");
-  // user_response must NOT be captured (privacy)
-  assert.ok(!("user_response" in registry.ElicitationResult({ server: "s", user_response: { x: 1 } })));
+  const hooks = require("../hooks/hooks.json").hooks;
+
+  assert.equal(hooks.WorktreeCreate, undefined);
+  assert.equal(registry.WorktreeCreate, undefined);
 });
 
-test("corrected field names match the current hook schema", () => {
+test("registry mappers match current official hook payload fixtures", () => {
   const registry = require("../scripts/lib/hook-registry");
-  assert.equal(registry.StopFailure({ error_type: "rate_limit" }).error_type, "rate_limit");
-  assert.equal(registry.TeammateIdle({ agent_type: "Explore" }).agent_type, "Explore");
-  assert.equal(registry.ConfigChange({ config_source: "user_settings" }).config_source, "user_settings");
-  assert.equal(registry.TaskCompleted({ completion_status: "done" }).completion_status, "done");
+  const { hookPayloadFixtures } = require("../testing/hook-payloads");
+
+  for (const { event, input, expected } of hookPayloadFixtures) {
+    assert.equal(typeof registry[event], "function", `${event} mapper exists`);
+    assert.deepEqual(registry[event](input), expected, `${event} maps official fields`);
+  }
+});
+
+test("registry mappers do not emit legacy hook field names", () => {
+  const registry = require("../scripts/lib/hook-registry");
+  const { hookPayloadFixtures } = require("../testing/hook-payloads");
+  const legacyFields = new Set([
+    "setup_type",
+    "error_type",
+    "error_message",
+    "agent_type",
+    "task_metadata",
+    "completion_status",
+    "config_source",
+    "path",
+    "server",
+    "tool_name",
+    "tool_input",
+    "user_response",
+    "custom_instructions",
+  ]);
+
+  for (const { event, input } of hookPayloadFixtures) {
+    const output = registry[event](input);
+    for (const field of legacyFields) {
+      assert.ok(!(field in output), `${event} must not emit legacy field ${field}`);
+    }
+  }
 });

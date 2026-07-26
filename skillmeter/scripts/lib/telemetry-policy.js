@@ -9,12 +9,14 @@
 function resolveTelemetryGate({
   globalDisabled,
   hasValidLicense,
+  cwdAvailable = true,
   repoOrgOwned,
   orgConsent,
   projectOptIn,
 }) {
   if (globalDisabled) return { capture: false, mode: "global_disabled" };
   if (!hasValidLicense) return { capture: false, mode: "not_signed_in" };
+  if (!cwdAvailable) return { capture: false, mode: "cwd_unavailable" };
   if (!repoOrgOwned) return { capture: false, mode: "out_of_scope" };
   if (orgConsent === null) return { capture: false, mode: "org_consent_required" };
   if (orgConsent !== true) return { capture: false, mode: "org_disabled" };

@@ -154,7 +154,15 @@ function escapeRegExp(str) {
 // removed) wherever they appear — including nested occurrences, since scrubDeep
 // applies this at every depth. `command` is deliberately NOT here: it is scrubbed
 // as content instead, so command shape is preserved while secrets are redacted.
-const PATH_KEYS = new Set(["file_path", "filePath", "path", "notebook_path", "cwd"]);
+const PATH_KEYS = new Set([
+  "file_path",
+  "filePath",
+  "path",
+  "notebook_path",
+  "cwd",
+  "old_cwd",
+  "new_cwd",
+]);
 
 // Precompute the home-directory prefix matcher once. The OS home path carries
 // the username and appears throughout transcript content, tool commands, and

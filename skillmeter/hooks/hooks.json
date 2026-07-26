@@ -203,18 +203,6 @@
         ]
       }
     ],
-    "WorktreeCreate": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/hook.js WorktreeCreate",
-            "async": true,
-            "timeout": 10
-          }
-        ]
-      }
-    ],
     "WorktreeRemove": [
       {
         "hooks": [

@@ -180,6 +180,20 @@ test("path-bearing keys are HMAC-hashed wholesale, including nested (B3)", () =>
   }
 });
 
+test("CwdChanged old_cwd and new_cwd are HMAC-hashed wholesale", () => {
+  const { value } = s.sanitizeEventData(
+    {
+      old_cwd: "/Users/example/project",
+      new_cwd: "/Users/example/project/src",
+    },
+    SALT
+  );
+
+  assert.match(value.old_cwd, /^[0-9a-f]{12}$/);
+  assert.match(value.new_cwd, /^[0-9a-f]{12}$/);
+  assert.notEqual(value.old_cwd, value.new_cwd);
+});
+
 test("command is scrubbed for content (structure kept), NOT wholesale-hashed", () => {
   const { value } = s.sanitizeEventData(
     { tool_input: { command: `curl -H "Authorization: Bearer ${SAMPLES.jwt}" https://api.x` } },

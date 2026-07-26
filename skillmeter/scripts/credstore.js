@@ -114,6 +114,10 @@ function getOrCreateHashSalt() {
   return newSalt;
 }
 
+function getHashSalt() {
+  return readStore().hash_salt || "";
+}
+
 function getLicenseToken() {
   const store = readStore();
   return store.license_jwt || null;
@@ -269,6 +273,7 @@ function getAllowedGitHubOrgs() {
 module.exports = {
   getDeviceId,
   getOrCreateHashSalt,
+  getHashSalt,
   getLicenseToken,
   getLicenseTokenUncached,
   setLicenseToken,

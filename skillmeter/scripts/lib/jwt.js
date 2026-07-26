@@ -101,8 +101,21 @@ function getLicenseOrgs(token) {
     .filter(Boolean);
 }
 
+function getLicenseAudiences(token) {
+  const payload = token ? decodeJwtPayload(token) : null;
+  if (!payload) return [];
+  const raw = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
+  return [...new Set(
+    raw
+      .filter((audience) => typeof audience === "string")
+      .map((audience) => audience.trim())
+      .filter(Boolean)
+  )].sort();
+}
+
 module.exports = {
   isJwtExpired,
   getEndpointFromTokenAllowExpired,
   getLicenseOrgs,
+  getLicenseAudiences,
 };

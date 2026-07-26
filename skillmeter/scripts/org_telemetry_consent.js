@@ -2,6 +2,9 @@
 
 const credstore = require("./credstore");
 const { purgeOrganizationQueues } = require("./lib/repository-queue");
+const {
+  purgeOrganizationAuditQueues,
+} = require("./lib/organization-audit-queue");
 
 function currentStatus() {
   const orgs = credstore.getAllowedGitHubOrgs();
@@ -42,7 +45,10 @@ function main() {
 
   const enabled = valueArg === "enabled";
   credstore.setOrgTelemetryConsent(org, enabled);
-  if (!enabled) purgeOrganizationQueues(org);
+  if (!enabled) {
+    purgeOrganizationQueues(org);
+    purgeOrganizationAuditQueues();
+  }
   process.stdout.write(
     enabled
       ? `SkillMeter: telemetry authorized for @${org}; repositories still require explicit enablement.\n`

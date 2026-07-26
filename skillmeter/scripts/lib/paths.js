@@ -24,6 +24,8 @@ const DATA_ROOT = process.env.CLAUDE_PLUGIN_DATA || PLUGIN_ROOT;
 const LOG_DIR = path.join(DATA_ROOT, "logs");
 const LOG_FILE = path.join(LOG_DIR, "events.jsonl");
 const REPOSITORIES_LOG_DIR = path.join(LOG_DIR, "repositories");
+const ORGANIZATION_AUDIT_LOG_DIR = path.join(LOG_DIR, "organization-audit");
+const SESSIONS_DIR = path.join(DATA_ROOT, "sessions");
 // Transcripts that failed to upload get parked here for retry on next session.
 const TRANSCRIPTS_PENDING_DIR = path.join(LOG_DIR, "transcripts", "pending");
 // Delta-upload chunks (uuid-cursor): durable per-turn deltas drained
@@ -51,6 +53,15 @@ function repositoryQueuePaths(repoKey, hashSalt) {
   };
 }
 
+function organizationAuditQueuePaths(tenantFingerprint) {
+  const root = path.join(ORGANIZATION_AUDIT_LOG_DIR, tenantFingerprint);
+  return {
+    root,
+    metadata: path.join(root, "tenant.json"),
+    eventLog: path.join(root, "events.jsonl"),
+  };
+}
+
 const PLUGIN_VERSION =
   (safeReadJson(path.join(PLUGIN_ROOT, ".claude-plugin", "plugin.json"), {})).version ||
   "unknown";
@@ -60,11 +71,14 @@ module.exports = {
   LOG_DIR,
   LOG_FILE,
   REPOSITORIES_LOG_DIR,
+  ORGANIZATION_AUDIT_LOG_DIR,
+  SESSIONS_DIR,
   TRANSCRIPTS_PENDING_DIR,
   TRANSCRIPTS_CHUNKS_DIR,
   TRANSCRIPTS_CURSORS_DIR,
   LEGACY_LOG_DIR,
   repositoryStorageId,
   repositoryQueuePaths,
+  organizationAuditQueuePaths,
   PLUGIN_VERSION,
 };

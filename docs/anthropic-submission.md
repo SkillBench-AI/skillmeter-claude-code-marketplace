@@ -160,7 +160,7 @@ Prompts:
 Expected result:
 
 - the exact eligible repository names are shown without local paths;
-- repositories remain off until explicitly selected;
+- full hook telemetry for repositories remains off until explicitly selected;
 - selecting one repository does not enable other repositories.
 
 ### Example 3: Stop and resume collection
@@ -173,7 +173,9 @@ Prompt:
 
 Expected result:
 
-- disabling a repository stops capture and removes its queued payloads;
+- disabling a repository stops full hook capture and removes its queued
+  repository payloads; while organization authorization remains on, excluded
+  hooks still emit only hook type, gate reason, and HMAC cwd;
 - the global kill-switch pauses all transmission;
 - re-enabling does not upload content created during the disabled period.
 
@@ -234,7 +236,6 @@ TaskCreated
 TaskCompleted
 InstructionsLoaded
 ConfigChange
-WorktreeCreate
 WorktreeRemove
 SessionEnd
 PreCompact
@@ -258,7 +259,9 @@ pending event and transcript uploads while a Claude Code session is active.
 - `~/.skillbench/upload-result.json`: latest background upload result
 - `~/.skillbench/activate-poll.log`: device-flow activation diagnostics
 - `${CLAUDE_PLUGIN_DATA}/logs/`: repository-bound event queues, transcript
-  chunks, cursors, metadata, and process locks
+  chunks, cursors, organization-scoped exclusion audits, metadata, and process
+  locks. Exclusion audits contain only source hook type, gate reason, and an
+  HMAC-hashed cwd; they never copy the blocked hook payload.
 - `.claude/settings.local.json`: legacy `skillmeter.telemetry` is removed after
   successful migration; unrelated settings are preserved
 
