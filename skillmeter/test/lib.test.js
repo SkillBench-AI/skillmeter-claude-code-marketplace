@@ -133,15 +133,52 @@ test("getLicenseAudiences returns a stable sorted unique tenant identity", () =>
 
 // --- hook dispatch registry ↔ hooks.json contract --------------------------
 
+test("every command hook uses exec form with a bundled script", () => {
+  const hooks = require("../hooks/hooks.json").hooks;
+  const pluginRoot = path.resolve(__dirname, "..");
+  let commandHookCount = 0;
+
+  for (const [event, entries] of Object.entries(hooks)) {
+    for (const entry of entries) {
+      for (const hook of entry.hooks) {
+        if (hook.type !== "command") continue;
+        commandHookCount += 1;
+
+        assert.equal(hook.command, "node", `${event} must use node exec form`);
+        assert.ok(Array.isArray(hook.args), `${event} must declare args`);
+        assert.ok(hook.args.length > 0, `${event} args must include a script`);
+        assert.ok(
+          hook.args.every((arg) => typeof arg === "string"),
+          `${event} args must contain only strings`
+        );
+
+        const prefix = "${CLAUDE_PLUGIN_ROOT}/";
+        assert.ok(
+          hook.args[0].startsWith(prefix),
+          `${event} script must be relative to CLAUDE_PLUGIN_ROOT`
+        );
+        assert.ok(
+          fs.existsSync(path.join(pluginRoot, hook.args[0].slice(prefix.length))),
+          `${event} script must exist`
+        );
+      }
+    }
+  }
+
+  assert.equal(commandHookCount, 28, "expected every configured hook command");
+});
+
 test("every hook.js-dispatched event has a matching registry mapper", () => {
   const registry = require("../scripts/lib/hook-registry");
   const hooks = require("../hooks/hooks.json").hooks;
 
   const dispatched = [];
   for (const [event, entries] of Object.entries(hooks)) {
-    const cmd = entries[0].hooks[0].command;
-    const m = cmd.match(/hook\.js (\w+)/);
-    if (m) dispatched.push([event, m[1]]);
+    const hook = entries[0].hooks[0];
+    if (hook.args[0].endsWith("/hook.js")) {
+      assert.equal(hook.args.length, 2, `${event} must pass exactly one event`);
+      dispatched.push([event, hook.args[1]]);
+    }
   }
 
   assert.ok(dispatched.length >= 15, "expected many events routed through hook.js");

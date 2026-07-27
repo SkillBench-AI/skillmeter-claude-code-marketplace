@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * Generic hook entrypoint. hooks.json invokes this as
- * `node ${CLAUDE_PLUGIN_ROOT}/scripts/hook.js <EventName>` for every
+ * Generic hook entrypoint. hooks.json invokes this in exec form with
+ * `command: "node"` and `args: ["${CLAUDE_PLUGIN_ROOT}/scripts/hook.js",
+ * "<EventName>"]` for every
  * observation-only hook; the per-event field mapper lives in
  * lib/hook-registry.js. Hooks needing runHook options or custom logic keep
  * their own dedicated entrypoint instead.
