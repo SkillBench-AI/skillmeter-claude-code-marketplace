@@ -183,10 +183,6 @@ function normalizeOrg(org) {
   return typeof org === "string" ? org.trim().toLowerCase() : "";
 }
 
-function migrateOrgTelemetryConsent() {
-  return telemetryStore.readPolicy();
-}
-
 function getOrgTelemetryConsent(org) {
   return telemetryStore.getOrganizationConsent(org);
 }
@@ -282,7 +278,6 @@ module.exports = {
   getAllowedGitHubOrgs,
   getOrgTelemetryConsent,
   setOrgTelemetryConsent,
-  migrateOrgTelemetryConsent,
   isTelemetryTransmissionAllowed,
   // Atomic sign-in lifecycle — prefer these over the lower-level set* helpers
   // when adjusting more than one field, so partial writes can't race.

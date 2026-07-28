@@ -103,9 +103,12 @@ skillmeter/
 ├── hooks/
 │   └── hooks.json           # Hook event → script mappings
 ├── logs/
-│   ├── events.jsonl         # Active event log (NDJSON)
-│   ├── events.jsonl.*       # Sealed event batches awaiting upload
-│   └── transcripts/pending/ # Sanitized transcripts awaiting upload
+│   ├── repositories/<id>/
+│   │   ├── events.jsonl     # Active repository event log (NDJSON)
+│   │   └── transcripts/
+│   │       ├── chunks/      # Sanitized transcript deltas awaiting upload
+│   │       └── cursors/     # Per-transcript upload cursors
+│   └── organization-audit/  # Organization-scoped audit queues
 └── scripts/
     ├── logger.js            # Core hook runner + logging library
     ├── hook.js              # Generic hook entrypoint (dispatches by event name)
@@ -298,8 +301,8 @@ can be processed by SkillBench.
 
 Logs are sent to the backend from durable filesystem queues:
 
-1. **Active event log** -- Hooks append NDJSON entries to `logs/events.jsonl`.
-2. **Queue sealing** -- `Stop` and `SessionEnd` atomically rename the active log to `events.jsonl.<timestamp>` and stage sanitized transcripts under `logs/transcripts/pending/`.
+1. **Active event log** -- Hooks append NDJSON entries to a repository-bound `logs/repositories/<id>/events.jsonl`.
+2. **Queue sealing** -- `Stop` and `SessionEnd` atomically rename the active log to `events.jsonl.<timestamp>` and stage sanitized transcript deltas under the same repository queue's `transcripts/chunks/`.
 3. **Immediate drain** -- `Stop` triggers a detached `drain_once.js` uploader. `SessionEnd` is synchronous and attempts a bounded 5-second drain before Claude exits.
 4. **Fallback retry** -- `SessionStart` and the plugin retry monitor drain any sealed event logs or transcript delta chunks left on disk.
 

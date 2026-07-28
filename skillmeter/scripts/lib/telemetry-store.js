@@ -250,7 +250,7 @@ function migrateLegacyRepositorySetting(repoRoot, repoKey) {
   const legacyValue = legacy.value;
 
   let sourceId = "";
-  const { policy } = mutatePolicy((current) => {
+  const migration = mutatePolicy((current) => {
     if (!current.migration.source_salt) {
       current.migration.source_salt = crypto.randomBytes(16).toString("hex");
     }
@@ -258,6 +258,13 @@ function migrateLegacyRepositorySetting(repoRoot, repoKey) {
       repoRoot,
       current.migration.source_salt
     );
+    const marker = current.migration.legacy_settings[sourceId];
+    const importedFingerprint = typeof marker === "string"
+      ? marker
+      : marker?.source_fingerprint;
+    if (importedFingerprint === legacy.fingerprint) {
+      return false;
+    }
     const existing = current.repositories[normalizedKey];
     if (!existing || existing.source === "legacy") {
       current.repositories[normalizedKey] = {
@@ -268,13 +275,7 @@ function migrateLegacyRepositorySetting(repoRoot, repoKey) {
         source: "legacy",
       };
     }
-    current.migration.legacy_settings[sourceId] = {
-      repo_key: normalizedKey,
-      imported_value: legacyValue,
-      source_fingerprint: legacy.fingerprint,
-      cleanup_pending: true,
-      imported_at: Date.now(),
-    };
+    current.migration.legacy_settings[sourceId] = legacy.fingerprint;
     return true;
   });
 
@@ -286,15 +287,17 @@ function migrateLegacyRepositorySetting(repoRoot, repoKey) {
     legacy.fingerprint
   );
   if (cleaned) {
-    mutatePolicy((current) => {
-      const marker = current.migration.legacy_settings[sourceId];
-      if (!marker) return false;
-      marker.cleanup_pending = false;
-      marker.cleaned_at = Date.now();
+    migration.policy = mutatePolicy((current) => {
+      if (!current.migration.legacy_settings[sourceId]) return false;
+      delete current.migration.legacy_settings[sourceId];
       return true;
-    });
+    }).policy;
   }
-  return { migrated: true, cleaned, policy };
+  return {
+    migrated: migration.changed,
+    cleaned,
+    policy: migration.policy,
+  };
 }
 
 function getGlobalDisabled() {

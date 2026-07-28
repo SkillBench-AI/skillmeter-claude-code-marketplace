@@ -29,7 +29,6 @@ const {
   TRANSCRIPTS_PENDING_DIR,
   TRANSCRIPTS_CHUNKS_DIR,
   TRANSCRIPTS_CURSORS_DIR,
-  LEGACY_LOG_DIR,
   PLUGIN_VERSION,
   repositoryQueuePaths,
 } = require("./paths");
@@ -702,13 +701,12 @@ function sealEventLogAndTriggerDrain(input, deviceId, repository) {
   }
 }
 
-// Remove pre-SSOT queue artifacts. They have no repository identity, so moving
-// or retrying them could transmit under the wrong org after a later sign-in.
-function migrateLegacyQueue() {
+// Remove pre-SSOT queue artifacts from the persistent data root. They have no
+// repository identity, so retrying them could transmit under the wrong org
+// after a later sign-in.
+function purgeLegacyUnboundQueue() {
   try {
     fs.mkdirSync(LOG_DIR, { recursive: true });
-    // Pre-SSOT queues are not repository-bound and cannot be authorized
-    // safely. Delete them instead of guessing a tenant/repository.
     for (const candidate of [
       LOG_FILE,
       TRANSCRIPTS_PENDING_DIR,
@@ -717,18 +715,9 @@ function migrateLegacyQueue() {
     ]) {
       try { fs.rmSync(candidate, { recursive: true, force: true }); } catch {}
     }
-    if (LEGACY_LOG_DIR === LOG_DIR || !fs.existsSync(LEGACY_LOG_DIR)) return;
-    try {
-      fs.rmSync(
-        path.join(LEGACY_LOG_DIR, "transcripts"),
-        { recursive: true, force: true }
-      );
-    } catch {}
-    for (const f of fs.readdirSync(LEGACY_LOG_DIR)) {
-      const src = path.join(LEGACY_LOG_DIR, f);
-      try { if (!fs.statSync(src).isFile()) continue; } catch { continue; }
-      if (/^events\.jsonl(?:\.\d+)?$/.test(f)) {
-        try { fs.unlinkSync(src); } catch {}
+    for (const entry of fs.readdirSync(LOG_DIR, { withFileTypes: true })) {
+      if (entry.isFile() && /^events\.jsonl\.\d+$/.test(entry.name)) {
+        try { fs.unlinkSync(path.join(LOG_DIR, entry.name)); } catch {}
       }
     }
   } catch {}
@@ -931,7 +920,7 @@ module.exports = {
   retryFailedLogs,
   retryFailedTranscripts,
   cleanupStaleFiles,
-  migrateLegacyQueue,
+  purgeLegacyUnboundQueue,
   purgeRepositoryQueue,
   purgeOrganizationQueues,
   purgeOrganizationAuditQueues,

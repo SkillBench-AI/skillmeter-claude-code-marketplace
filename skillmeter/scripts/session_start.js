@@ -4,7 +4,7 @@ const {
   retryFailedLogs,
   retryFailedTranscripts,
   cleanupStaleFiles,
-  migrateLegacyQueue,
+  purgeLegacyUnboundQueue,
   initializeTranscriptCursor,
 } = require("./lib/transfer");
 const { refreshLicense } = require("./lib/license-activation");
@@ -28,8 +28,7 @@ const credstore = require("./credstore.js");
 async function prepareSession() {
   const deviceId = credstore.getDeviceId();
   credstore.ensureSigninResultFile();
-  credstore.migrateOrgTelemetryConsent();
-  migrateLegacyQueue();
+  purgeLegacyUnboundQueue();
   if (!deviceId || credstore.getTelemetryDisabled()) return;
   try { await refreshLicense(deviceId); } catch {}
 }
