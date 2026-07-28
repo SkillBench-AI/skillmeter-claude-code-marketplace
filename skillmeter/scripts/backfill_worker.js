@@ -10,6 +10,7 @@ const { prepareHistoricalRecords } = require("./lib/backfill-snapshot");
 const {
   loadRepositoryTelemetryState,
 } = require("./lib/repository-telemetry");
+const { appendBackfillLog } = require("./lib/backfill-log");
 const {
   spawnDetachedDrain,
   stageTranscriptSnapshot,
@@ -27,6 +28,11 @@ async function main() {
   ) {
     return;
   }
+  appendBackfillLog("worker_started", {
+    offerId,
+    org: state.org,
+    repositoryCount: (state.repository_ids || []).length,
+  });
 
   const repositoryState = await loadRepositoryTelemetryState();
   const repositoriesById = new Map(
@@ -55,6 +61,13 @@ async function main() {
     cutoffAt: state.cutoff_at,
     excludeSessionId: state.active_session_id || "",
   });
+  appendBackfillLog("scan_completed", {
+    offerId,
+    projectsScanned: scan.summary.projectsScanned,
+    sessionsIncluded: scan.summary.sessionsIncluded,
+    sessionsSkipped: scan.summary.sessionsSkipped,
+    skippedByReason: scan.summary.skippedByReason,
+  });
 
   let processed = 0;
   let queuedChunks = 0;
@@ -72,6 +85,7 @@ async function main() {
       {
         transformRecords: prepareHistoricalRecords,
         cutoffAt: state.cutoff_at,
+        backfillOfferId: offerId,
       }
     );
     if (result.failed) errors.push(result.reason || "snapshot_failed");
@@ -80,6 +94,22 @@ async function main() {
       processed++;
       queuedChunks += result.chunks;
     }
+    appendBackfillLog("snapshot_progress", {
+      offerId,
+      repository: repository.repoKey,
+      transcriptId: session.sessionId,
+      outcome: result.failed
+        ? "failed"
+        : result.skipped
+          ? "skipped"
+          : "queued",
+      reason: result.reason,
+      chunks: result.chunks || 0,
+      processedTranscripts: processed,
+      totalTranscripts: scan.included.length,
+      queuedChunks,
+      skippedTranscripts: skipped,
+    });
     updateBackfillProgress(offerId, {
       processed_transcripts: processed,
       queued_chunks: queuedChunks,
@@ -87,18 +117,37 @@ async function main() {
     });
   }
 
-  if (queuedChunks > 0) spawnDetachedDrain();
+  const drainSpawned = queuedChunks > 0 ? spawnDetachedDrain() : false;
+  appendBackfillLog("drain_requested", {
+    offerId,
+    queuedChunks,
+    spawned: drainSpawned,
+  });
   finishBackfill(offerId, errors.length > 0 ? "failed" : "completed", {
     processed_transcripts: processed,
     queued_chunks: queuedChunks,
     skipped_transcripts: skipped,
     error: errors[0],
   });
+  appendBackfillLog(
+    errors.length > 0 ? "worker_failed" : "snapshot_completed",
+    {
+      offerId,
+      processedTranscripts: processed,
+      queuedChunks,
+      skippedTranscripts: skipped,
+      error: errors[0],
+    }
+  );
 }
 
 const offerId = process.argv[2] || "";
 main().catch((err) => {
   if (offerId) {
+    appendBackfillLog("worker_failed", {
+      offerId,
+      error: String(err?.message || err),
+    });
     try {
       finishBackfill(offerId, "failed", {
         error: "Backfill worker failed.",

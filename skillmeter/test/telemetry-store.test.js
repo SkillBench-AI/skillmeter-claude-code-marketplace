@@ -26,6 +26,7 @@ writeJson(path.join(STATE_DIR, "credentials.json"), {
   license_jwt: makeJwt({
     exp: Math.floor(Date.now() / 1000) + 3600,
     org: { login: "skillbench-ai" },
+    aud: "https://example.test",
   }),
   org_telemetry_migration_version: 1,
   org_telemetry_consents: {
@@ -235,6 +236,57 @@ test("global OFF pauses queues without deleting them", async (t) => {
   assert.equal(fetches, 0);
   assert.equal(fs.existsSync(body), true);
   store.setGlobalEnabled(true);
+  store.setRepositoryOverride(repoKey, false);
+  transfer.purgeDisallowedQueues();
+  assert.equal(fs.existsSync(body), false);
+});
+
+test("backfill upload records detailed attempt and success diagnostics", async (t) => {
+  const repoKey = "github.com/skillbench-ai/backfill-log";
+  store.setRepositoryOverride(repoKey, true);
+  const body = transfer.sealDeltaChunk(
+    "backfill-log.jsonl",
+    [JSON.stringify({ uuid: "backfill-log-1" })],
+    {
+      seq: 1,
+      reset: false,
+      resetBaselineSeq: null,
+      promptId: "backfill",
+      backfillOfferId: "offer-log-test",
+    },
+    { repoKey, org: "skillbench-ai" }
+  );
+  assert.ok(body && fs.existsSync(body));
+
+  const previousFetch = global.fetch;
+  global.fetch = async () => ({ ok: true, status: 202 });
+  t.after(() => { global.fetch = previousFetch; });
+
+  const result = await transfer.drainDeltaChunks(100);
+  assert.equal(result.ok, 1);
+  assert.equal(fs.existsSync(body), false);
+
+  const records = fs.readFileSync(
+    path.join(DATA_DIR, "logs", "backfill.ndjson"),
+    "utf8"
+  )
+    .trim()
+    .split("\n")
+    .map(JSON.parse)
+    .filter((record) => record.offerId === "offer-log-test");
+  assert.deepEqual(
+    records.map((record) => record.event),
+    [
+      "upload_batch_started",
+      "upload_attempt",
+      "upload_succeeded",
+      "upload_batch_completed",
+    ]
+  );
+  assert.equal(records[2].httpStatus, 202);
+  assert.equal(records[2].repository, repoKey);
+  assert.ok(records[2].rawBytes > 0);
+  assert.ok(records[2].gzipBytes > 0);
 });
 
 test("skipped periods advance a discard cursor without staging a chunk", () => {

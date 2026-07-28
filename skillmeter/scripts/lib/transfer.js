@@ -21,6 +21,7 @@ const { getEndpointFromTokenAllowExpired, isJwtExpired } = require("./jwt");
 const { ensureFreshLicense } = require("./license-activation");
 const { getEventTimeoutMs, getTranscriptChunkMaxBytes } = require("./config");
 const { atomicWriteJson, safeReadJson } = require("./io");
+const { appendBackfillLog } = require("./backfill-log");
 const { parseJsonl, buildChunkPlan } = require("./transcript-delta");
 const {
   PLUGIN_ROOT,
@@ -465,6 +466,17 @@ function buildChunkHeaders(meta, deviceId, token, rawBody = null) {
   return headers;
 }
 
+function logBackfillChunk(meta, event, details = {}) {
+  if (meta?.promptId !== "backfill") return;
+  appendBackfillLog(event, {
+    offerId: meta.backfillOfferId,
+    repository: meta.repoKey,
+    transcriptId: meta.transcriptId,
+    seq: meta.seq,
+    ...details,
+  });
+}
+
 // Upload one delta chunk. On 2xx, deletes the body then the meta; otherwise
 // leaves both for retry. Result shape matches drainFailedLogs entries.
 async function uploadDeltaChunk(bodyPath, deviceId, timeoutMs = TRANSCRIPT_TIMEOUT) {
@@ -477,32 +489,47 @@ async function uploadDeltaChunk(bodyPath, deviceId, timeoutMs = TRANSCRIPT_TIMEO
   }
   const context = queueContextForPath(bodyPath);
   if (!context || !meta.repoKey || meta.repoKey !== context.repoKey) {
+    logBackfillChunk(meta, "upload_failed", {
+      error: "invalid_queue_context",
+    });
     try { fs.unlinkSync(bodyPath); } catch {}
     try { fs.unlinkSync(metaPath); } catch {}
-    return { ok: false };
+    return { ok: false, error: "invalid_queue_context" };
   }
   const disposition = queueDisposition(context);
   if (disposition === "delete") {
+    logBackfillChunk(meta, "upload_failed", {
+      error: "repository_policy_deleted_queue",
+    });
     purgeRepositoryQueue(context.repoKey);
-    return { ok: false };
+    return { ok: false, error: "repository_policy_deleted_queue" };
   }
   if (
     disposition === "pause" ||
     !credstore.isTelemetryTransmissionAllowed(context.repoKey)
   ) {
     console.error(`[skillmeter] Transcript chunk: telemetry not authorized for this repository — kept for retry`);
-    return { ok: false };
+    logBackfillChunk(meta, "upload_deferred", {
+      reason: "telemetry_not_authorized",
+    });
+    return { ok: false, deferred: true };
   }
 
   const token = credstore.getLicenseTokenUncached();
   if (!token || isJwtExpired(token)) {
     console.error(`[skillmeter] Transcript chunk: no valid license JWT — kept for retry`);
-    return { ok: false };
+    logBackfillChunk(meta, "upload_deferred", {
+      reason: "license_unavailable",
+    });
+    return { ok: false, deferred: true };
   }
   const endpoint = getEndpointFromTokenAllowExpired(token);
   if (!endpoint) {
     console.error(`[skillmeter] Transcript chunk: no telemetry endpoint resolvable — kept for retry`);
-    return { ok: false };
+    logBackfillChunk(meta, "upload_deferred", {
+      reason: "endpoint_unavailable",
+    });
+    return { ok: false, deferred: true };
   }
 
   let compressed;
@@ -512,6 +539,7 @@ async function uploadDeltaChunk(bodyPath, deviceId, timeoutMs = TRANSCRIPT_TIMEO
     compressed = await gzipAsync(raw);
   } catch (err) {
     console.error(`[skillmeter] Transcript chunk gzip failed: ${err.message}`);
+    logBackfillChunk(meta, "upload_failed", { error: "gzip_failed" });
     return { ok: false, error: err.message };
   }
 
@@ -523,13 +551,21 @@ async function uploadDeltaChunk(bodyPath, deviceId, timeoutMs = TRANSCRIPT_TIMEO
   console.error(
     `[skillmeter] Transferring transcript chunk: ${meta.transcriptId} seq=${meta.seq} (${compressed.length} bytes gzipped)`
   );
+  const startedAt = Date.now();
+  logBackfillChunk(meta, "upload_attempt", {
+    rawBytes: raw.length,
+    gzipBytes: compressed.length,
+  });
 
   try {
     if (
       queueDisposition(context) !== "send" ||
       !credstore.isTelemetryTransmissionAllowed(context.repoKey)
     ) {
-      return { ok: false };
+      logBackfillChunk(meta, "upload_deferred", {
+        reason: "policy_changed_before_request",
+      });
+      return { ok: false, deferred: true };
     }
     const res = await fetch(`${endpoint}/logs/claude/transcript`, {
       method: "POST",
@@ -539,13 +575,28 @@ async function uploadDeltaChunk(bodyPath, deviceId, timeoutMs = TRANSCRIPT_TIMEO
     });
     if (res.ok) {
       console.error(`[skillmeter] Transcript chunk transferred: ${meta.transcriptId} seq=${meta.seq}`);
+      logBackfillChunk(meta, "upload_succeeded", {
+        httpStatus: res.status,
+        durationMs: Date.now() - startedAt,
+        rawBytes: raw.length,
+        gzipBytes: compressed.length,
+      });
       removeChunk();
       return { ok: true };
     }
     console.error(`[skillmeter] Transcript chunk transfer failed: HTTP ${res.status} — kept for retry`);
+    logBackfillChunk(meta, "upload_failed", {
+      httpStatus: res.status,
+      durationMs: Date.now() - startedAt,
+      error: `HTTP ${res.status}`,
+    });
     return { ok: false, error: `HTTP ${res.status}` };
   } catch (err) {
     console.error(`[skillmeter] Transcript chunk transfer error: ${err.message} — kept for retry`);
+    logBackfillChunk(meta, "upload_failed", {
+      durationMs: Date.now() - startedAt,
+      error: String(err?.message || err),
+    });
     return { ok: false, error: err.message };
   }
 }
@@ -558,19 +609,68 @@ async function drainDeltaChunks(timeoutMs) {
     purgeDisallowedQueues();
     const files = listDeltaChunks();
     if (files.length === 0) return { ok: 0, errors: [] };
+    const backfillEntries = files.flatMap((file) => {
+      const meta = safeReadJson(file.replace(/\.jsonl$/, ".meta.json"), null);
+      return meta?.promptId === "backfill" ? [{ file, meta }] : [];
+    });
     if (telemetryStore.getGlobalDisabled()) {
+      if (backfillEntries.length > 0) {
+        appendBackfillLog("upload_batch_completed", {
+          offerId: backfillEntries[0].meta.backfillOfferId,
+          chunkCount: backfillEntries.length,
+          uploaded: 0,
+          failed: 0,
+          deferred: backfillEntries.length,
+          reason: "global_telemetry_disabled",
+        });
+      }
       return { ok: 0, errors: [] };
     }
 
     const deviceId = credstore.getDeviceId();
     if (!deviceId) return { ok: 0, errors: [] };
 
+    if (backfillEntries.length > 0) {
+      appendBackfillLog("upload_batch_started", {
+        offerId: backfillEntries[0].meta.backfillOfferId,
+        chunkCount: backfillEntries.length,
+        totalQueueCount: files.length,
+      });
+    }
     console.error(`[skillmeter] Draining ${files.length} transcript chunk(s)`);
     // Best-effort, single-flight refresh once per batch (see drainFailedLogs).
     await ensureFreshLicense(deviceId);
     const results = await Promise.allSettled(
       files.map((file) => uploadDeltaChunk(file, deviceId, timeoutMs))
     );
+    if (backfillEntries.length > 0) {
+      const backfillFiles = new Set(
+        backfillEntries.map((entry) => entry.file)
+      );
+      let uploaded = 0;
+      let failed = 0;
+      let deferred = 0;
+      files.forEach((file, index) => {
+        if (!backfillFiles.has(file)) return;
+        const result = results[index];
+        if (result.status === "rejected") {
+          failed++;
+        } else if (result.value?.ok) {
+          uploaded++;
+        } else if (result.value?.error) {
+          failed++;
+        } else {
+          deferred++;
+        }
+      });
+      appendBackfillLog("upload_batch_completed", {
+        offerId: backfillEntries[0].meta.backfillOfferId,
+        chunkCount: backfillEntries.length,
+        uploaded,
+        failed,
+        deferred,
+      });
+    }
     return tally(results);
   } finally {
     releaseQueueDrainLock(lock);
@@ -639,6 +739,7 @@ function stageTranscriptDelta(transcriptPath, promptId, deviceId, repository) {
 function stageTranscriptSnapshot(transcriptPath, repository, {
   transformRecords = (records) => records,
   cutoffAt = Infinity,
+  backfillOfferId = "",
 } = {}) {
   if (!repository?.repoKey) {
     return { chunks: 0, skipped: true, reason: "missing_repository" };
@@ -695,6 +796,7 @@ function stageTranscriptSnapshot(transcriptPath, repository, {
       reset: chunk.reset,
       resetBaselineSeq: chunk.resetBaselineSeq,
       promptId: "backfill",
+      backfillOfferId,
     }, repository);
     if (bodyPath) sealed++;
   }

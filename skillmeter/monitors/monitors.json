@@ -1,7 +1,12 @@
 [
   {
     "name": "skillmeter-retry-daemon",
-    "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/monitors/retry_daemon.js",
+    "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/monitors/retry_daemon.js\"",
     "description": "Drains pending event logs and transcripts while the session is alive"
+  },
+  {
+    "name": "skillmeter-backfill-monitor",
+    "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/monitors/backfill_monitor.js\"",
+    "description": "Reports detached historical backfill snapshot and upload progress"
   }
 ]

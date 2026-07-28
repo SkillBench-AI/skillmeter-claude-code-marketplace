@@ -343,4 +343,36 @@ test("accept atomically enables scope and detached worker queues the snapshot", 
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   assert.equal(fs.existsSync(drainLock), false);
+
+  const logRecords = fs.readFileSync(
+    path.join(DATA_DIR, "logs", "backfill.ndjson"),
+    "utf8"
+  )
+    .trim()
+    .split("\n")
+    .map(JSON.parse)
+    .filter((record) => record.offerId === offer.offerId);
+  const events = new Set(logRecords.map((record) => record.event));
+  for (const event of [
+    "worker_spawned",
+    "worker_started",
+    "scan_completed",
+    "snapshot_progress",
+    "snapshot_completed",
+    "drain_requested",
+    "upload_batch_started",
+    "upload_deferred",
+    "upload_batch_completed",
+  ]) {
+    assert.ok(events.has(event), `missing backfill log event: ${event}`);
+  }
+  assert.ok(logRecords.every((record) => !("transcriptContent" in record)));
+
+  const snapshotMeta = transfer.listDeltaChunks()
+    .map((bodyPath) => readJson(
+      bodyPath.replace(/\.jsonl$/, ".meta.json")
+    ))
+    .find((meta) => meta.transcriptId === `${sessionId}.jsonl`);
+  assert.equal(snapshotMeta.promptId, "backfill");
+  assert.equal(snapshotMeta.backfillOfferId, offer.offerId);
 });

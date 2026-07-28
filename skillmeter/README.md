@@ -318,6 +318,15 @@ Logs are sent to the backend from durable filesystem queues:
 
 All uploads use gzip compression. Queues are partitioned by canonical GitHub repository identity, and the current global, organization, and repository policy is checked again immediately before each request. Successfully uploaded event batches are renamed with `.sent`; successfully uploaded transcript delta chunks are deleted. Failed uploads remain queued for retry.
 
+Historical backfill keeps snapshotting and upload detached from the interactive
+sign-in command. The always-on `skillmeter-backfill-monitor` watches that
+pipeline and reports scan, snapshot, upload-pass, and failure transitions to
+Claude Code. Detailed privacy-safe NDJSON diagnostics are stored at
+`${CLAUDE_PLUGIN_DATA}/logs/backfill.ndjson`; records include offer/session
+UUIDs, repository identity, chunk counts and sizes, HTTP status, duration, and
+retry outcomes, but never transcript content, local paths, JWTs, device IDs, or
+backend endpoints.
+
 ## Local State
 
 SkillMeter stores device identity, hash salt, license JWT, and the GitHub fallback cooldown in `~/.skillbench/credentials.json`. Global, organization, and repository telemetry decisions live in the single machine policy store `~/.skillbench/telemetry-policy.json`. The one-time historical-backfill decision lives in Claude Code's persistent plugin data and is removed by a normal final-scope uninstall. Existing and new users receive the same one-time offer.

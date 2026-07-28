@@ -15,6 +15,7 @@ const {
   applyOnboardingSelection,
   loadRepositoryTelemetryState,
 } = require("./lib/repository-telemetry");
+const { appendBackfillLog } = require("./lib/backfill-log");
 const { PLUGIN_ROOT } = require("./lib/paths");
 const telemetryStore = require("./lib/telemetry-store");
 
@@ -130,6 +131,12 @@ async function accept(args) {
     }
 
     const workerPid = spawnWorker(offerId);
+    appendBackfillLog("worker_spawned", {
+      offerId,
+      workerPid,
+      org,
+      repositoryCount: selected.length,
+    });
     process.stdout.write(JSON.stringify({
       ...policyResult,
       started: true,
