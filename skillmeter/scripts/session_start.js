@@ -27,8 +27,8 @@ const credstore = require("./credstore.js");
 // stdout here — all SessionStart stdout is emitted once, from onGate, so
 // watchPaths and the optional banner stay a single JSON object.
 async function prepareSession() {
-  // Classify this plugin-data lifecycle before getDeviceId() creates fresh
-  // machine state; otherwise a real first install would look like an upgrade.
+  // Materialize the one-time historical-backfill offer before sign-in state is
+  // evaluated. Existing and new users receive the same lifecycle.
   initializeBackfillLifecycle();
   const deviceId = credstore.getDeviceId();
   credstore.ensureSigninResultFile();

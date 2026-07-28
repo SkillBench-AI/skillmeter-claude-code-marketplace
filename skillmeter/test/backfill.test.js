@@ -58,11 +58,14 @@ test("lifecycle asks once, survives updates, and resets after data removal", () 
   assert.equal(reinstalled.status, "pending");
 });
 
-test("an existing pre-feature install is grandfathered", () => {
-  const legacyState = makeTempDir("skm-backfill-legacy-state-");
-  const legacyData = makeTempDir("skm-backfill-legacy-data-");
-  writeJson(path.join(legacyState, "credentials.json"), {
+test("an existing pre-feature install receives the one-time offer", () => {
+  const existingState = makeTempDir("skm-backfill-existing-state-");
+  const existingData = makeTempDir("skm-backfill-existing-data-");
+  writeJson(path.join(existingState, "credentials.json"), {
     device_id: "EXISTING-DEVICE",
+  });
+  writeJson(path.join(existingState, "telemetry-policy.json"), {
+    revision: 1,
   });
   const modulePath = path.resolve(
     __dirname,
@@ -79,15 +82,19 @@ test("an existing pre-feature install is grandfathered", () => {
       encoding: "utf8",
       env: {
         ...process.env,
-        CLAUDE_PLUGIN_DATA: legacyData,
-        SKILLMETER_STATE_DIR: legacyState,
+        CLAUDE_PLUGIN_DATA: existingData,
+        SKILLMETER_STATE_DIR: existingState,
       },
     }
   );
   assert.equal(result.status, 0, result.stderr);
   const state = JSON.parse(result.stdout);
-  assert.equal(state.status, "declined");
-  assert.equal(state.reason, "legacy_upgrade");
+  assert.equal(state.status, "pending");
+  assert.equal(state.reason, "one_time_offer");
+  assert.deepEqual(
+    fs.readdirSync(existingState).sort(),
+    ["credentials.json", "telemetry-policy.json"]
+  );
 });
 
 test("running backfill freezes live staging without moving its cursor", () => {
@@ -264,8 +271,7 @@ test("accept atomically enables scope and detached worker queues the snapshot", 
     schema_version: 1,
     lifecycle_id: "e2e-lifecycle",
     status: "pending",
-    reason: "first_install",
-    initialized: true,
+    reason: "one_time_offer",
     created_at: Date.now(),
     updated_at: Date.now(),
   });

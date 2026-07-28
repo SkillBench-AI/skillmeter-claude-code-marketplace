@@ -120,7 +120,7 @@ If an onboarding command reports `stale: true`, settings changed while the
 question was open: run `list` again and show one updated combined question.
 Never apply the old selection to a changed list.
 
-### First-install historical backfill
+### One-time historical backfill
 
 On `Enable listed repositories` with `backfill.eligible: true`, do not apply
 onboarding yet. Claim the offer, including the exact active session UUID only

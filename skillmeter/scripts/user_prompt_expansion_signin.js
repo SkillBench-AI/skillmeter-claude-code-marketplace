@@ -93,8 +93,7 @@ async function main() {
   const input = await readStdin();
   if (!isSigninCommand(input)) return;
 
-  // Must run before markEngaged() materializes policy state, or a clean first
-  // install would be grandfathered as an existing installation.
+  // Existing and new users receive the same one-time backfill lifecycle.
   initializeBackfillLifecycle();
 
   // Re-running signin re-arms the gh fallback and clears any signed-out

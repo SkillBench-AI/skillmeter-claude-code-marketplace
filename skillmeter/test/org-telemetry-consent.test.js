@@ -109,7 +109,7 @@ test("first sign-in offers one combined organization and repository choice", () 
   );
 });
 
-test("first-install backfill is offered after repository selection and only once", () => {
+test("one-time backfill is offered after repository selection", () => {
   const repositoryChoice = SIGNIN_SKILL.indexOf(
     "Label: `Enable listed repositories`"
   );
@@ -224,8 +224,7 @@ test("signin expansion emits an explicit pending-consent state for a new sign-in
     schema_version: 1,
     lifecycle_id: "fresh-test-lifecycle",
     status: "pending",
-    reason: "first_install",
-    initialized: true,
+    reason: "one_time_offer",
     created_at: Date.now(),
     updated_at: Date.now(),
   });

@@ -8,11 +8,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 
-const {
-  CRED_FILE,
-  STATE_DIR,
-  TELEMETRY_POLICY_FILE,
-} = require("./config");
+const { STATE_DIR } = require("./config");
 const { atomicWriteJson, safeReadJson } = require("./io");
 const {
   BACKFILL_STATE_FILE: PLUGIN_DATA_BACKFILL_STATE_FILE,
@@ -24,7 +20,6 @@ const SCHEMA_VERSION = 1;
 const BACKFILL_STATE_FILE = process.env.CLAUDE_PLUGIN_DATA
   ? PLUGIN_DATA_BACKFILL_STATE_FILE
   : path.join(STATE_DIR, "backfill-state.json");
-const ROLLOUT_FILE = path.join(STATE_DIR, "backfill-rollout-v1.json");
 const LOCK_FILE = `${BACKFILL_STATE_FILE}.lock`;
 const LOCK_STALE_MS = 10_000;
 const RUNNING_STALE_MS = 30 * 60_000;
@@ -82,21 +77,12 @@ function withLock(callback) {
   }
 }
 
-function legacyInstallExists() {
-  const credentials = safeReadJson(CRED_FILE, {});
-  return (
-    typeof credentials.device_id === "string" ||
-    typeof credentials.license_jwt === "string" ||
-    fs.existsSync(TELEMETRY_POLICY_FILE)
-  );
-}
-
 function createLifecycleState() {
   const state = {
     schema_version: SCHEMA_VERSION,
     lifecycle_id: crypto.randomUUID(),
     status: "pending",
-    reason: "first_install",
+    reason: "one_time_offer",
     created_at: nowMs(),
     updated_at: nowMs(),
   };
@@ -119,57 +105,11 @@ function createLifecycleState() {
   }
 }
 
-function ensureRolloutMarker(state) {
-  const marker = {
-    schema_version: SCHEMA_VERSION,
-    first_lifecycle_id: state.lifecycle_id,
-    legacy_install_detected: legacyInstallExists(),
-    created_at: nowMs(),
-  };
-  fs.mkdirSync(path.dirname(ROLLOUT_FILE), { recursive: true, mode: 0o700 });
-  try {
-    const fd = fs.openSync(ROLLOUT_FILE, "wx", 0o600);
-    try {
-      fs.writeSync(fd, JSON.stringify(marker, null, 2) + "\n");
-      fs.fsyncSync(fd);
-    } finally {
-      fs.closeSync(fd);
-    }
-    return marker;
-  } catch (err) {
-    if (err?.code !== "EEXIST") throw err;
-    return safeReadJson(ROLLOUT_FILE, marker);
-  }
-}
-
 function initializeBackfillLifecycle() {
   return withLock(() => {
     let state = normalizeState(safeReadJson(BACKFILL_STATE_FILE, null));
     if (!state) state = createLifecycleState();
     if (!state) throw new Error("Unable to initialize backfill lifecycle.");
-
-    const marker = ensureRolloutMarker(state);
-    if (
-      !state.initialized &&
-      marker.first_lifecycle_id === state.lifecycle_id &&
-      marker.legacy_install_detected
-    ) {
-      state = {
-        ...state,
-        status: "declined",
-        reason: "legacy_upgrade",
-        initialized: true,
-        updated_at: nowMs(),
-      };
-      atomicWriteJson(BACKFILL_STATE_FILE, state);
-    } else if (!state.initialized) {
-      state = {
-        ...state,
-        initialized: true,
-        updated_at: nowMs(),
-      };
-      atomicWriteJson(BACKFILL_STATE_FILE, state);
-    }
     return state;
   });
 }
@@ -301,7 +241,6 @@ function isBackfillRunning() {
 
 module.exports = {
   BACKFILL_STATE_FILE,
-  ROLLOUT_FILE,
   RUNNING_STALE_MS,
   initializeBackfillLifecycle,
   readBackfillState,
