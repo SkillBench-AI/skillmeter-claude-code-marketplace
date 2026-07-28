@@ -46,7 +46,7 @@ const CONSENT_UI_CASES = [
   {
     state: "disabled",
     sectionStart: 'For an org whose `consent` is `false`',
-    sectionEnd: "If `orgs` is empty",
+    sectionEnd: "Apply the telemetry choice immediately",
     enableLabel: "Label: `Authorize @ORG`",
     deferLabel: "Label: `Keep off for now`",
   },
@@ -99,31 +99,46 @@ test("first sign-in offers one combined organization and repository choice", () 
   );
   assert.match(
     SIGNIN_SKILL,
-    /organization and\s+repository settings remain unchanged/
+    /organization and\s+repository settings remain\s+unchanged/
   );
   assert.match(SIGNIN_SKILL, /`Telemetry ON \(N\)`/);
   assert.match(SIGNIN_SKILL, /`Telemetry OFF \(N\)`/);
-  assert.match(
-    SIGNIN_SKILL,
-    /the ON list must contain every repository\s+that was displayed/
-  );
 });
 
-test("one-time backfill is offered after repository selection", () => {
+test("one-time backfill is separate from every telemetry choice", () => {
   const repositoryChoice = SIGNIN_SKILL.indexOf(
     "Label: `Enable listed repositories`"
   );
+  const telemetryOffChoice = SIGNIN_SKILL.indexOf(
+    "Label: `Keep telemetry off`"
+  );
   const historyChoice = SIGNIN_SKILL.indexOf("Header: `History`");
   assert.ok(repositoryChoice >= 0 && historyChoice > repositoryChoice);
+  assert.ok(telemetryOffChoice >= 0 && historyChoice > telemetryOffChoice);
+  assert.match(
+    SIGNIN_SKILL,
+    /Historical consent is independent of ongoing telemetry/
+  );
+  assert.match(
+    SIGNIN_SKILL,
+    /even when telemetry was kept off, turned off, organization-only,\s+or the telemetry question was cancelled/
+  );
   assert.match(SIGNIN_SKILL, /backfill\.js claim ACTIVE_SESSION_ID/);
   assert.match(SIGNIN_SKILL, /Label: `Send history`/);
   assert.match(SIGNIN_SKILL, /Label: `Skip`/);
   assert.match(
     SIGNIN_SKILL,
-    /backfill\.js accept OFFER_ID REVISION "ORG" onboard ID\.\.\./
+    /backfill\.js accept OFFER_ID REVISION "ORG" ID\.\.\./
   );
   assert.match(SIGNIN_SKILL, /backfill\.js decline OFFER_ID/);
-  assert.match(SIGNIN_SKILL, /does not\s+undo the repository choice/);
+  assert.match(
+    SIGNIN_SKILL,
+    /without changing organization or repository telemetry/
+  );
+  assert.doesNotMatch(
+    SIGNIN_SKILL,
+    /consume\s+the offer without displaying a History question/
+  );
 });
 
 const ENABLED_POLICY = {

@@ -103,8 +103,19 @@ test("running backfill freezes live staging without moving its cursor", () => {
   const running = backfillState.beginBackfill(claimed.state.offer_id, {
     org: REPOSITORY.org,
     repositoryIds: ["aaaaaaaaaaaa"],
+    repositoryKeys: [REPOSITORY.repoKey],
   });
   assert.equal(running.started, true);
+  assert.equal(backfillState.isBackfillUploadAuthorized({
+    offerId: claimed.state.offer_id,
+    org: REPOSITORY.org,
+    repoKey: REPOSITORY.repoKey,
+  }), true);
+  assert.equal(backfillState.isBackfillUploadAuthorized({
+    offerId: "another-offer",
+    org: REPOSITORY.org,
+    repoKey: REPOSITORY.repoKey,
+  }), false);
 
   const transcript = path.join(DATA_DIR, "live.jsonl");
   writeFile(transcript, jsonl([
@@ -236,7 +247,7 @@ test("snapshot ignores a discarded cursor but skips a real upload cursor", () =>
   );
 });
 
-test("accept atomically enables scope and detached worker queues the snapshot", async () => {
+test("accept queues historical data without changing telemetry policy", async () => {
   const repo = makeTempDir("skm-backfill-repo-");
   fs.mkdirSync(path.join(repo, ".git"));
   writeFile(
@@ -310,13 +321,21 @@ test("accept atomically enables scope and detached worker queues the snapshot", 
       offer.offerId,
       String(listed.revision),
       "skillbench-ai",
-      "onboard",
       target.id,
     ],
     { cwd: repo, env }
   );
   assert.equal(accepted.status, 0, accepted.stderr);
   assert.equal(JSON.parse(accepted.stdout).started, true);
+  const unchangedPolicy = readJson(
+    path.join(STATE_DIR, "telemetry-policy.json")
+  );
+  assert.notEqual(
+    unchangedPolicy.repositories[
+      "github.com/skillbench-ai/backfill-e2e"
+    ]?.enabled,
+    true
+  );
 
   const deadline = Date.now() + 3_000;
   let finalState;
@@ -375,4 +394,13 @@ test("accept atomically enables scope and detached worker queues the snapshot", 
     .find((meta) => meta.transcriptId === `${sessionId}.jsonl`);
   assert.equal(snapshotMeta.promptId, "backfill");
   assert.equal(snapshotMeta.backfillOfferId, offer.offerId);
+
+  transfer.purgeDisallowedQueues();
+  assert.ok(
+    transfer.listDeltaChunks().some((bodyPath) =>
+      readJson(bodyPath.replace(/\.jsonl$/, ".meta.json"))
+        .backfillOfferId === offer.offerId
+    ),
+    "telemetry-off cleanup must preserve the consented historical chunk"
+  );
 });

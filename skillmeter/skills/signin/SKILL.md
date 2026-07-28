@@ -16,8 +16,10 @@ When context contains `SkillMeter sign-in state JSON`, parse it. The
 The `backfill` object contains only the one-time offer status and an optional
 active session UUID.
 
-For an org whose `consent` is `null`, run one fresh repository scan before
-asking anything:
+If `orgs` is empty, do not call any tool. Report that sign-in succeeded but the
+license contains no telemetry organization.
+
+For every org, run one fresh repository scan before asking about telemetry:
 
 ```bash
 node ${CLAUDE_PLUGIN_ROOT}/scripts/repository_telemetry.js list
@@ -25,10 +27,12 @@ node ${CLAUDE_PLUGIN_ROOT}/scripts/repository_telemetry.js list
 
 Parse the JSON and retain only repositories whose `org` exactly equals `ORG`.
 Never show or infer local paths. If the command fails, report the error and do
-not ask a question or change policy.
+not ask a question or change policy for that org.
 
-Call `AskUserQuestion` exactly once with one combined, single-select telemetry
-question:
+### Ongoing telemetry
+
+For an org whose `consent` is `null`, call `AskUserQuestion` exactly once with
+one combined, single-select telemetry question:
 
 - Header: `Telemetry`
 - Question: Start with `Choose telemetry for @ORG.`, then add
@@ -47,43 +51,10 @@ question:
 
 When no matching repositories exist, omit `Enable listed repositories` and
 show only `Organization only` and `Keep telemetry off`. Do not use multi-select.
-If the user cancels this combined question, run no command; organization and
-repository settings remain unchanged.
 
 Map every displayed repository back to its exact 12-character hexadecimal `id`
 from the same fresh result. Never pass display labels, paths, custom input,
 inferred IDs, or repositories from another org.
-
-On `Keep telemetry off`, persist organization OFF:
-
-```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/org_telemetry_consent.js set "ORG" disabled
-```
-
-On `Organization only`, atomically authorize the organization and explicitly
-keep every displayed repository disabled:
-
-```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/repository_telemetry.js onboard REVISION "ORG" disabled ID...
-```
-
-Omit `ID...` when no repositories were found.
-
-On `Enable listed repositories` with `backfill.eligible: false`, atomically
-authorize the organization and enable exactly the displayed IDs:
-
-```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/repository_telemetry.js onboard REVISION "ORG" enabled ID...
-```
-
-If `backfill.eligible` is true and the user chooses either OFF option, consume
-the offer without displaying a History question:
-
-```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/backfill.js claim ACTIVE_SESSION_ID
-```
-
-Omit `ACTIVE_SESSION_ID` when `backfill.activeSessionId` is empty.
 
 For an org whose `consent` is `true`, do not run the first-onboarding flow
 above. Call `AskUserQuestion` exactly once:
@@ -112,102 +83,109 @@ above. Call `AskUserQuestion` exactly once:
 If the user cancels either existing-consent question, run no command and report
 that the existing setting was left unchanged.
 
-If `orgs` is empty, do not call any tool. Report that sign-in succeeded but the
-license contains no telemetry organization.
+Apply the telemetry choice immediately, before handling historical data:
 
-Pass the exact integer `revision`, org, and IDs returned by the list result.
-If an onboarding command reports `stale: true`, settings changed while the
-question was open: run `list` again and show one updated combined question.
-Never apply the old selection to a changed list.
+- `Enable listed repositories`:
 
-### One-time historical backfill
+  ```bash
+  node ${CLAUDE_PLUGIN_ROOT}/scripts/repository_telemetry.js onboard REVISION "ORG" enabled ID...
+  ```
 
-On `Enable listed repositories` with `backfill.eligible: true`, do not apply
-onboarding yet. Claim the offer, including the exact active session UUID only
-when non-empty:
+- `Organization only`:
 
-```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/backfill.js claim ACTIVE_SESSION_ID
-```
+  ```bash
+  node ${CLAUDE_PLUGIN_ROOT}/scripts/repository_telemetry.js onboard REVISION "ORG" disabled ID...
+  ```
 
-Only when the JSON result contains `claimed: true`, call `AskUserQuestion`
-exactly once:
+- `Keep telemetry off`, `Turn telemetry off`, or `Keep off for now`:
 
-- Header: `History`
-- Question: `Send sanitized transcripts from completed sessions in the repositories you just enabled?`
-- First option:
-  - Label: `Send history`
-  - Description: `Queue historical prompts and responses after removing tool results, images, secrets, personal data, and local paths.`
-- Second option:
-  - Label: `Skip`
-  - Description: `Do not send historical sessions. SkillMeter will not ask again for this installation.`
+  ```bash
+  node ${CLAUDE_PLUGIN_ROOT}/scripts/org_telemetry_consent.js set "ORG" disabled
+  ```
 
-If the user chooses `Send history`, atomically freeze live transcript staging,
-apply onboarding, and start the local snapshot worker:
+- `Keep authorized` or `Authorize @ORG`:
 
-```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/backfill.js accept OFFER_ID REVISION "ORG" onboard ID...
-```
+  ```bash
+  node ${CLAUDE_PLUGIN_ROOT}/scripts/org_telemetry_consent.js set "ORG" enabled
+  ```
 
-Use the exact `offerId` returned by `claim`. If the user chooses Skip or
-cancels, record the explicit decline and then run the normal
-`repository_telemetry.js onboard ... enabled ID...` command:
+Omit `ID...` when no repositories were found. If the user cancels a telemetry
+question, run no telemetry command; organization and repository settings remain
+unchanged. Cancellation does not cancel the separate History flow below.
 
-```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/backfill.js decline OFFER_ID
-```
+Pass the exact integer `revision`, org, and IDs returned by the list result. If
+an onboarding command reports `stale: true`, run `list` again and show one
+updated telemetry question. Never apply the old selection to a changed list.
 
-A cancelled backfill question cancels only historical backfill; it does not
-undo the repository choice already made. If `accept` reports `stale: true`,
-refresh the repository list and reconfirm its exact scope, then reuse the same
-offer ID without asking the History question again.
-
-After a successful onboarding command, always print an explicit final summary
-using every entry in `results`, never only a count:
+After a successful onboarding command, print an explicit final telemetry
+summary using every entry in `results`:
 
 - `Telemetry ON (N)` followed by every enabled repository's exact
   `displayName`, one per line.
 - `Telemetry OFF (N)` followed by every disabled repository's exact
   `displayName`, one per line.
 
-For `Enable listed repositories`, the ON list must contain every repository
-that was displayed. For `Organization only`, the OFF list must contain every
-displayed repository. If a result was unchanged, print it separately with its
-returned reason.
+### Separate one-time historical backfill
 
-For existing `consent: true` or `consent: false`, normally persist the selected
-organization value with:
+Historical consent is independent of ongoing telemetry. When
+`backfill.eligible` is true, continue this flow after the telemetry question
+and command even when telemetry was kept off, turned off, organization-only,
+or the telemetry question was cancelled.
 
-```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/org_telemetry_consent.js set "ORG" enabled
-```
-
-or:
+Run a new repository scan so the historical scope uses the current revision:
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/org_telemetry_consent.js set "ORG" disabled
+node ${CLAUDE_PLUGIN_ROOT}/scripts/repository_telemetry.js list
 ```
 
-When `backfill.eligible` is true and an existing-consent choice would leave the
-organization enabled, run a fresh `repository_telemetry.js list` before
-changing the org:
-
-- For `consent: true`, historical candidates are this org's entries whose
-  `projectSetting` value is `enabled`; use policy action `preserve`.
-- For `consent: false`, historical candidates are this org's entries whose
-  `projectSetting` value is `enabled`; use policy action `reauthorize`.
-
-If the chosen final state is off or there are no enabled candidates, consume
-the offer with `backfill.js claim`, do not ask about history, and run the normal
-org command. Otherwise claim and show the same History question. On Send
-history, replace the normal org command with:
+Retain every exact repository for `ORG`; historical scope does not depend on
+its current telemetry setting. Claim the one-time offer, including the exact
+active session UUID only when non-empty:
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/backfill.js accept OFFER_ID REVISION "ORG" POLICY_ACTION ID...
+node ${CLAUDE_PLUGIN_ROOT}/scripts/backfill.js claim ACTIVE_SESSION_ID
 ```
 
-On Skip or cancel, decline the offer and run the normal org command. Never
-include disabled, unselected, stale, or another org's repository IDs.
+Omit `ACTIVE_SESSION_ID` when `backfill.activeSessionId` is empty. If no
+matching repositories exist, decline the claimed offer without asking a
+question and report that no historical repository scope was available.
+
+Only when the claim result contains `claimed: true` and matching repositories
+exist, call `AskUserQuestion` exactly once:
+
+- Header: `History`
+- Question: Start with
+  `Send sanitized transcripts from completed sessions in these repositories?`,
+  then list every matching repository's exact `displayName`, one per line.
+- First option:
+  - Label: `Send history`
+  - Description: `Queue historical prompts and responses after removing tool results, images, secrets, personal data, and local paths. This does not enable ongoing telemetry.`
+- Second option:
+  - Label: `Skip`
+  - Description: `Do not send historical sessions. SkillMeter will not ask again for this installation.`
+
+On `Send history`, freeze live transcript staging for the snapshot and start
+the detached worker without changing organization or repository telemetry:
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/scripts/backfill.js accept OFFER_ID REVISION "ORG" ID...
+```
+
+Use the exact `offerId`, revision, org, and IDs from the claim and fresh list.
+On Skip or cancel:
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/scripts/backfill.js decline OFFER_ID
+```
+
+If `accept` reports `stale: true`, refresh the list and reconfirm the changed
+historical repository scope without changing the already-applied telemetry
+choice. Never include stale repositories or repositories from another org.
+
+The global telemetry kill-switch still pauses historical transmission. An
+organization or repository telemetry OFF choice does not block a separately
+accepted historical upload. Report the telemetry result and historical result
+as two independent outcomes.
 
 Use the org value exactly as supplied in the sign-in state. Never infer or
 substitute an organization. Report each script result. If

@@ -169,6 +169,7 @@ function markBackfillDeclined(offerId, reason = "user_declined") {
 function beginBackfill(offerId, {
   org,
   repositoryIds,
+  repositoryKeys,
 } = {}) {
   let started = false;
   const state = mutateBackfillState((current) => {
@@ -186,12 +187,30 @@ function beginBackfill(offerId, {
       reason: "snapshotting",
       org,
       repository_ids: [...new Set(repositoryIds || [])],
+      repository_keys: [...new Set(repositoryKeys || [])],
+      upload_authorized: true,
       processed_transcripts: 0,
       queued_chunks: 0,
       skipped_transcripts: 0,
     };
   });
   return { started, state };
+}
+
+function isBackfillUploadAuthorized({
+  offerId,
+  org,
+  repoKey,
+} = {}) {
+  const state = readBackfillState();
+  return !!(
+    state &&
+    state.upload_authorized === true &&
+    state.offer_id === offerId &&
+    state.org === org &&
+    Array.isArray(state.repository_keys) &&
+    state.repository_keys.includes(repoKey)
+  );
 }
 
 function restoreClaimedOffer(offerId, reason = "offer_consumed") {
@@ -252,4 +271,5 @@ module.exports = {
   updateBackfillProgress,
   finishBackfill,
   isBackfillRunning,
+  isBackfillUploadAuthorized,
 };

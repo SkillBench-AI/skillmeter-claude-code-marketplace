@@ -15,7 +15,6 @@ const {
   spawnDetachedDrain,
   stageTranscriptSnapshot,
 } = require("./lib/transfer");
-const credstore = require("./credstore");
 
 async function main() {
   const offerId = process.argv[2] || "";
@@ -46,8 +45,7 @@ async function main() {
     .filter((repository) =>
       repository &&
       repository.org === state.org &&
-      repository.projectSetting === "enabled" &&
-      credstore.getOrgTelemetryConsent(repository.org) === true
+      (state.repository_keys || []).includes(repository.repoKey)
     );
   if (selected.length !== (state.repository_ids || []).length) {
     throw new Error("Backfill repository scope changed before snapshotting.");

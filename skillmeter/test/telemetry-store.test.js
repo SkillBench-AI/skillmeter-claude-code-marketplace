@@ -243,7 +243,21 @@ test("global OFF pauses queues without deleting them", async (t) => {
 
 test("backfill upload records detailed attempt and success diagnostics", async (t) => {
   const repoKey = "github.com/skillbench-ai/backfill-log";
-  store.setRepositoryOverride(repoKey, true);
+  store.setOrganizationConsent("skillbench-ai", false);
+  store.setRepositoryOverride(repoKey, false);
+  writeJson(path.join(DATA_DIR, "backfill-state.json"), {
+    schema_version: 1,
+    lifecycle_id: "backfill-log-lifecycle",
+    status: "completed",
+    reason: "snapshot_queued",
+    offer_id: "offer-log-test",
+    org: "skillbench-ai",
+    repository_ids: ["aaaaaaaaaaaa"],
+    repository_keys: [repoKey],
+    upload_authorized: true,
+    created_at: Date.now(),
+    updated_at: Date.now(),
+  });
   const body = transfer.sealDeltaChunk(
     "backfill-log.jsonl",
     [JSON.stringify({ uuid: "backfill-log-1" })],
@@ -262,6 +276,12 @@ test("backfill upload records detailed attempt and success diagnostics", async (
   global.fetch = async () => ({ ok: true, status: 202 });
   t.after(() => { global.fetch = previousFetch; });
 
+  store.setGlobalEnabled(false);
+  const paused = await transfer.drainDeltaChunks(100);
+  assert.equal(paused.ok, 0);
+  assert.equal(fs.existsSync(body), true);
+  store.setGlobalEnabled(true);
+
   const result = await transfer.drainDeltaChunks(100);
   assert.equal(result.ok, 1);
   assert.equal(fs.existsSync(body), false);
@@ -277,16 +297,20 @@ test("backfill upload records detailed attempt and success diagnostics", async (
   assert.deepEqual(
     records.map((record) => record.event),
     [
+      "upload_batch_completed",
       "upload_batch_started",
       "upload_attempt",
       "upload_succeeded",
       "upload_batch_completed",
     ]
   );
-  assert.equal(records[2].httpStatus, 202);
-  assert.equal(records[2].repository, repoKey);
-  assert.ok(records[2].rawBytes > 0);
-  assert.ok(records[2].gzipBytes > 0);
+  assert.equal(records[0].reason, "global_telemetry_disabled");
+  assert.equal(records[3].httpStatus, 202);
+  assert.equal(records[3].repository, repoKey);
+  assert.ok(records[3].rawBytes > 0);
+  assert.ok(records[3].gzipBytes > 0);
+
+  store.setOrganizationConsent("skillbench-ai", true);
 });
 
 test("skipped periods advance a discard cursor without staging a chunk", () => {

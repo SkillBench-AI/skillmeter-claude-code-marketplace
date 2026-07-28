@@ -53,7 +53,10 @@ const {
   purgeDisallowedOrganizationAuditQueues,
 } = require("./organization-audit-queue");
 const { cleanupStaleSessionContexts } = require("./cwd-context");
-const { isBackfillRunning } = require("./backfill-state");
+const {
+  isBackfillRunning,
+  isBackfillUploadAuthorized,
+} = require("./backfill-state");
 
 // Async gzip for transcript uploads — keeps the hook's event loop responsive
 // while compressing multi-MB transcripts. Sync variants are still used for
@@ -477,6 +480,37 @@ function logBackfillChunk(meta, event, details = {}) {
   });
 }
 
+function isBackfillChunkAuthorized(meta, context) {
+  return !!(
+    meta?.promptId === "backfill" &&
+    meta.backfillOfferId &&
+    isBackfillUploadAuthorized({
+      offerId: meta.backfillOfferId,
+      org: context?.org,
+      repoKey: context?.repoKey,
+    })
+  );
+}
+
+function chunkDisposition(meta, context) {
+  if (telemetryStore.getGlobalDisabled()) return "pause";
+  if (meta?.promptId === "backfill" && meta.backfillOfferId) {
+    return isBackfillChunkAuthorized(meta, context) ? "send" : "delete";
+  }
+  return queueDisposition(context);
+}
+
+function chunkTransmissionAllowed(meta, context) {
+  if (telemetryStore.getGlobalDisabled()) return false;
+  if (meta?.promptId === "backfill" && meta.backfillOfferId) {
+    return (
+      isBackfillChunkAuthorized(meta, context) &&
+      credstore.getAllowedGitHubOrgs().includes(context.org)
+    );
+  }
+  return credstore.isTelemetryTransmissionAllowed(context.repoKey);
+}
+
 // Upload one delta chunk. On 2xx, deletes the body then the meta; otherwise
 // leaves both for retry. Result shape matches drainFailedLogs entries.
 async function uploadDeltaChunk(bodyPath, deviceId, timeoutMs = TRANSCRIPT_TIMEOUT) {
@@ -496,7 +530,7 @@ async function uploadDeltaChunk(bodyPath, deviceId, timeoutMs = TRANSCRIPT_TIMEO
     try { fs.unlinkSync(metaPath); } catch {}
     return { ok: false, error: "invalid_queue_context" };
   }
-  const disposition = queueDisposition(context);
+  const disposition = chunkDisposition(meta, context);
   if (disposition === "delete") {
     logBackfillChunk(meta, "upload_failed", {
       error: "repository_policy_deleted_queue",
@@ -506,7 +540,7 @@ async function uploadDeltaChunk(bodyPath, deviceId, timeoutMs = TRANSCRIPT_TIMEO
   }
   if (
     disposition === "pause" ||
-    !credstore.isTelemetryTransmissionAllowed(context.repoKey)
+    !chunkTransmissionAllowed(meta, context)
   ) {
     console.error(`[skillmeter] Transcript chunk: telemetry not authorized for this repository — kept for retry`);
     logBackfillChunk(meta, "upload_deferred", {
@@ -559,8 +593,8 @@ async function uploadDeltaChunk(bodyPath, deviceId, timeoutMs = TRANSCRIPT_TIMEO
 
   try {
     if (
-      queueDisposition(context) !== "send" ||
-      !credstore.isTelemetryTransmissionAllowed(context.repoKey)
+      chunkDisposition(meta, context) !== "send" ||
+      !chunkTransmissionAllowed(meta, context)
     ) {
       logBackfillChunk(meta, "upload_deferred", {
         reason: "policy_changed_before_request",

@@ -9,15 +9,12 @@ const {
   claimBackfillOffer,
   finishBackfill,
   markBackfillDeclined,
-  restoreClaimedOffer,
 } = require("./lib/backfill-state");
 const {
-  applyOnboardingSelection,
   loadRepositoryTelemetryState,
 } = require("./lib/repository-telemetry");
 const { appendBackfillLog } = require("./lib/backfill-log");
 const { PLUGIN_ROOT } = require("./lib/paths");
-const telemetryStore = require("./lib/telemetry-store");
 
 function fail(message) {
   process.stderr.write(`SkillMeter: ${message}\n`);
@@ -40,19 +37,17 @@ function validRepositoryIds(ids) {
 }
 
 async function accept(args) {
-  const [offerId, revisionArg, orgArg, policyAction, ...ids] = args;
+  const [offerId, revisionArg, orgArg, ...ids] = args;
   const revision = Number(revisionArg);
   const org = String(orgArg || "").trim().toLowerCase();
   if (
     !offerId ||
     !Number.isSafeInteger(revision) ||
     revision < 0 ||
-    !["onboard", "preserve", "reauthorize"].includes(policyAction) ||
     !validRepositoryIds(ids)
   ) {
     fail(
-      "accept requires OFFER_ID REVISION ORG " +
-      "<onboard|preserve|reauthorize> and repository IDs."
+      "accept requires OFFER_ID REVISION ORG and repository IDs."
     );
   }
   if (
@@ -80,56 +75,29 @@ async function accept(args) {
     ])
   );
   const selected = [...new Set(ids)].map((id) => repositoriesById.get(id));
-  if (
-    selected.some((repository) => !repository || repository.org !== org) ||
-    (
-      policyAction === "preserve" &&
-      selected.some((repository) => repository.projectSetting !== "enabled")
-    ) ||
-    (
-      policyAction === "reauthorize" &&
-      selected.some((repository) => repository.projectSetting !== "enabled")
-    )
-  ) {
+  if (selected.some((repository) => !repository || repository.org !== org)) {
     fail("one or more repositories are not eligible for this backfill action.");
   }
 
   const started = beginBackfill(offerId, {
     org,
     repositoryIds: [...new Set(ids)],
+    repositoryKeys: selected.map((repository) => repository.repoKey),
   });
   if (!started.started) fail("the backfill offer is no longer available.");
 
-  let policyResult = {
+  const policyResult = {
     revision: repositoryState.revision,
     changed: 0,
     results: selected.map((repository) => ({
       id: repository.id,
       displayName: repository.displayName,
       changed: false,
-      effective: "enabled",
-      reason: "preserved",
+      effective: repository.effective,
+      reason: "historical_only",
     })),
   };
   try {
-    if (policyAction === "onboard") {
-      policyResult = applyOnboardingSelection(org, ids, true, repositoryState);
-      if (policyResult.stale) {
-        restoreClaimedOffer(offerId);
-        process.stdout.write(JSON.stringify({
-          ...policyResult,
-          started: false,
-        }) + "\n");
-        return;
-      }
-      if (!policyResult.organizationAuthorized) {
-        throw new Error("Unable to apply onboarding selection.");
-      }
-    } else if (policyAction === "reauthorize") {
-      credstore.setOrgTelemetryConsent(org, true);
-      policyResult.revision = telemetryStore.getPolicyRevision();
-    }
-
     const workerPid = spawnWorker(offerId);
     appendBackfillLog("worker_spawned", {
       offerId,

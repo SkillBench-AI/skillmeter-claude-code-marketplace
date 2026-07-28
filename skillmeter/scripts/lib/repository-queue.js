@@ -13,6 +13,7 @@ const {
   REPOSITORIES_LOG_DIR,
   repositoryQueuePaths,
 } = require("./paths");
+const { isBackfillUploadAuthorized } = require("./backfill-state");
 const telemetryStore = require("./telemetry-store");
 
 function queueContextForRepository(repoKey, org = "") {
@@ -98,8 +99,33 @@ function clearRepositoryPayloads(context) {
   } catch {}
   try {
     if (fs.existsSync(context.chunks)) {
-      fs.rmSync(context.chunks, { recursive: true, force: true });
-      removed = true;
+      const preserved = new Set();
+      for (const entry of fs.readdirSync(context.chunks)) {
+        if (!entry.endsWith(".meta.json")) continue;
+        const metaPath = path.join(context.chunks, entry);
+        const bodyEntry = entry.replace(/\.meta\.json$/, ".jsonl");
+        const meta = safeReadJson(metaPath, null);
+        if (
+          fs.existsSync(path.join(context.chunks, bodyEntry)) &&
+          meta?.promptId === "backfill" &&
+          isBackfillUploadAuthorized({
+            offerId: meta.backfillOfferId,
+            org: context.org,
+            repoKey: context.repoKey,
+          })
+        ) {
+          preserved.add(entry);
+          preserved.add(bodyEntry);
+        }
+      }
+      for (const entry of fs.readdirSync(context.chunks)) {
+        if (preserved.has(entry)) continue;
+        fs.rmSync(path.join(context.chunks, entry), {
+          recursive: true,
+          force: true,
+        });
+        removed = true;
+      }
     }
   } catch {}
   return removed;
@@ -116,6 +142,8 @@ function purgeRepositoryQueue(repoKey) {
     );
     if (fs.existsSync(paths.root)) {
       removed = clearRepositoryPayloads({
+        repoKey: normalized,
+        org: normalized.split("/")[1],
         root: paths.root,
         chunks: paths.chunks,
       });

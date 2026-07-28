@@ -90,6 +90,15 @@ test("monitor reports lifecycle summaries without transcript content", () => {
     }),
     ""
   );
+  assert.equal(
+    formatNotification({
+      event: "upload_batch_completed",
+      uploaded: 0,
+      failed: 0,
+      deferred: 21,
+    }),
+    ""
+  );
 });
 
 test("monitor counts only backfill upload chunks", () => {

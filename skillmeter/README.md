@@ -294,10 +294,12 @@ machine, by one shared boundary (`lib/sanitize.js`):
 - **Harness data** (`SessionStart`) runs through the same sanitizer; see
   [Harness Data](#harness-data).
 
-After the feature becomes available, `/skillmeter:signin` can separately offer
-new and existing users the option to queue completed historical sessions for
-the repositories just enabled. This question is shown once per installation
-lifecycle. Historical snapshots retain their UUID boundary but remove
+After the feature becomes available, `/skillmeter:signin` asks new and existing
+users about completed historical sessions separately from ongoing telemetry.
+The History question is shown once per installation lifecycle even when
+organization or repository telemetry is kept off. Accepting it grants only the
+listed historical repositories for that one backfill offer; it does not enable
+live hook telemetry. Historical snapshots retain their UUID boundary but remove
 tool-result and image blocks before the shared secret, email, and path
 sanitizer runs. The current sign-in session and files modified after the offer
 are excluded.
@@ -326,6 +328,12 @@ Claude Code. Detailed privacy-safe NDJSON diagnostics are stored at
 UUIDs, repository identity, chunk counts and sizes, HTTP status, duration, and
 retry outcomes, but never transcript content, local paths, JWTs, device IDs, or
 backend endpoints.
+
+An accepted historical offer remains uploadable when ongoing organization or
+repository telemetry is off. Queue cleanup preserves only chunks matching the
+durable offer ID, organization, and repository scope; unrelated live payloads
+are still deleted. The global telemetry kill-switch remains authoritative and
+pauses both live and historical transmission.
 
 ## Local State
 
