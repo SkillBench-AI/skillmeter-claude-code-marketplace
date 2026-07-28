@@ -165,7 +165,7 @@ test("every command hook uses exec form with a bundled script", () => {
     }
   }
 
-  assert.equal(commandHookCount, 28, "expected every configured hook command");
+  assert.equal(commandHookCount, 29, "expected every configured hook command");
 });
 
 test("every hook.js-dispatched event has a matching registry mapper", () => {

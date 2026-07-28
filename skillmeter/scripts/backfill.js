@@ -3,26 +3,29 @@
 const path = require("path");
 const { spawn } = require("child_process");
 
-const credstore = require("./credstore");
 const {
-  beginBackfill,
-  claimBackfillOffer,
-  finishBackfill,
-  markBackfillDeclined,
-} = require("./lib/backfill-state");
-const {
-  loadRepositoryTelemetryState,
-} = require("./lib/repository-telemetry");
-const { appendBackfillLog } = require("./lib/backfill-log");
-const { PLUGIN_ROOT } = require("./lib/paths");
+  bindBackfillDataRoot,
+} = require("./lib/backfill-data-root");
+
+function loadRuntime() {
+  return {
+    credstore: require("./credstore"),
+    backfillState: require("./lib/backfill-state"),
+    loadRepositoryTelemetryState:
+      require("./lib/repository-telemetry").loadRepositoryTelemetryState,
+    appendBackfillLog: require("./lib/backfill-log").appendBackfillLog,
+    transcriptReport: require("./lib/backfill-report").transcriptReport,
+    pluginRoot: require("./lib/paths").PLUGIN_ROOT,
+  };
+}
 
 function fail(message) {
   process.stderr.write(`SkillMeter: ${message}\n`);
   process.exit(1);
 }
 
-function spawnWorker(offerId) {
-  const script = path.join(PLUGIN_ROOT, "scripts", "backfill_worker.js");
+function spawnWorker(pluginRoot, offerId) {
+  const script = path.join(pluginRoot, "scripts", "backfill_worker.js");
   const child = spawn(process.execPath, [script, offerId], {
     detached: true,
     stdio: "ignore",
@@ -36,7 +39,7 @@ function validRepositoryIds(ids) {
   return ids.length > 0 && ids.every((id) => /^[0-9a-f]{12}$/.test(id));
 }
 
-async function accept(args) {
+async function accept(args, runtime) {
   const [offerId, revisionArg, orgArg, ...ids] = args;
   const revision = Number(revisionArg);
   const org = String(orgArg || "").trim().toLowerCase();
@@ -51,13 +54,13 @@ async function accept(args) {
     );
   }
   if (
-    !credstore.hasValidLicense() ||
-    !credstore.getAllowedGitHubOrgs().includes(org)
+    !runtime.credstore.hasValidLicense() ||
+    !runtime.credstore.getAllowedGitHubOrgs().includes(org)
   ) {
     fail("the requested organization is not present in the current valid license.");
   }
 
-  const repositoryState = await loadRepositoryTelemetryState();
+  const repositoryState = await runtime.loadRepositoryTelemetryState();
   if (revision !== repositoryState.revision) {
     process.stdout.write(JSON.stringify({
       revision: repositoryState.revision,
@@ -79,7 +82,7 @@ async function accept(args) {
     fail("one or more repositories are not eligible for this backfill action.");
   }
 
-  const started = beginBackfill(offerId, {
+  const started = runtime.backfillState.beginBackfill(offerId, {
     org,
     repositoryIds: [...new Set(ids)],
     repositoryKeys: selected.map((repository) => repository.repoKey),
@@ -98,8 +101,8 @@ async function accept(args) {
     })),
   };
   try {
-    const workerPid = spawnWorker(offerId);
-    appendBackfillLog("worker_spawned", {
+    const workerPid = spawnWorker(runtime.pluginRoot, offerId);
+    runtime.appendBackfillLog("worker_spawned", {
       offerId,
       workerPid,
       org,
@@ -112,7 +115,7 @@ async function accept(args) {
       workerPid,
     }) + "\n");
   } catch (err) {
-    finishBackfill(offerId, "failed", {
+    runtime.backfillState.finishBackfill(offerId, "failed", {
       error: String(err?.message || err).slice(0, 240),
     });
     throw err;
@@ -120,27 +123,48 @@ async function accept(args) {
 }
 
 async function main() {
-  const [action, ...args] = process.argv.slice(2);
-  if (action === "claim") {
-    const claimed = claimBackfillOffer(args[0] || "");
+  const [action, lifecycleId, ...args] = process.argv.slice(2);
+  if (
+    !["claim", "manual-claim", "decline", "accept", "status"].includes(action) ||
+    !bindBackfillDataRoot(lifecycleId || "")
+  ) {
+    fail("a valid backfill lifecycle ID is required.");
+  }
+  const runtime = loadRuntime();
+  if (action === "claim" || action === "manual-claim") {
+    const claimed = runtime.backfillState.claimBackfillOffer(args[0] || "", {
+      manual: action === "manual-claim",
+    });
     process.stdout.write(JSON.stringify({
       claimed: claimed.claimed,
       offerId: claimed.claimed ? claimed.state.offer_id : null,
       cutoffAt: claimed.claimed ? claimed.state.cutoff_at : null,
       status: claimed.state.status,
+      reason: claimed.state.reason,
+      lifecycleId: claimed.state.lifecycle_id,
     }) + "\n");
     return;
   }
   if (action === "decline") {
-    const state = markBackfillDeclined(args[0] || "");
+    const state = runtime.backfillState.markBackfillDeclined(args[0] || "");
     process.stdout.write(JSON.stringify({ status: state.status }) + "\n");
     return;
   }
   if (action === "accept") {
-    await accept(args);
+    await accept(args, runtime);
     return;
   }
-  fail("usage: backfill.js <claim [SESSION_ID]|decline OFFER_ID|accept ...>");
+  if (action === "status") {
+    const state = runtime.backfillState.readBackfillState();
+    process.stdout.write(JSON.stringify({
+      lifecycleId: state.lifecycle_id,
+      status: state.status,
+      reason: state.reason,
+      offerId: state.offer_id || null,
+      transcripts: runtime.transcriptReport(state),
+    }) + "\n");
+    return;
+  }
 }
 
 main().catch((err) => fail(err.message));

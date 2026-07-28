@@ -137,13 +137,21 @@ function publicBackfillState() {
   return {
     eligible: state.status === "pending",
     status: state.status,
+    reason: state.reason,
+    lifecycleId: state.lifecycle_id,
   };
 }
 
-function claimBackfillOffer(activeSessionId = "") {
+function claimBackfillOffer(activeSessionId = "", { manual = false } = {}) {
   let claimed = false;
   const state = mutateBackfillState((state) => {
-    if (state.status !== "pending") return null;
+    const manuallyRetryable =
+      manual &&
+      (
+        state.status === "failed" ||
+        state.status === "declined"
+      );
+    if (state.status !== "pending" && !manuallyRetryable) return null;
     claimed = true;
     return {
       ...state,
@@ -154,6 +162,7 @@ function claimBackfillOffer(activeSessionId = "") {
       active_session_id: SESSION_ID_RE.test(activeSessionId)
         ? activeSessionId
         : "",
+      manual_trigger: manual,
     };
   });
   return { claimed, state };

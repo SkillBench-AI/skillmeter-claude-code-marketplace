@@ -123,14 +123,20 @@ test("one-time backfill is separate from every telemetry choice", () => {
     SIGNIN_SKILL,
     /even when telemetry was kept off, turned off, organization-only,\s+or the telemetry question was cancelled/
   );
-  assert.match(SIGNIN_SKILL, /backfill\.js claim ACTIVE_SESSION_ID/);
+  assert.match(
+    SIGNIN_SKILL,
+    /backfill\.js claim LIFECYCLE_ID ACTIVE_SESSION_ID/
+  );
   assert.match(SIGNIN_SKILL, /Label: `Send history`/);
   assert.match(SIGNIN_SKILL, /Label: `Skip`/);
   assert.match(
     SIGNIN_SKILL,
-    /backfill\.js accept OFFER_ID REVISION "ORG" ID\.\.\./
+    /backfill\.js accept LIFECYCLE_ID OFFER_ID REVISION "ORG" ID\.\.\./
   );
-  assert.match(SIGNIN_SKILL, /backfill\.js decline OFFER_ID/);
+  assert.match(
+    SIGNIN_SKILL,
+    /backfill\.js decline LIFECYCLE_ID OFFER_ID/
+  );
   assert.match(
     SIGNIN_SKILL,
     /without changing organization or repository telemetry/
@@ -237,7 +243,7 @@ test("signin expansion emits an explicit pending-consent state for a new sign-in
   const claudeConfigDir = makeTempDir("skm-org-consent-");
   writeJson(path.join(dataDir, "backfill-state.json"), {
     schema_version: 1,
-    lifecycle_id: "fresh-test-lifecycle",
+    lifecycle_id: "55555555-5555-4555-8555-555555555555",
     status: "pending",
     reason: "one_time_offer",
     created_at: Date.now(),
@@ -277,6 +283,8 @@ test("signin expansion emits an explicit pending-consent state for a new sign-in
   assert.deepEqual(state.backfill, {
     eligible: true,
     status: "pending",
+    reason: "one_time_offer",
+    lifecycleId: "55555555-5555-4555-8555-555555555555",
     activeSessionId: "11111111-1111-4111-8111-111111111111",
   });
   assert.equal(typeof state.repositoryTelemetry.revision, "number");

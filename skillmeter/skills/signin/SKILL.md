@@ -140,10 +140,11 @@ node ${CLAUDE_PLUGIN_ROOT}/scripts/repository_telemetry.js list
 
 Retain every exact repository for `ORG`; historical scope does not depend on
 its current telemetry setting. Claim the one-time offer, including the exact
-active session UUID only when non-empty:
+active session UUID only when non-empty. Pass `backfill.lifecycleId`
+immediately after `claim`:
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/backfill.js claim ACTIVE_SESSION_ID
+node ${CLAUDE_PLUGIN_ROOT}/scripts/backfill.js claim LIFECYCLE_ID ACTIVE_SESSION_ID
 ```
 
 Omit `ACTIVE_SESSION_ID` when `backfill.activeSessionId` is empty. If no
@@ -168,14 +169,15 @@ On `Send history`, freeze live transcript staging for the snapshot and start
 the detached worker without changing organization or repository telemetry:
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/backfill.js accept OFFER_ID REVISION "ORG" ID...
+node ${CLAUDE_PLUGIN_ROOT}/scripts/backfill.js accept LIFECYCLE_ID OFFER_ID REVISION "ORG" ID...
 ```
 
-Use the exact `offerId`, revision, org, and IDs from the claim and fresh list.
+Use the exact lifecycle ID, offer ID, revision, org, and IDs from the context,
+claim, and fresh list.
 On Skip or cancel:
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/backfill.js decline OFFER_ID
+node ${CLAUDE_PLUGIN_ROOT}/scripts/backfill.js decline LIFECYCLE_ID OFFER_ID
 ```
 
 If `accept` reports `stale: true`, refresh the list and reconfirm the changed

@@ -54,6 +54,19 @@
             "timeout": 12
           }
         ]
+      },
+      {
+        "matcher": "backfill|skillmeter:backfill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/user_prompt_expansion_backfill.js"
+            ],
+            "timeout": 10
+          }
+        ]
       }
     ],
     "PreToolUse": [

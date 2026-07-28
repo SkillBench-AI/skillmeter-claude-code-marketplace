@@ -327,7 +327,10 @@ Claude Code. Detailed privacy-safe NDJSON diagnostics are stored at
 `${CLAUDE_PLUGIN_DATA}/logs/backfill.ndjson`; records include offer/session
 UUIDs, repository identity, chunk counts and sizes, HTTP status, duration, and
 retry outcomes, but never transcript content, local paths, JWTs, device IDs, or
-backend endpoints.
+backend endpoints. Each backend-confirmed `upload_succeeded` record identifies
+the exact transcript UUID and chunk sequence that received a 2xx response.
+`/skillmeter:backfill status` summarizes those records by transcript, keeping
+queued chunks distinct from confirmed sent chunks.
 
 An accepted historical offer remains uploadable when ongoing organization or
 repository telemetry is off. Queue cleanup preserves only chunks matching the
@@ -348,6 +351,8 @@ Legacy telemetry values are imported automatically. After a repository value is 
 | `/skillmeter:signin`                 | Sign in with GitHub (silent via `gh`, or device-flow fallback)     |
 | `/skillmeter:signout`                | Sign out and stop all telemetry; keeps device identity intact      |
 | `/skillmeter:telemetry list`         | Show and toggle effective telemetry for known organization repos   |
+| `/skillmeter:backfill`               | Manually confirm and start historical transcript backfill          |
+| `/skillmeter:backfill status`        | Show transcript UUIDs and queued versus confirmed-sent chunks      |
 
 ## Configuration
 

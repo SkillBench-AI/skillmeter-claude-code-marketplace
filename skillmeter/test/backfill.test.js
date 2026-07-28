@@ -280,7 +280,7 @@ test("accept queues historical data without changing telemetry policy", async ()
   });
   writeJson(backfillState.BACKFILL_STATE_FILE, {
     schema_version: 1,
-    lifecycle_id: "e2e-lifecycle",
+    lifecycle_id: "44444444-4444-4444-8444-444444444444",
     status: "pending",
     reason: "one_time_offer",
     created_at: Date.now(),
@@ -295,7 +295,11 @@ test("accept queues historical data without changing telemetry policy", async ()
   };
   const claim = runNode(
     path.resolve(__dirname, "../scripts/backfill.js"),
-    ["claim", "33333333-3333-4333-8333-333333333333"],
+    [
+      "claim",
+      "44444444-4444-4444-8444-444444444444",
+      "33333333-3333-4333-8333-333333333333",
+    ],
     { cwd: repo, env }
   );
   assert.equal(claim.status, 0, claim.stderr);
@@ -318,6 +322,7 @@ test("accept queues historical data without changing telemetry policy", async ()
     path.resolve(__dirname, "../scripts/backfill.js"),
     [
       "accept",
+      "44444444-4444-4444-8444-444444444444",
       offer.offerId,
       String(listed.revision),
       "skillbench-ai",
