@@ -33,8 +33,8 @@ const CONSENT_UI_CASES = [
     state: "unset",
     sectionStart: 'For an org whose `consent` is `null`',
     sectionEnd: 'For an org whose `consent` is `true`',
-    enableLabel: "Label: `Allow for @ORG`",
-    deferLabel: "Label: `Keep off for now`",
+    enableLabel: "Label: `Enable listed repositories`",
+    deferLabel: "Label: `Keep telemetry off`",
   },
   {
     state: "enabled",
@@ -67,19 +67,28 @@ for (const uiCase of CONSENT_UI_CASES) {
   });
 }
 
-test("first sign-in scans exact repositories and offers one Yes/No bulk choice", () => {
+test("first sign-in offers one combined organization and repository choice", () => {
   assert.match(
     SIGNIN_SKILL,
-    /`Repositories found:` and every `repositoryTelemetry\.repositories` entry/
+    /`Repositories found:` and every matching repository's exact `displayName`/
   );
   assert.match(SIGNIN_SKILL, /repository_telemetry\.js list/);
-  assert.match(SIGNIN_SKILL, /every matching repository's exact `displayName`/);
   assert.match(SIGNIN_SKILL, /one per line/);
-  assert.match(SIGNIN_SKILL, /call `AskUserQuestion` exactly once/);
+  assert.match(
+    SIGNIN_SKILL,
+    /one combined, single-select telemetry\s+question/
+  );
   assert.doesNotMatch(SIGNIN_SKILL, /multiSelect: true/);
-  const yes = "Label: `Yes, enable telemetry`";
-  const no = "Label: `No, keep telemetry off`";
-  assert.ok(SIGNIN_SKILL.indexOf(yes) < SIGNIN_SKILL.indexOf(no));
+  const enabled = "Label: `Enable listed repositories`";
+  const organizationOnly = "Label: `Organization only`";
+  const off = "Label: `Keep telemetry off`";
+  assert.ok(SIGNIN_SKILL.indexOf(enabled) < SIGNIN_SKILL.indexOf(organizationOnly));
+  assert.ok(SIGNIN_SKILL.indexOf(organizationOnly) < SIGNIN_SKILL.indexOf(off));
+  assert.doesNotMatch(SIGNIN_SKILL, /Header: `Repositories`/);
+  assert.doesNotMatch(
+    SIGNIN_SKILL,
+    /Allow SkillMeter telemetry for repositories owned by/
+  );
   assert.match(
     SIGNIN_SKILL,
     /repository_telemetry\.js onboard REVISION "ORG" enabled ID\.\.\./
@@ -90,19 +99,19 @@ test("first sign-in scans exact repositories and offers one Yes/No bulk choice",
   );
   assert.match(
     SIGNIN_SKILL,
-    /both the organization and repository settings remain\s+unchanged/
+    /organization and\s+repository settings remain unchanged/
   );
   assert.match(SIGNIN_SKILL, /`Telemetry ON \(N\)`/);
   assert.match(SIGNIN_SKILL, /`Telemetry OFF \(N\)`/);
   assert.match(
     SIGNIN_SKILL,
-    /the ON list must contain every repository that was displayed/
+    /the ON list must contain every repository\s+that was displayed/
   );
 });
 
 test("first-install backfill is offered after repository selection and only once", () => {
   const repositoryChoice = SIGNIN_SKILL.indexOf(
-    "Label: `Yes, enable telemetry`"
+    "Label: `Enable listed repositories`"
   );
   const historyChoice = SIGNIN_SKILL.indexOf("Header: `History`");
   assert.ok(repositoryChoice >= 0 && historyChoice > repositoryChoice);

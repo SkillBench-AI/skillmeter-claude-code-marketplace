@@ -15,56 +15,69 @@ When context contains `SkillMeter sign-in state JSON`, parse it. The
 `repositoryTelemetry` object is a sanitized scan result with no local paths.
 The `backfill` object contains only the one-time offer status and an optional
 active session UUID.
-For every entry in `orgs`, use `AskUserQuestion` to show one single-select
-question.
 
-For an org whose `consent` is `null`, ask:
+For an org whose `consent` is `null`, run one fresh repository scan before
+asking anything:
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/scripts/repository_telemetry.js list
+```
+
+Parse the JSON and retain only repositories whose `org` exactly equals `ORG`.
+Never show or infer local paths. If the command fails, report the error and do
+not ask a question or change policy.
+
+Call `AskUserQuestion` exactly once with one combined, single-select telemetry
+question:
 
 - Header: `Telemetry`
-- Question: Start with
-  `Allow SkillMeter telemetry for repositories owned by @ORG?`, then add
-  `Repositories found:` and every `repositoryTelemetry.repositories` entry
-  whose `org` exactly equals `ORG`, using its exact `displayName` one per line.
-  If none were found, add `No local @ORG repositories found.`
-- First option:
-  - Label: `Allow for @ORG`
-  - Description: `Authorize repository telemetry for @ORG plus path-HMAC-only diagnostics when events are excluded. You will review the exact local repositories before full event capture is enabled.`
-- Second option:
-  - Label: `Keep off for now`
-  - Description: `Keep telemetry off for @ORG. You can enable it later by running /skillmeter:signin again.`
+- Question: Start with `Choose telemetry for @ORG.`, then add
+  `Repositories found:` and every matching repository's exact `displayName`,
+  one per line. If none were found, add
+  `No local @ORG repositories found.`
+- When matching repositories exist, first option:
+  - Label: `Enable listed repositories`
+  - Description: `Authorize @ORG and enable sanitized full telemetry for every repository listed above.`
+- Next option:
+  - Label: `Organization only`
+  - Description: `Authorize only path-HMAC exclusion diagnostics for @ORG; keep full repository telemetry off.`
+- Last option:
+  - Label: `Keep telemetry off`
+  - Description: `Keep organization and repository telemetry off. You can choose later by running /skillmeter:signin again.`
 
-For an org whose `consent` is `true`, ask the same question with:
+When no matching repositories exist, omit `Enable listed repositories` and
+show only `Organization only` and `Keep telemetry off`. Do not use multi-select.
+If the user cancels this combined question, run no command; organization and
+repository settings remain unchanged.
 
-- First option:
-  - Label: `Keep authorized`
-  - Description: `Keep @ORG authorized. Full events are collected only for enabled repositories; excluded events send only hook type, gate reason, and HMAC cwd.`
-- Second option:
-  - Label: `Turn telemetry off`
-  - Description: `Stop collecting and sending telemetry for @ORG. You can enable it again later.`
+Map every displayed repository back to its exact 12-character hexadecimal `id`
+from the same fresh result. Never pass display labels, paths, custom input,
+inferred IDs, or repositories from another org.
 
-For an org whose `consent` is `false`, ask the same question with:
-
-- First option:
-  - Label: `Authorize @ORG`
-  - Description: `Re-authorize @ORG. Enabled repositories resume full collection; excluded events send only hook type, gate reason, and HMAC cwd.`
-- Second option:
-  - Label: `Keep off for now`
-  - Description: `Keep telemetry off for @ORG. You can enable it later by running /skillmeter:signin again.`
-
-If `orgs` is empty, do not call any tool. Report that sign-in succeeded but the
-license contains no telemetry organization.
-
-If the user cancels the question, do not run any command and report that the
-existing setting was left unchanged.
-
-For `consent: null`, choosing `Keep off for now` persists:
+On `Keep telemetry off`, persist organization OFF:
 
 ```bash
 node ${CLAUDE_PLUGIN_ROOT}/scripts/org_telemetry_consent.js set "ORG" disabled
 ```
 
-When `backfill.eligible` is true, first consume the offer without displaying a
-backfill question:
+On `Organization only`, atomically authorize the organization and explicitly
+keep every displayed repository disabled:
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/scripts/repository_telemetry.js onboard REVISION "ORG" disabled ID...
+```
+
+Omit `ID...` when no repositories were found.
+
+On `Enable listed repositories` with `backfill.eligible: false`, atomically
+authorize the organization and enable exactly the displayed IDs:
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/scripts/repository_telemetry.js onboard REVISION "ORG" enabled ID...
+```
+
+If `backfill.eligible` is true and the user chooses either OFF option, consume
+the offer without displaying a History question:
 
 ```bash
 node ${CLAUDE_PLUGIN_ROOT}/scripts/backfill.js claim ACTIVE_SESSION_ID
@@ -72,74 +85,46 @@ node ${CLAUDE_PLUGIN_ROOT}/scripts/backfill.js claim ACTIVE_SESSION_ID
 
 Omit `ACTIVE_SESSION_ID` when `backfill.activeSessionId` is empty.
 
-For `consent: null`, choosing `Allow for @ORG` does not persist the organization
-choice yet. Run a fresh scan so the final picker cannot rely on a stale
-sign-in-time snapshot:
+For an org whose `consent` is `true`, do not run the first-onboarding flow
+above. Call `AskUserQuestion` exactly once:
 
-```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/repository_telemetry.js list
-```
-
-Parse the JSON and retain only repositories whose `org` exactly equals `ORG`.
-Never show or infer local paths. If the command fails, report the error; the org
-and repository settings remain unchanged.
-
-If no matching repositories are returned, do not call `AskUserQuestion`.
-If `backfill.eligible` is true, consume it with `backfill.js claim` as above.
-Atomically authorize the organization with no repositories enabled:
-
-```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/repository_telemetry.js onboard REVISION "ORG" disabled
-```
-
-Report that @ORG is authorized, no local org repositories were found, and
-full repository telemetry remains off until a repository is selected. The
-organization-level exclusion audit described in the consent choice is active.
-
-If matching repositories are returned, call `AskUserQuestion` exactly once with
-one single-select question:
-
-- Header: `Repositories`
-- Question: Start with `Enable telemetry for these repositories?`, then include
-  every matching repository's exact `displayName`, one per line. This exact
-  displayed list is the complete scope of the choice.
+- Header: `Telemetry`
+- Question: `Keep SkillMeter telemetry authorized for @ORG?`
 - First option:
-  - Label: `Yes, enable telemetry`
-  - Description: `Enable sanitized telemetry for every repository listed above.`
+  - Label: `Keep authorized`
+  - Description: `Keep @ORG authorized. Full events are collected only for enabled repositories; excluded events send only hook type, gate reason, and HMAC cwd.`
 - Second option:
-  - Label: `No, keep telemetry off`
-  - Description: `Keep telemetry off for every repository listed above.`
+  - Label: `Turn telemetry off`
+  - Description: `Stop collecting and sending telemetry for @ORG. You can enable it again later.`
 
-Do not use multi-select. If the user cancels this repository question, do not
-run any command; both the organization and repository settings remain
-unchanged.
+For an org whose `consent` is `false`, do not run the first-onboarding flow
+above. Call `AskUserQuestion` exactly once:
 
-Map every displayed repository back to its exact 12-character hexadecimal `id`
-from the same JSON result.
+- Header: `Telemetry`
+- Question: `Authorize SkillMeter telemetry for @ORG?`
+- First option:
+  - Label: `Authorize @ORG`
+  - Description: `Re-authorize @ORG. Enabled repositories resume full collection; excluded events send only hook type, gate reason, and HMAC cwd.`
+- Second option:
+  - Label: `Keep off for now`
+  - Description: `Keep telemetry off for @ORG. You can enable it later by running /skillmeter:signin again.`
 
-On No, if `backfill.eligible` is true, consume it with `backfill.js claim` and
-then atomically authorize the organization while disabling those IDs:
+If the user cancels either existing-consent question, run no command and report
+that the existing setting was left unchanged.
 
-```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/repository_telemetry.js onboard REVISION "ORG" disabled ID...
-```
-
-On Yes with `backfill.eligible: false`, use the existing onboarding command:
-
-```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/repository_telemetry.js onboard REVISION "ORG" enabled ID...
-```
+If `orgs` is empty, do not call any tool. Report that sign-in succeeded but the
+license contains no telemetry organization.
 
 Pass the exact integer `revision`, org, and IDs returned by the list result.
-Never pass display labels, paths, custom input, inferred IDs, or repositories
-from another org. If the command reports `stale: true`, settings changed while
-the question was open: run `list` again and show the updated exact list in a new
-Yes/No question. Never apply the old selection to a changed list.
+If an onboarding command reports `stale: true`, settings changed while the
+question was open: run `list` again and show one updated combined question.
+Never apply the old selection to a changed list.
 
 ### First-install historical backfill
 
-On Yes with `backfill.eligible: true`, do not apply onboarding yet. Claim the
-offer, including the exact active session UUID only when non-empty:
+On `Enable listed repositories` with `backfill.eligible: true`, do not apply
+onboarding yet. Claim the offer, including the exact active session UUID only
+when non-empty:
 
 ```bash
 node ${CLAUDE_PLUGIN_ROOT}/scripts/backfill.js claim ACTIVE_SESSION_ID
@@ -185,9 +170,10 @@ using every entry in `results`, never only a count:
 - `Telemetry OFF (N)` followed by every disabled repository's exact
   `displayName`, one per line.
 
-For Yes, the ON list must contain every repository that was displayed in the
-question. For No, the OFF list must contain every displayed repository. If a
-result was unchanged, print it separately with its returned reason.
+For `Enable listed repositories`, the ON list must contain every repository
+that was displayed. For `Organization only`, the OFF list must contain every
+displayed repository. If a result was unchanged, print it separately with its
+returned reason.
 
 For existing `consent: true` or `consent: false`, normally persist the selected
 organization value with:
@@ -202,18 +188,19 @@ or:
 node ${CLAUDE_PLUGIN_ROOT}/scripts/org_telemetry_consent.js set "ORG" disabled
 ```
 
-When `backfill.eligible` is true and the user chooses to keep or turn telemetry
-off, run a fresh `repository_telemetry.js list` before changing the org:
+When `backfill.eligible` is true and an existing-consent choice would leave the
+organization enabled, run a fresh `repository_telemetry.js list` before
+changing the org:
 
 - For `consent: true`, historical candidates are this org's entries whose
   `projectSetting` value is `enabled`; use policy action `preserve`.
 - For `consent: false`, historical candidates are this org's entries whose
   `projectSetting` value is `enabled`; use policy action `reauthorize`.
 
-If the chosen final state is off or there are no candidates, consume the offer
-with `backfill.js claim`, do not ask about history, and run the normal org
-command. Otherwise claim and show the same History question. On Send history,
-replace the normal org command with:
+If the chosen final state is off or there are no enabled candidates, consume
+the offer with `backfill.js claim`, do not ask about history, and run the normal
+org command. Otherwise claim and show the same History question. On Send
+history, replace the normal org command with:
 
 ```bash
 node ${CLAUDE_PLUGIN_ROOT}/scripts/backfill.js accept OFFER_ID REVISION "ORG" POLICY_ACTION ID...

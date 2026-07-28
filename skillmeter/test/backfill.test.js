@@ -329,4 +329,12 @@ test("accept atomically enables scope and detached worker queues the snapshot", 
     }).lastUuid,
     "e2e-a"
   );
+
+  // The worker marks snapshot completion before its detached drain exits.
+  // Wait for that child to clear its lock so temp-dir cleanup cannot race it.
+  const drainLock = path.join(DATA_DIR, "logs", ".drain-once.lock");
+  while (Date.now() < deadline && fs.existsSync(drainLock)) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.equal(fs.existsSync(drainLock), false);
 });

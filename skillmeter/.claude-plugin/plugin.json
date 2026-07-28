@@ -1,6 +1,6 @@
 {
     "name": "skillmeter",
-    "version": "0.31.0",
+    "version": "0.31.1",
     "description": "Sends opt-in, sanitized Claude Code telemetry to SkillBench with repository-scoped full capture and minimal exclusion audits.",
     "homepage": "https://skillbench.com",
     "repository": "https://github.com/SkillBench-AI/skillmeter-claude-code-marketplace",

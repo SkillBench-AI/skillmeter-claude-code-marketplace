@@ -372,13 +372,14 @@ The tracked org is decided by the license activator, not the client — there is
 
 ### Organization consent and repository overrides
 
-After sign-in, organization telemetry remains off until the user makes the
-organization-level choice. On first Allow, SkillMeter scans known local
-repositories owned by that organization, shows the exact repository names, and
-asks one Yes/No question. Yes explicitly enables every displayed repository;
-No explicitly keeps every displayed repository off. Organization authorization
-alone never starts full hook-event capture. While organization authorization is
-on, an event excluded by the cwd gate produces only a
+After sign-in, organization telemetry remains off until the user answers one
+combined onboarding question. SkillMeter scans known local repositories owned
+by that organization, shows the exact repository names, and offers three
+choices: enable every listed repository, authorize organization-only exclusion
+diagnostics while keeping full repository telemetry off, or keep all telemetry
+off. Organization authorization alone never starts full hook-event capture.
+While organization authorization is on, an event excluded by the cwd gate
+produces only a
 `TelemetryCaptureExcluded` audit record containing the source hook type, gate
 reason, and HMAC-hashed cwd. The original hook payload, raw path, repository
 name, organization name, prompt, tool data, and transcript path are not copied
