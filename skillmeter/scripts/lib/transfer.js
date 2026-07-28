@@ -52,6 +52,7 @@ const {
   purgeDisallowedOrganizationAuditQueues,
 } = require("./organization-audit-queue");
 const { cleanupStaleSessionContexts } = require("./cwd-context");
+const { isBackfillRunning } = require("./backfill-state");
 
 // Async gzip for transcript uploads — keeps the hook's event loop responsive
 // while compressing multi-MB transcripts. Sync variants are still used for
@@ -356,8 +357,10 @@ function readCursor(transcriptId, repository) {
 function writeCursor(cursor, repository) {
   try {
     atomicWriteJson(cursorPath(cursor.transcriptId, repository), cursor);
+    return true;
   } catch (err) {
     console.error(`[skillmeter] Transcript cursor write failed: ${err.message}`);
+    return false;
   }
 }
 
@@ -582,6 +585,7 @@ async function drainDeltaChunks(timeoutMs) {
  */
 function stageTranscriptDelta(transcriptPath, promptId, deviceId, repository) {
   if (!repository?.repoKey) return { chunks: 0 };
+  if (isBackfillRunning()) return { chunks: 0, deferred: true };
   const transcriptId = path.basename(transcriptPath);
 
   let raw;
@@ -625,6 +629,93 @@ function stageTranscriptDelta(transcriptPath, promptId, deviceId, repository) {
     }, repository);
   }
   return { chunks: sealed };
+}
+
+/**
+ * Seal one immutable historical snapshot through its final UUID. A discarded
+ * privacy cursor is intentionally ignored; a real upload cursor means this
+ * transcript already participated in live telemetry and is skipped.
+ */
+function stageTranscriptSnapshot(transcriptPath, repository, {
+  transformRecords = (records) => records,
+  cutoffAt = Infinity,
+} = {}) {
+  if (!repository?.repoKey) {
+    return { chunks: 0, skipped: true, reason: "missing_repository" };
+  }
+  const transcriptId = path.basename(transcriptPath);
+  const cursor = readCursor(transcriptId, repository);
+  if (cursor && cursor.discarded !== true) {
+    return { chunks: 0, skipped: true, reason: "existing_cursor" };
+  }
+
+  let raw;
+  try {
+    if (fs.statSync(transcriptPath).mtimeMs > cutoffAt) {
+      return { chunks: 0, skipped: true, reason: "modified_after_cutoff" };
+    }
+    raw = fs.readFileSync(transcriptPath, "utf8");
+    if (fs.statSync(transcriptPath).mtimeMs > cutoffAt) {
+      return { chunks: 0, skipped: true, reason: "modified_after_cutoff" };
+    }
+  } catch {
+    return { chunks: 0, failed: true, reason: "read_failed" };
+  }
+
+  const { objs } = parseJsonl(raw);
+  let boundaryIndex = -1;
+  for (let index = objs.length - 1; index >= 0; index--) {
+    if (typeof objs[index]?.uuid === "string" && objs[index].uuid) {
+      boundaryIndex = index;
+      break;
+    }
+  }
+  if (boundaryIndex < 0) {
+    return { chunks: 0, skipped: true, reason: "missing_uuid" };
+  }
+
+  const snapshot = transformRecords(objs.slice(0, boundaryIndex + 1));
+  const plan = buildChunkPlan(
+    snapshot,
+    null,
+    credstore.getOrCreateHashSalt(),
+    {
+      seqStart: (cursor && cursor.seq) || 0,
+      maxUncompressedBytes: getTranscriptChunkMaxBytes(),
+    }
+  );
+  if (!plan.newCursor?.lastUuid || plan.chunks.length === 0) {
+    return { chunks: 0, skipped: true, reason: "empty_snapshot" };
+  }
+
+  let sealed = 0;
+  for (const chunk of plan.chunks) {
+    const bodyPath = sealDeltaChunk(transcriptId, chunk.lines, {
+      seq: chunk.seq,
+      reset: chunk.reset,
+      resetBaselineSeq: chunk.resetBaselineSeq,
+      promptId: "backfill",
+    }, repository);
+    if (bodyPath) sealed++;
+  }
+  if (sealed !== plan.chunks.length) {
+    return { chunks: sealed, failed: true, reason: "chunk_seal_failed" };
+  }
+
+  const cursorWritten = writeCursor({
+    transcriptId,
+    lastUuid: plan.newCursor.lastUuid,
+    seq: plan.newCursor.seq,
+    updatedAt: Date.now(),
+    backfill: true,
+  }, repository);
+  if (!cursorWritten) {
+    return { chunks: sealed, failed: true, reason: "cursor_write_failed" };
+  }
+  return {
+    chunks: sealed,
+    lastUuid: plan.newCursor.lastUuid,
+  };
 }
 
 function advanceCursorToTranscriptTail(transcriptPath, repository, {
@@ -906,6 +997,7 @@ module.exports = {
   writeCursor,
   sealDeltaChunk,
   stageTranscriptDelta,
+  stageTranscriptSnapshot,
   advanceCursorToTranscriptTail,
   listDeltaChunks,
   buildChunkHeaders,
@@ -913,6 +1005,7 @@ module.exports = {
   initializeTranscriptCursor,
   discardSkippedSessionArtifacts,
   clearDrainOnceLock,
+  spawnDetachedDrain,
   drainFailedLogs,
   drainDeltaChunks,
   drainQueuesOnce,

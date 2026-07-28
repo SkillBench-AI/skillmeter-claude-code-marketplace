@@ -10,6 +10,7 @@ const {
 const { refreshLicense } = require("./lib/license-activation");
 const { detectHarness } = require("./harness.js");
 const { PLUGIN_ROOT, PLUGIN_VERSION } = require("./lib/paths");
+const { initializeBackfillLifecycle } = require("./lib/backfill-state");
 const {
   signInRequiredBanner,
   telemetryConsentRequiredBanner,
@@ -26,6 +27,9 @@ const credstore = require("./credstore.js");
 // stdout here — all SessionStart stdout is emitted once, from onGate, so
 // watchPaths and the optional banner stay a single JSON object.
 async function prepareSession() {
+  // Classify this plugin-data lifecycle before getDeviceId() creates fresh
+  // machine state; otherwise a real first install would look like an upgrade.
+  initializeBackfillLifecycle();
   const deviceId = credstore.getDeviceId();
   credstore.ensureSigninResultFile();
   purgeLegacyUnboundQueue();

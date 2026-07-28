@@ -16,6 +16,10 @@ const {
   publicRepositoryState,
 } = require("./lib/repository-telemetry");
 const path = require("path");
+const {
+  initializeBackfillLifecycle,
+  publicBackfillState,
+} = require("./lib/backfill-state");
 
 const SIGNIN_COMMAND = path.join(__dirname, "..", "bin", "signin");
 
@@ -52,7 +56,7 @@ function isSigninCommand(input) {
   return input.command_name === "signin" && input.command_source === "plugin";
 }
 
-async function signedInContext(cwd = process.cwd()) {
+async function signedInContext(cwd = process.cwd(), activeSessionId = "") {
   let repositoryTelemetry;
   try {
     repositoryTelemetry = publicRepositoryState(
@@ -72,6 +76,15 @@ async function signedInContext(cwd = process.cwd()) {
       consent: credstore.getOrgTelemetryConsent(org),
     })),
     repositoryTelemetry,
+    backfill: {
+      ...publicBackfillState(),
+      activeSessionId:
+        /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(
+          activeSessionId
+        )
+          ? activeSessionId
+          : "",
+    },
   };
   return `SkillMeter sign-in state JSON:\n${JSON.stringify(state)}`;
 }
@@ -80,13 +93,20 @@ async function main() {
   const input = await readStdin();
   if (!isSigninCommand(input)) return;
 
+  // Must run before markEngaged() materializes policy state, or a clean first
+  // install would be grandfathered as an existing installation.
+  initializeBackfillLifecycle();
+
   // Re-running signin re-arms the gh fallback and clears any signed-out
   // sentinel left by /skillmeter:signout — one atomic write.
   credstore.markEngaged();
 
   const existingToken = credstore.getLicenseToken();
   if (existingToken && !credstore.isLicenseTokenExpired(existingToken)) {
-    addContext(await signedInContext(input.cwd || process.cwd()));
+    addContext(await signedInContext(
+      input.cwd || process.cwd(),
+      input.session_id || ""
+    ));
     return;
   }
 
@@ -98,7 +118,10 @@ async function main() {
 
   const jwt = await trySilentGhActivate(deviceId);
   if (jwt) {
-    addContext(await signedInContext(input.cwd || process.cwd()));
+    addContext(await signedInContext(
+      input.cwd || process.cwd(),
+      input.session_id || ""
+    ));
     return;
   }
 

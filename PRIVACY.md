@@ -1,6 +1,6 @@
 # SkillMeter Claude Code Plugin Privacy Notice
 
-Effective: July 26, 2026
+Effective: July 28, 2026
 
 Status: disclosure draft pending approval by the SkillBench privacy/legal
 owner. It is intended to describe the current client implementation accurately;
@@ -31,6 +31,12 @@ The plugin may create local device and policy state, inspect repository
 ownership, and display consent UI before telemetry is enabled. That local
 processing is not uploaded as telemetry.
 
+After organization and repository consent, a new plugin installation can
+separately ask once whether to send completed historical transcripts from the
+repositories just enabled. Declining or cancelling does not enable historical
+processing and the plugin does not ask again during that installation
+lifecycle.
+
 ## Data processed
 
 The current plugin processes the following categories.
@@ -57,6 +63,9 @@ the SkillMeter license JWT locally for authenticated uploads and refresh.
 - assistant messages exposed by lifecycle hooks;
 - task descriptions and metadata, compact instructions, and failure messages;
 - sanitized transcript records added since the last local transcript cursor;
+- when separately approved, sanitized historical prompt and response records
+  through a fixed transcript UUID boundary; historical tool-result and image
+  blocks are removed before sanitization;
 - repository classification and pseudonymous path/repository identifiers.
 
 ### Claude Code environment and configuration
@@ -122,6 +131,11 @@ Amazon Web Services as infrastructure used to host and process platform data.
 Local credentials and consent state are stored under `~/.skillbench/`.
 Repository-bound event and transcript queues are stored in Claude Code's
 persistent plugin data directory when available.
+
+The installation-scoped historical-backfill decision is also stored in that
+plugin data directory. A machine-local rollout marker under `~/.skillbench/`
+prevents an existing installation from being mistaken for a new install when
+the feature is introduced.
 
 - successfully uploaded transcript chunks are deleted locally after a
   successful HTTP acknowledgement;

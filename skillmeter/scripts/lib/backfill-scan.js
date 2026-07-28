@@ -25,7 +25,10 @@ const path = require("path");
 
 const { getRepoScopeDecision } = require("./repo-scope");
 
-const CLAUDE_PROJECTS_DIR = path.join(os.homedir(), ".claude", "projects");
+const CLAUDE_PROJECTS_DIR = path.join(
+  process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude"),
+  "projects"
+);
 
 // How many bytes to read from a transcript while hunting for the first cwd
 // field. Claude Code writes cwd on user/assistant message records, which
@@ -134,6 +137,9 @@ function resolveCwdForProject(projectDir, dirName) {
 function scanHistoricalSessions({
   projectsDir = CLAUDE_PROJECTS_DIR,
   getScopeDecision = getRepoScopeDecision,
+  allowedRepoKeys = null,
+  cutoffAt = Infinity,
+  excludeSessionId = "",
 } = {}) {
   const included = [];
   const skipped = [];
@@ -156,12 +162,36 @@ function scanHistoricalSessions({
 
     if (decision.allowed) {
       for (const sessionFile of sessions) {
+        const sessionId = path.basename(sessionFile, ".jsonl");
+        let reason = "";
+        if (
+          allowedRepoKeys instanceof Set &&
+          !allowedRepoKeys.has(decision.repoKey)
+        ) {
+          reason = "repository_not_selected";
+        } else if (excludeSessionId && sessionId === excludeSessionId) {
+          reason = "active_session";
+        } else {
+          try {
+            if (fs.statSync(sessionFile).mtimeMs > cutoffAt) {
+              reason = "modified_after_cutoff";
+            }
+          } catch {
+            reason = "unreadable";
+          }
+        }
+        if (reason) {
+          skipped.push({ sessionFile, cwd, reason });
+          skippedByReason[reason] = (skippedByReason[reason] || 0) + 1;
+          continue;
+        }
         included.push({
           sessionFile,
-          sessionId: path.basename(sessionFile, ".jsonl"),
+          sessionId,
           cwd,
           repoRoot: decision.repoRoot,
           remoteOrg: decision.remoteOrg,
+          repoKey: decision.repoKey,
         });
       }
     } else {

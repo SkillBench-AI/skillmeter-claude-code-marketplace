@@ -100,6 +100,23 @@ test("first sign-in scans exact repositories and offers one Yes/No bulk choice",
   );
 });
 
+test("first-install backfill is offered after repository selection and only once", () => {
+  const repositoryChoice = SIGNIN_SKILL.indexOf(
+    "Label: `Yes, enable telemetry`"
+  );
+  const historyChoice = SIGNIN_SKILL.indexOf("Header: `History`");
+  assert.ok(repositoryChoice >= 0 && historyChoice > repositoryChoice);
+  assert.match(SIGNIN_SKILL, /backfill\.js claim ACTIVE_SESSION_ID/);
+  assert.match(SIGNIN_SKILL, /Label: `Send history`/);
+  assert.match(SIGNIN_SKILL, /Label: `Skip`/);
+  assert.match(
+    SIGNIN_SKILL,
+    /backfill\.js accept OFFER_ID REVISION "ORG" onboard ID\.\.\./
+  );
+  assert.match(SIGNIN_SKILL, /backfill\.js decline OFFER_ID/);
+  assert.match(SIGNIN_SKILL, /does not\s+undo the repository choice/);
+});
+
 const ENABLED_POLICY = {
   globalDisabled: false,
   hasValidLicense: true,
@@ -192,7 +209,17 @@ test("org consent CLI validates the JWT org and persists the explicit choice", (
 
 test("signin expansion emits an explicit pending-consent state for a new sign-in", () => {
   const stateDir = makeTempDir("skm-org-consent-");
+  const dataDir = makeTempDir("skm-org-consent-data-");
   const claudeConfigDir = makeTempDir("skm-org-consent-");
+  writeJson(path.join(dataDir, "backfill-state.json"), {
+    schema_version: 1,
+    lifecycle_id: "fresh-test-lifecycle",
+    status: "pending",
+    reason: "first_install",
+    initialized: true,
+    created_at: Date.now(),
+    updated_at: Date.now(),
+  });
   writeJson(path.join(stateDir, "credentials.json"), {
     license_jwt: licenseJwt(),
     org_telemetry_migration_version: 1,
@@ -206,6 +233,7 @@ test("signin expansion emits an explicit pending-consent state for a new sign-in
     cwd: path.resolve(__dirname, "../.."),
     env: {
       ...process.env,
+      CLAUDE_PLUGIN_DATA: dataDir,
       CLAUDE_CONFIG_DIR: claudeConfigDir,
       SKILLMETER_STATE_DIR: stateDir,
     },
@@ -213,6 +241,7 @@ test("signin expansion emits an explicit pending-consent state for a new sign-in
       command_name: "skillmeter:signin",
       command_source: "plugin",
       cwd: path.resolve(__dirname, "../.."),
+      session_id: "11111111-1111-4111-8111-111111111111",
     }),
   });
 
@@ -222,6 +251,11 @@ test("signin expansion emits an explicit pending-consent state for a new sign-in
   assert.match(context, /SkillMeter sign-in state JSON:/);
   const state = JSON.parse(context.split("SkillMeter sign-in state JSON:\n")[1]);
   assert.deepEqual(state.orgs, [{ org: "skillbench-ai", consent: null }]);
+  assert.deepEqual(state.backfill, {
+    eligible: true,
+    status: "pending",
+    activeSessionId: "11111111-1111-4111-8111-111111111111",
+  });
   assert.equal(typeof state.repositoryTelemetry.revision, "number");
   assert.ok(
     state.repositoryTelemetry.repositories.some(

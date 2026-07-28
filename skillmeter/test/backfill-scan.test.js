@@ -65,3 +65,47 @@ test("backfill scan includes only sessions whose repository passes org scope", (
     },
   });
 });
+
+test("backfill scan honors selected repositories, cutoff, and active session", () => {
+  const projectsDir = makeTempDir("skm-backfill-filter-");
+  writeSession(projectsDir, "tenant-project", TENANT_SESSION, "/repos/tenant");
+  writeSession(projectsDir, "tenant-project", TENANT_SESSION_2, "/repos/tenant");
+  writeSession(projectsDir, "external-project", EXTERNAL_SESSION, "/repos/other");
+
+  const cutoffAt = Date.now() - 5_000;
+  fs.utimesSync(
+    path.join(projectsDir, "tenant-project", TENANT_SESSION),
+    new Date(cutoffAt - 1_000),
+    new Date(cutoffAt - 1_000)
+  );
+  fs.utimesSync(
+    path.join(projectsDir, "tenant-project", TENANT_SESSION_2),
+    new Date(cutoffAt + 1_000),
+    new Date(cutoffAt + 1_000)
+  );
+
+  const result = scanHistoricalSessions({
+    projectsDir,
+    allowedRepoKeys: new Set(["github.com/skillbench-ai/tenant"]),
+    cutoffAt,
+    excludeSessionId: path.basename(TENANT_SESSION, ".jsonl"),
+    getScopeDecision(cwd) {
+      return {
+        allowed: true,
+        classification: "github_org_match",
+        repoRoot: cwd,
+        remoteOrg: "skillbench-ai",
+        repoKey: cwd === "/repos/tenant"
+          ? "github.com/skillbench-ai/tenant"
+          : "github.com/skillbench-ai/other",
+      };
+    },
+  });
+
+  assert.deepEqual(result.included, []);
+  assert.deepEqual(result.summary.skippedByReason, {
+    active_session: 1,
+    modified_after_cutoff: 1,
+    repository_not_selected: 1,
+  });
+});

@@ -117,6 +117,8 @@ skillmeter/
     ├── session_end.js       # SessionEnd hook handler (dedicated: seal + drain)
     ├── stop.js              # Stop hook handler (dedicated: detached drain trigger)
     ├── on_signin_result.js  # FileChanged sign-in notifier (dedicated)
+    ├── backfill.js          # One-time historical transcript consent coordinator
+    ├── backfill_worker.js   # Detached repository-scoped snapshot worker
     ├── drain_once.js        # One-shot queue uploader
     └── lib/
         ├── hook-registry.js # Field mappers for observation-only hooks (used by hook.js)
@@ -292,6 +294,13 @@ machine, by one shared boundary (`lib/sanitize.js`):
 - **Harness data** (`SessionStart`) runs through the same sanitizer; see
   [Harness Data](#harness-data).
 
+On a new plugin installation, `/skillmeter:signin` can separately offer to
+queue completed historical sessions for the repositories just enabled. This
+question is shown once per installation lifecycle. Historical snapshots retain
+their UUID boundary but remove tool-result and image blocks before the shared
+secret, email, and path sanitizer runs. The current sign-in session and files
+modified after the offer are excluded.
+
 These controls are defense in depth. Pattern-based secret/PII detection can
 have false negatives, and sanitization does not make arbitrary content
 anonymous. Enable telemetry only where the organization and repository data
@@ -310,7 +319,7 @@ All uploads use gzip compression. Queues are partitioned by canonical GitHub rep
 
 ## Local State
 
-SkillMeter stores device identity, hash salt, license JWT, and the GitHub fallback cooldown in `~/.skillbench/credentials.json`. Global, organization, and repository telemetry decisions live in the single machine policy store `~/.skillbench/telemetry-policy.json`.
+SkillMeter stores device identity, hash salt, license JWT, and the GitHub fallback cooldown in `~/.skillbench/credentials.json`. Global, organization, and repository telemetry decisions live in the single machine policy store `~/.skillbench/telemetry-policy.json`. The one-time historical-backfill decision lives in Claude Code's persistent plugin data and is removed by a normal final-scope uninstall; a small machine marker prevents existing users from being treated as new installs when the feature first rolls out.
 
 Legacy telemetry values are imported automatically. After a repository value is durably imported, only `skillmeter.telemetry` is removed from that checkout's `.claude/settings.local.json`; adjacent Claude and SkillMeter development settings are preserved. Clones and worktrees share the same repository policy through the normalized `github.com/org/repo` identity.
 

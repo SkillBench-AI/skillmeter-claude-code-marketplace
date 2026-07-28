@@ -34,6 +34,7 @@ const TRANSCRIPTS_CHUNKS_DIR = path.join(LOG_DIR, "transcripts", "chunks");
 // Delta-upload cursors ({transcriptId,lastUuid,seq}). Kept SEPARATE from chunks
 // so a cursor survives chunk deletion (next turn) and session end (--resume).
 const TRANSCRIPTS_CURSORS_DIR = path.join(LOG_DIR, "transcripts", "cursors");
+const BACKFILL_STATE_FILE = path.join(DATA_ROOT, "backfill-state.json");
 
 function repositoryStorageId(repoKey, hashSalt) {
   return crypto.createHmac("sha256", hashSalt).update(repoKey).digest("hex").slice(0, 12);
@@ -73,6 +74,7 @@ module.exports = {
   TRANSCRIPTS_PENDING_DIR,
   TRANSCRIPTS_CHUNKS_DIR,
   TRANSCRIPTS_CURSORS_DIR,
+  BACKFILL_STATE_FILE,
   repositoryStorageId,
   repositoryQueuePaths,
   organizationAuditQueuePaths,
