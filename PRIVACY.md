@@ -4,7 +4,7 @@ Effective: July 28, 2026
 
 Status: disclosure draft pending approval by the SkillBench privacy/legal
 owner. It is intended to describe the current client implementation accurately;
-the server-retention language must be confirmed before directory submission.
+the server-retention language still needs confirmation from that owner.
 
 This notice describes data processing performed by the SkillMeter Claude Code
 plugin. It supplements the [SkillBench Privacy

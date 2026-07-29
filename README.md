@@ -20,7 +20,6 @@ Review these documents before installing:
 - [Privacy notice](PRIVACY.md)
 - [Security policy](SECURITY.md)
 - [Support](SUPPORT.md)
-- [Anthropic directory submission readiness](docs/anthropic-submission.md)
 
 ## Install from the SkillBench marketplace
 

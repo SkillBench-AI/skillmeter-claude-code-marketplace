@@ -28,7 +28,7 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
       # Runs skillmeter/test/*.test.js, including the shared secret-fixture
-      # parity suite (sanitize.test.js). A Tier-1 corpus miss fails here and
-      # blocks merge. See SANITIZATION_EPIC.md Task 5.2.
+      # parity suite (sanitize.test.js) fed by test/fixtures/secret-corpus.json.
+      # A Tier-1 corpus miss fails here and blocks merge.
       - name: Run unit tests
         run: node --test
