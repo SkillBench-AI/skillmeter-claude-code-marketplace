@@ -262,8 +262,8 @@ pending event and transcript uploads while a Claude Code session is active.
   chunks, cursors, organization-scoped exclusion audits, metadata, and process
   locks. Exclusion audits contain only source hook type, gate reason, and an
   HMAC-hashed cwd; they never copy the blocked hook payload.
-- `.claude/settings.local.json`: legacy `skillmeter.telemetry` is removed after
-  successful migration; unrelated settings are preserved
+- `.claude/settings.local.json`: read-only, and only for string-valued
+  development overrides; no telemetry decision is read from or written to it
 
 ### Network inventory
 

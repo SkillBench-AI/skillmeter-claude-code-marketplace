@@ -18,8 +18,6 @@ const {
   getLicenseToken,
   isLicenseTokenExpired,
   getSignedOut,
-  getTelemetryDisabled,
-  setTelemetryDisabled,
 } = credstore;
 const { getRepoScopeDecision } = require("./lib/repo-scope");
 const { resolveTelemetryGate } = require("./lib/telemetry-policy");
@@ -27,11 +25,13 @@ const { resolveTelemetryGate } = require("./lib/telemetry-policy");
 const cwd = process.cwd();
 const action = process.argv[2];
 const repoScopeDecision = getRepoScopeDecision(cwd);
-const settingsRoot = repoScopeDecision.repoRoot || cwd;
+// Display only — the telemetry decision itself is keyed by canonical GitHub
+// repository identity, not by this path.
+const projectRoot = repoScopeDecision.repoRoot || cwd;
 
 function projectLine() {
   const optIn = repoScopeDecision.repoKey
-    ? telemetryStore.getRepositoryOverride(repoScopeDecision.repoKey, settingsRoot)
+    ? telemetryStore.getRepositoryOverride(repoScopeDecision.repoKey)
     : null;
   if (optIn === true) return "enabled";
   if (optIn === false) return "disabled";
@@ -39,7 +39,7 @@ function projectLine() {
 }
 
 function globalLine() {
-  return getTelemetryDisabled() ? "disabled" : "enabled";
+  return telemetryStore.getGlobalDisabled() ? "disabled" : "enabled";
 }
 
 function licenseLine() {
@@ -56,7 +56,7 @@ function orgLine() {
   const orgs = getAllowedGitHubOrgs();
   if (orgs.length === 0) return "not available";
   return orgs.map((org) => {
-    const consent = credstore.getOrgTelemetryConsent(org);
+    const consent = telemetryStore.getOrganizationConsent(org);
     const state = consent === true ? "authorized" : consent === false ? "disabled" : "choice required";
     return `@${org} ${state}`;
   }).join(", ");
@@ -64,15 +64,15 @@ function orgLine() {
 
 function effectiveLine() {
   const orgConsent = repoScopeDecision.remoteOrg
-    ? credstore.getOrgTelemetryConsent(repoScopeDecision.remoteOrg)
+    ? telemetryStore.getOrganizationConsent(repoScopeDecision.remoteOrg)
     : null;
   const gate = resolveTelemetryGate({
-    globalDisabled: getTelemetryDisabled(),
+    globalDisabled: telemetryStore.getGlobalDisabled(),
     hasValidLicense: credstore.hasValidLicense(),
     repoOrgOwned: repoScopeDecision.allowed,
     orgConsent,
     projectOptIn: repoScopeDecision.repoKey
-      ? telemetryStore.getRepositoryOverride(repoScopeDecision.repoKey, settingsRoot)
+      ? telemetryStore.getRepositoryOverride(repoScopeDecision.repoKey)
       : null,
   });
   return gate.capture ? `enabled (${gate.mode})` : `disabled (${gate.mode})`;
@@ -96,8 +96,8 @@ switch (action) {
       process.exit(1);
     }
     telemetryStore.setRepositoryOverride(repoScopeDecision.repoKey, true);
-    process.stderr.write(`SkillMeter: telemetry enabled for ${settingsRoot}\n`);
-    if (getTelemetryDisabled()) {
+    process.stderr.write(`SkillMeter: telemetry enabled for ${projectRoot}\n`);
+    if (telemetryStore.getGlobalDisabled()) {
       process.stderr.write(
         "Note: the global kill-switch is on, so telemetry still won't fire. " +
         "Run `/skillmeter:telemetry enable-global` to clear it.\n"
@@ -105,7 +105,7 @@ switch (action) {
     }
     if (
       repoScopeDecision.allowed &&
-      credstore.getOrgTelemetryConsent(repoScopeDecision.remoteOrg) !== true
+      telemetryStore.getOrganizationConsent(repoScopeDecision.remoteOrg) !== true
     ) {
       process.stderr.write(
         `Note: telemetry is not enabled for @${repoScopeDecision.remoteOrg}. ` +
@@ -121,11 +121,11 @@ switch (action) {
     }
     telemetryStore.setRepositoryOverride(repoScopeDecision.repoKey, false);
     purgeRepositoryQueue(repoScopeDecision.repoKey);
-    process.stderr.write(`SkillMeter: telemetry disabled for ${settingsRoot}\n`);
+    process.stderr.write(`SkillMeter: telemetry disabled for ${projectRoot}\n`);
     printStatus();
     break;
   case "enable-global":
-    setTelemetryDisabled(false);
+    telemetryStore.setGlobalEnabled(true);
     process.stderr.write("SkillMeter: global telemetry kill-switch cleared.\n");
     if (!credstore.isTelemetryTransmissionAllowed()) {
       process.stderr.write(
@@ -136,7 +136,7 @@ switch (action) {
     printStatus();
     break;
   case "disable-global":
-    setTelemetryDisabled(true);
+    telemetryStore.setGlobalEnabled(false);
     process.stderr.write(
       "SkillMeter: global telemetry kill-switch ON. " +
       "No events will be transmitted from any project until you run " +

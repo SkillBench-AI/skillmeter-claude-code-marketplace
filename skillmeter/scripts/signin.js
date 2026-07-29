@@ -62,13 +62,13 @@ function say(msg) {
 
 function showSigninStatus(cwd = process.cwd()) {
   const org = credstore.getAllowedGitHubOrgs()[0] || "";
-  const consent = org ? credstore.getOrgTelemetryConsent(org) : null;
+  const consent = org ? telemetryStore.getOrganizationConsent(org) : null;
   const scope = getRepoScopeDecision(cwd);
   const repositoryEnabled =
-    !credstore.getTelemetryDisabled() &&
+    !telemetryStore.getGlobalDisabled() &&
     scope.allowed &&
     scope.remoteOrg === org &&
-    telemetryStore.getRepositoryOverride(scope.repoKey, scope.repoRoot) === true;
+    telemetryStore.getRepositoryOverride(scope.repoKey) === true;
   say(signinStatusBanner(org, consent, repositoryEnabled));
   if (org && consent === null) {
     say(`Run /skillmeter:signin to choose whether to enable telemetry for @${org}.`);

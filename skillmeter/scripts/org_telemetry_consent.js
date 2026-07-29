@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const credstore = require("./credstore");
+const telemetryStore = require("./lib/telemetry-store");
 const { purgeOrganizationQueues } = require("./lib/repository-queue");
 const {
   purgeOrganizationAuditQueues,
@@ -12,7 +13,7 @@ function currentStatus() {
     signedIn: credstore.hasValidLicense(),
     orgs: orgs.map((org) => ({
       org,
-      consent: credstore.getOrgTelemetryConsent(org),
+      consent: telemetryStore.getOrganizationConsent(org),
     })),
   };
 }
@@ -44,7 +45,7 @@ function main() {
   }
 
   const enabled = valueArg === "enabled";
-  credstore.setOrgTelemetryConsent(org, enabled);
+  telemetryStore.setOrganizationConsent(org, enabled);
   if (!enabled) {
     purgeOrganizationQueues(org);
     purgeOrganizationAuditQueues();

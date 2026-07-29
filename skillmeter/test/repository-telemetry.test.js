@@ -5,6 +5,16 @@ const fs = require("fs");
 const path = require("path");
 const { test } = require("node:test");
 
+// helpers first: it bootstraps CLAUDE_PLUGIN_DATA, which lib/paths.js requires.
+const {
+  makeJwt,
+  makeTempDir,
+  readJson,
+  runNode,
+  writeFile,
+  writeJson,
+  writeTelemetryPolicy,
+} = require("../testing/helpers");
 const {
   collectTranscriptCwds,
   collectClaudeStateCwds,
@@ -14,14 +24,6 @@ const {
   repositoryNameFromRemote,
   safeDisplayComponent,
 } = require("../scripts/lib/repository-telemetry");
-const {
-  makeJwt,
-  makeTempDir,
-  readJson,
-  runNode,
-  writeFile,
-  writeJson,
-} = require("../testing/helpers");
 
 const REPOSITORY_TELEMETRY_SCRIPT = path.resolve(
   __dirname,
@@ -80,16 +82,6 @@ function testEnvironment() {
   );
   const externalRepo = makeRepo(reposDir, "external", "another-org");
 
-  writeJson(path.join(repoA, ".claude", "settings.local.json"), {
-    skillmeter: { telemetry: false },
-  });
-  writeJson(path.join(repoC, ".claude", "settings.local.json"), {
-    skillmeter: { telemetry: true },
-  });
-  writeJson(path.join(repoAClone, ".claude", "settings.local.json"), {
-    skillmeter: { telemetry: true },
-  });
-
   writeTranscript(
     projectsDir,
     "project-a",
@@ -123,13 +115,14 @@ function testEnvironment() {
       exp: Math.floor(Date.now() / 1000) + 3600,
       org: { login: "skillbench-ai" },
     }),
-    org_telemetry_migration_version: 1,
-    org_telemetry_consents: {
-      "skillbench-ai": {
-        enabled: true,
-        policy_version: 1,
-        source: "user",
-      },
+  });
+  // repo-a and its clone share one canonical identity, so a single OFF entry
+  // covers both checkouts.
+  writeTelemetryPolicy(stateDir, {
+    orgs: { "skillbench-ai": true },
+    repositories: {
+      "github.com/skillbench-ai/repo-a": false,
+      "github.com/skillbench-ai/repo-c": true,
     },
   });
 
@@ -358,10 +351,6 @@ test("repository toggle applies only a validated local repository ID", () => {
       .repositories["github.com/skillbench-ai/repo-a"].enabled,
     true
   );
-  assert.equal(
-    fs.existsSync(path.join(fixture.repoA, ".claude", "settings.local.json")),
-    false
-  );
 
   const invalid = runNode(
     REPOSITORY_TELEMETRY_SCRIPT,
@@ -544,10 +533,6 @@ test("per-project telemetry commands write the repository SSOT from a nested cwd
       .repositories["github.com/skillbench-ai/repo-a"].enabled,
     true
   );
-  assert.equal(
-    fs.existsSync(path.join(nestedCwd, ".claude", "settings.local.json")),
-    false
-  );
 });
 
 test("repository picker rejects a stale list revision", () => {
@@ -611,10 +596,13 @@ test("live hook honors a git-root repository opt-out from a nested cwd", () => {
 
 test("global kill-switch lists repositories as blocked and prevents toggles", () => {
   const fixture = testEnvironment();
-  const credentialPath = path.join(fixture.stateDir, "credentials.json");
-  const credentials = readJson(credentialPath);
-  credentials.telemetry_disabled = true;
-  writeJson(credentialPath, credentials);
+  // The kill-switch lives in the policy SSOT, alongside the per-repository
+  // decisions it overrides.
+  const policyPath = path.join(fixture.stateDir, "telemetry-policy.json");
+  const policy = readJson(policyPath);
+  policy.global = { enabled: false, decided_at: Date.now(), source: "user" };
+  policy.revision++;
+  writeJson(policyPath, policy);
 
   const listed = runNode(REPOSITORY_TELEMETRY_SCRIPT, ["list"], {
     cwd: fixture.repoA,

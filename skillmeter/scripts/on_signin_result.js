@@ -62,12 +62,12 @@ async function main() {
   if (result.status === "success") {
     const scope = getRepoScopeDecision(process.cwd());
     const org = credstore.getAllowedGitHubOrgs()[0] || "";
-    const consent = org ? credstore.getOrgTelemetryConsent(org) : null;
+    const consent = org ? telemetryStore.getOrganizationConsent(org) : null;
     const repositoryEnabled =
-      !credstore.getTelemetryDisabled() &&
+      !telemetryStore.getGlobalDisabled() &&
       scope.allowed &&
       scope.remoteOrg === org &&
-      telemetryStore.getRepositoryOverride(scope.repoKey, scope.repoRoot) === true;
+      telemetryStore.getRepositoryOverride(scope.repoKey) === true;
     const body = !org
       ? "Signed in — license has no telemetry organization"
       : consent === null

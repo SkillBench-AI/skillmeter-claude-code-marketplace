@@ -13,33 +13,36 @@ const { safeReadJson } = require("./io");
 
 const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, "..", "..");
 
-// The telemetry queue + lock files must survive plugin updates. PLUGIN_ROOT is
-// the install/cache dir — it changes on every update and the old copy is deleted
-// after about 14 days, which would strand any un-drained queue.
-// CLAUDE_PLUGIN_DATA is the host-provided persistent data dir; prefer it. When
-// unavailable (older Claude Code, direct `node`, tests), fall back to
-// PLUGIN_ROOT.
-const DATA_ROOT = process.env.CLAUDE_PLUGIN_DATA || PLUGIN_ROOT;
+// The telemetry queue + lock files must survive plugin updates, so they live
+// exclusively in CLAUDE_PLUGIN_DATA, the host-provided persistent data dir.
+// PLUGIN_ROOT is deliberately NOT a fallback: it is the install/cache dir, it
+// changes on every update, and the old copy is deleted after about 14 days —
+// writing a queue there strands it. A missing variable is a misconfigured host
+// (or a `node` invocation without one), and failing loudly here beats writing
+// state to a directory that is about to be reclaimed.
+const DATA_ROOT = process.env.CLAUDE_PLUGIN_DATA;
+if (!DATA_ROOT) {
+  throw new Error(
+    "[skillmeter] CLAUDE_PLUGIN_DATA is not set. It is provided by Claude Code " +
+    "when a plugin hook runs; set it explicitly to run a script directly."
+  );
+}
 const LOG_DIR = path.join(DATA_ROOT, "logs");
-const LOG_FILE = path.join(LOG_DIR, "events.jsonl");
+// Every queue is repository-scoped: telemetry is only ever staged under a
+// canonical GitHub identity, so a queued artifact can never be transmitted
+// under the wrong organization.
 const REPOSITORIES_LOG_DIR = path.join(LOG_DIR, "repositories");
 const ORGANIZATION_AUDIT_LOG_DIR = path.join(LOG_DIR, "organization-audit");
 const SESSIONS_DIR = path.join(DATA_ROOT, "sessions");
-// Transcripts that failed to upload get parked here for retry on next session.
-const TRANSCRIPTS_PENDING_DIR = path.join(LOG_DIR, "transcripts", "pending");
-// Delta-upload chunks (uuid-cursor): durable per-turn deltas drained
-// independently and deleted on 2xx. Distinct dir from `pending` so the drain
-// tells delta chunks from legacy full-file staging by directory alone.
-const TRANSCRIPTS_CHUNKS_DIR = path.join(LOG_DIR, "transcripts", "chunks");
-// Delta-upload cursors ({transcriptId,lastUuid,seq}). Kept SEPARATE from chunks
-// so a cursor survives chunk deletion (next turn) and session end (--resume).
-const TRANSCRIPTS_CURSORS_DIR = path.join(LOG_DIR, "transcripts", "cursors");
 const BACKFILL_STATE_FILE = path.join(DATA_ROOT, "backfill-state.json");
 
 function repositoryStorageId(repoKey, hashSalt) {
   return crypto.createHmac("sha256", hashSalt).update(repoKey).digest("hex").slice(0, 12);
 }
 
+// `chunks` holds durable per-turn delta bodies (drained independently, deleted
+// on 2xx). `cursors` is kept SEPARATE so a cursor ({transcriptId,lastUuid,seq})
+// survives chunk deletion on the next turn and session end (--resume).
 function repositoryQueuePaths(repoKey, hashSalt) {
   const root = path.join(REPOSITORIES_LOG_DIR, repositoryStorageId(repoKey, hashSalt));
   return {
@@ -67,15 +70,10 @@ const PLUGIN_VERSION =
 module.exports = {
   PLUGIN_ROOT,
   LOG_DIR,
-  LOG_FILE,
   REPOSITORIES_LOG_DIR,
   ORGANIZATION_AUDIT_LOG_DIR,
   SESSIONS_DIR,
-  TRANSCRIPTS_PENDING_DIR,
-  TRANSCRIPTS_CHUNKS_DIR,
-  TRANSCRIPTS_CURSORS_DIR,
   BACKFILL_STATE_FILE,
-  repositoryStorageId,
   repositoryQueuePaths,
   organizationAuditQueuePaths,
   PLUGIN_VERSION,

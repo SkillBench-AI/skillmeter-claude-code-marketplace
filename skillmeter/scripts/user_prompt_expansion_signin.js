@@ -9,6 +9,7 @@
  */
 
 const credstore = require("./credstore.js");
+const telemetryStore = require("./lib/telemetry-store");
 const { trySilentGhActivate } = require("./lib/license-activation");
 const { readStdinJson } = require("./lib/io");
 const {
@@ -70,10 +71,10 @@ async function signedInContext(cwd = process.cwd(), activeSessionId = "") {
   }
   const state = {
     status: "signed_in",
-    globalTelemetryDisabled: credstore.getTelemetryDisabled(),
+    globalTelemetryDisabled: telemetryStore.getGlobalDisabled(),
     orgs: credstore.getAllowedGitHubOrgs().map((org) => ({
       org,
-      consent: credstore.getOrgTelemetryConsent(org),
+      consent: telemetryStore.getOrganizationConsent(org),
     })),
     repositoryTelemetry,
     backfill: {

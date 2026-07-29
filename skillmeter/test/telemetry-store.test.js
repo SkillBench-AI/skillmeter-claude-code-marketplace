@@ -9,10 +9,10 @@ const {
   makeJwt,
   makeTempDir,
   readJson,
-  runNode,
   setTestEnv,
   writeFile,
   writeJson,
+  writeTelemetryPolicy,
 } = require("../testing/helpers");
 
 const STATE_DIR = makeTempDir("skm-policy-state-");
@@ -28,139 +28,11 @@ writeJson(path.join(STATE_DIR, "credentials.json"), {
     org: { login: "skillbench-ai" },
     aud: "https://example.test",
   }),
-  org_telemetry_migration_version: 1,
-  org_telemetry_consents: {
-    "skillbench-ai": {
-      enabled: true,
-      policy_version: 1,
-      source: "user",
-    },
-  },
 });
+writeTelemetryPolicy(STATE_DIR, { orgs: { "skillbench-ai": true } });
 
 const store = require("../scripts/lib/telemetry-store");
 const transfer = require("../scripts/lib/transfer");
-const settings = require("../scripts/lib/settings");
-
-function makeSettingsRepo(name, settings) {
-  const repo = makeTempDir(`skm-policy-${name}-`);
-  writeJson(path.join(repo, ".claude", "settings.local.json"), settings);
-  return repo;
-}
-
-test("an existing pre-consent license is imported as legacy org enabled", () => {
-  const stateDir = makeTempDir("skm-policy-legacy-license-");
-  writeJson(path.join(stateDir, "credentials.json"), {
-    license_jwt: makeJwt({
-      exp: Math.floor(Date.now() / 1000) + 3600,
-      org: { login: "SkillBench-AI" },
-    }),
-  });
-  const probe = [
-    "const s=require('./skillmeter/scripts/lib/telemetry-store');",
-    "process.stdout.write(JSON.stringify(s.readPolicy()));",
-  ].join("");
-  const result = runNode("-e", [probe], {
-    cwd: path.resolve(__dirname, "../.."),
-    env: { ...process.env, SKILLMETER_STATE_DIR: stateDir },
-  });
-  assert.equal(result.status, 0, result.stderr);
-  const policy = JSON.parse(result.stdout);
-  assert.equal(policy.organizations["skillbench-ai"].enabled, true);
-  assert.equal(policy.organizations["skillbench-ai"].source, "legacy");
-});
-
-test("legacy migration removes only telemetry and preserves adjacent settings", () => {
-  const repo = makeSettingsRepo("preserve", {
-    permissions: { defaultMode: "acceptEdits" },
-    skillmeter: {
-      telemetry: false,
-      activate_url: "https://example.invalid/activate",
-    },
-  });
-  const repoKey = "github.com/skillbench-ai/preserve";
-
-  const result = store.migrateLegacyRepositorySetting(repo, repoKey);
-  assert.equal(result.migrated, true);
-  assert.equal(result.cleaned, true);
-  assert.equal(store.getRepositoryOverride(repoKey), false);
-  assert.deepEqual(
-    readJson(path.join(repo, ".claude", "settings.local.json")),
-    {
-      permissions: { defaultMode: "acceptEdits" },
-      skillmeter: {
-        activate_url: "https://example.invalid/activate",
-      },
-    }
-  );
-});
-
-test("telemetry-only legacy settings file is deleted after import", () => {
-  const repo = makeSettingsRepo("delete", {
-    skillmeter: { telemetry: true },
-  });
-  const settingsPath = path.join(repo, ".claude", "settings.local.json");
-  assert.equal(
-    store.migrateLegacyRepositorySetting(
-      repo,
-      "github.com/skillbench-ai/delete"
-    ).cleaned,
-    true
-  );
-  assert.equal(fs.existsSync(settingsPath), false);
-  assert.equal(fs.existsSync(path.dirname(settingsPath)), true);
-});
-
-test("legacy cleanup refuses a settings file changed after import read", () => {
-  const repo = makeSettingsRepo("fingerprint", {
-    skillmeter: { telemetry: true },
-  });
-  const snapshot = settings.getTelemetryOptInSnapshot(repo);
-  writeJson(path.join(repo, ".claude", "settings.local.json"), {
-    skillmeter: {
-      telemetry: true,
-      github_client_id: "new-concurrent-value",
-    },
-  });
-  assert.equal(
-    settings.removeTelemetryOptIn(
-      repo,
-      snapshot.value,
-      snapshot.fingerprint
-    ),
-    false
-  );
-  assert.equal(
-    readJson(path.join(repo, ".claude", "settings.local.json"))
-      .skillmeter.github_client_id,
-    "new-concurrent-value"
-  );
-});
-
-test("legacy OFF wins across clones but never overrides a user decision", () => {
-  const onClone = makeSettingsRepo("clone-on", {
-    skillmeter: { telemetry: true },
-  });
-  const offClone = makeSettingsRepo("clone-off", {
-    skillmeter: { telemetry: false },
-  });
-  const repoKey = "github.com/skillbench-ai/shared";
-
-  store.migrateLegacyRepositorySetting(onClone, repoKey);
-  store.migrateLegacyRepositorySetting(offClone, repoKey);
-  assert.equal(store.getRepositoryOverride(repoKey), false);
-
-  store.setRepositoryOverride(repoKey, true);
-  const staleClone = makeSettingsRepo("clone-stale", {
-    skillmeter: { telemetry: false },
-  });
-  store.migrateLegacyRepositorySetting(staleClone, repoKey);
-  assert.equal(store.getRepositoryOverride(repoKey), true);
-  assert.equal(
-    fs.existsSync(path.join(staleClone, ".claude", "settings.local.json")),
-    false
-  );
-});
 
 test("stale policy revision is rejected without mutation", () => {
   const repoKey = "github.com/skillbench-ai/revision";

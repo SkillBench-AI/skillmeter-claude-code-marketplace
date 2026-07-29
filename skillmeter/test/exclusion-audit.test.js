@@ -73,10 +73,6 @@ function makeEnvironment({
         { enabled, source: "user" },
       ])
     ),
-    migration: {
-      credentials_version: 1,
-      legacy_settings: {},
-    },
   });
   return {
     stateDir,

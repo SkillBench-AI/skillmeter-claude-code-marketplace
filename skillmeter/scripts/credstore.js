@@ -168,31 +168,8 @@ function getSignedOut() {
   return readStore().signed_out === true;
 }
 
-// Compatibility façade over the telemetry policy SSOT. The legacy
-// `credentials.telemetry_disabled=true` remains only as a fail-safe for older
-// plugin processes and is never the new runtime's source of truth.
-function getTelemetryDisabled() {
-  return telemetryStore.getGlobalDisabled();
-}
-
-function setTelemetryDisabled(value) {
-  telemetryStore.setGlobalEnabled(value !== true);
-}
-
 function normalizeOrg(org) {
   return typeof org === "string" ? org.trim().toLowerCase() : "";
-}
-
-function getOrgTelemetryConsent(org) {
-  return telemetryStore.getOrganizationConsent(org);
-}
-
-function setOrgTelemetryConsent(org, enabled) {
-  const normalized = normalizeOrg(org);
-  if (!normalized) throw new Error("A GitHub organization is required.");
-  if (typeof enabled !== "boolean") throw new Error("Org telemetry consent must be boolean.");
-
-  return telemetryStore.setOrganizationConsent(normalized, enabled);
 }
 
 /**
@@ -220,13 +197,11 @@ function isTelemetryTransmissionAllowed(repoKey = "") {
 }
 
 // Drop the license JWT atomically (the validated org lives in the JWT, so
-// nothing else needs clearing). Also removes the obsolete allowed_github_orgs
-// key left by pre-JWT-org versions. Preserves device_id and hash_salt so the
+// nothing else needs clearing). Preserves device_id and hash_salt so the
 // machine identity survives a sign-out / sign-in cycle.
 function signOut() {
   const store = readStore();
   delete store.license_jwt;
-  delete store.allowed_github_orgs; // legacy-key cleanup
   store.signed_out = true;
   writeStore(store);
 }
@@ -235,9 +210,6 @@ function signOut() {
 // signed-out sentinel so the next gh attempt is unblocked.
 function markEngaged() {
   const store = readStore();
-  // Materialize the policy before a new JWT is minted. This preserves the
-  // distinction between a legacy signed-in user and a new sign-in.
-  telemetryStore.readPolicy();
   delete store.signed_out;
   writeStore(store);
 }
@@ -276,8 +248,6 @@ module.exports = {
   isLicenseTokenExpired,
   hasValidLicense,
   getAllowedGitHubOrgs,
-  getOrgTelemetryConsent,
-  setOrgTelemetryConsent,
   isTelemetryTransmissionAllowed,
   // Atomic sign-in lifecycle — prefer these over the lower-level set* helpers
   // when adjusting more than one field, so partial writes can't race.
@@ -286,8 +256,6 @@ module.exports = {
   signOut,
   // Flag accessors
   getSignedOut,
-  getTelemetryDisabled,
-  setTelemetryDisabled,
   // Sign-in result sentinel (for the FileChanged sign-in notifier)
   SIGNIN_RESULT_FILE,
   writeSigninResult,

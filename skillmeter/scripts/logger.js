@@ -177,20 +177,16 @@ async function runHook(eventName, buildData, options = {}) {
         classification: "invalid_cwd",
       };
   const orgConsent = repoScopeDecision.remoteOrg
-    ? credstore.getOrgTelemetryConsent(repoScopeDecision.remoteOrg)
+    ? telemetryStore.getOrganizationConsent(repoScopeDecision.remoteOrg)
     : null;
-  const settingsRoot = repoScopeDecision.repoRoot || cwd;
   const gate = resolveTelemetryGate({
-    globalDisabled: credstore.getTelemetryDisabled(),
+    globalDisabled: telemetryStore.getGlobalDisabled(),
     hasValidLicense: credstore.hasValidLicense(),
     cwdAvailable,
     repoOrgOwned: repoScopeDecision.allowed,
     orgConsent,
     projectOptIn: repoScopeDecision.repoKey
-      ? telemetryStore.getRepositoryOverride(
-          repoScopeDecision.repoKey,
-          settingsRoot
-        )
+      ? telemetryStore.getRepositoryOverride(repoScopeDecision.repoKey)
       : null,
   });
   if (options.onGate) {

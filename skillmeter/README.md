@@ -38,7 +38,7 @@ developer-authored content anonymous.
         │              │     │                     │              │
         ▼              ▼     ▼                     ▼              │
   ┌────────────────────────────────────────────────────┐         │
-  │              logger.js / logStructured()            │         │
+  │              logger.js / logEvent()                 │         │
   │                                                    │         │
   │  ┌──────────────┐  ┌───────────────────────────┐   │         │
   │  │ getDeviceId() │  │ Writes NDJSON log entry   │   │         │
@@ -50,8 +50,8 @@ developer-authored content anonymous.
                            │                                     │
                            ▼                                     │
               ┌────────────────────────┐                         │
-              │  logs/events.jsonl     │                         │
-              │  (NDJSON, append-only) │                         │
+              │ logs/repositories/<id> │                         │
+              │ events.jsonl (NDJSON)  │                         │
               └────────────┬───────────┘                         │
                            │                                     │
             ┌──────────────┴──────────────┐                      │
@@ -97,18 +97,11 @@ developer-authored content anonymous.
 ## Project Structure
 
 ```
-skillmeter/
+skillmeter/                  # Plugin source (install dir; replaced on update)
 ├── .claude-plugin/
 │   └── plugin.json          # Plugin manifest (name, author)
 ├── hooks/
 │   └── hooks.json           # Hook event → script mappings
-├── logs/
-│   ├── repositories/<id>/
-│   │   ├── events.jsonl     # Active repository event log (NDJSON)
-│   │   └── transcripts/
-│   │       ├── chunks/      # Sanitized transcript deltas awaiting upload
-│   │       └── cursors/     # Per-transcript upload cursors
-│   └── organization-audit/  # Organization-scoped audit queues
 └── scripts/
     ├── logger.js            # Core hook runner + logging library
     ├── hook.js              # Generic hook entrypoint (dispatches by event name)
@@ -126,6 +119,22 @@ skillmeter/
         ├── rules.js         # Gitleaks-derived secret/PII rule table
         ├── io.js            # Shared file I/O leaf helpers
         └── http.js          # Shared Bearer-POST helper
+```
+
+Queued telemetry never lives in the tree above. It is written only under the
+host-provided persistent data dir, which survives plugin updates:
+
+```
+${CLAUDE_PLUGIN_DATA}/       # Required; the plugin refuses to run without it
+├── logs/
+│   ├── repositories/<id>/
+│   │   ├── events.jsonl     # Active repository event log (NDJSON)
+│   │   └── transcripts/
+│   │       ├── chunks/      # Sanitized transcript deltas awaiting upload
+│   │       └── cursors/     # Per-transcript upload cursors
+│   ├── organization-audit/  # Organization-scoped audit queues
+│   └── backfill.ndjson      # Historical-backfill diagnostics
+└── backfill-state.json      # One-time historical-offer lifecycle
 ```
 
 ## Hook Events
@@ -342,7 +351,7 @@ pauses both live and historical transmission.
 
 SkillMeter stores device identity, hash salt, license JWT, and the GitHub fallback cooldown in `~/.skillbench/credentials.json`. Global, organization, and repository telemetry decisions live in the single machine policy store `~/.skillbench/telemetry-policy.json`. The one-time historical-backfill decision lives in Claude Code's persistent plugin data and is removed by a normal final-scope uninstall. Existing and new users receive the same one-time offer.
 
-Legacy telemetry values are imported automatically. After a repository value is durably imported, only `skillmeter.telemetry` is removed from that checkout's `.claude/settings.local.json`; adjacent Claude and SkillMeter development settings are preserved. Clones and worktrees share the same repository policy through the normalized `github.com/org/repo` identity.
+Telemetry decisions are never read from a project's `.claude/settings.local.json`; only string-valued development overrides (such as `activate_url`) are local to a checkout. Clones and worktrees share the same repository policy through the normalized `github.com/org/repo` identity.
 
 ## Slash Commands
 

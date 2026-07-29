@@ -12,6 +12,7 @@ const {
   runNode,
   writeFile,
   writeJson,
+  writeTelemetryPolicy,
 } = require("../testing/helpers");
 const credstore = require("../scripts/credstore");
 const { resolveTelemetryGate } = require("../scripts/lib/telemetry-policy");
@@ -214,7 +215,6 @@ test("org consent CLI validates the JWT org and persists the explicit choice", (
   const credentialPath = path.join(stateDir, "credentials.json");
   writeJson(credentialPath, {
     license_jwt: licenseJwt(),
-    org_telemetry_migration_version: 1,
   });
 
   const script = path.resolve(__dirname, "../scripts/org_telemetry_consent.js");
@@ -251,7 +251,6 @@ test("signin expansion emits an explicit pending-consent state for a new sign-in
   });
   writeJson(path.join(stateDir, "credentials.json"), {
     license_jwt: licenseJwt(),
-    org_telemetry_migration_version: 1,
   });
 
   const script = path.resolve(
@@ -316,7 +315,6 @@ test("FileChanged sign-in success immediately shows every discovered repository"
     device_id: "TEST-DEVICE",
     hash_salt: "0123456789abcdef0123456789abcdef",
     license_jwt: licenseJwt(),
-    org_telemetry_migration_version: 1,
   });
   writeJson(path.join(stateDir, "signin-result.json"), {
     status: "success",
@@ -354,7 +352,6 @@ test("transmission authorization requires org consent and honors the global kill
   const credentialPath = path.join(stateDir, "credentials.json");
   writeJson(credentialPath, {
     license_jwt: licenseJwt(),
-    org_telemetry_migration_version: 1,
   });
 
   const probe = [
@@ -429,9 +426,14 @@ test("SessionStart does not silently activate a token-less install", () => {
   assert.doesNotMatch(result.stderr, /gh activation/);
   const stored = readJson(path.join(stateDir, "credentials.json"));
   assert.equal(stored.license_jwt, undefined);
-  assert.equal(stored.telemetry_disabled, true);
+  // credentials.json is the identity store only — it carries no telemetry state.
+  assert.equal(stored.telemetry_disabled, undefined);
+  assert.equal(stored.org_telemetry_consents, undefined);
+  // A fresh policy grants nothing: no org is authorized, so nothing captures.
   const policy = readJson(path.join(stateDir, "telemetry-policy.json"));
-  assert.equal(policy.migration.credentials_version, 1);
+  assert.equal(policy.migration, undefined);
+  assert.deepEqual(policy.organizations, {});
+  assert.deepEqual(policy.repositories, {});
 });
 
 test("hook capture stays off until both org and repository are enabled", () => {
@@ -448,7 +450,6 @@ test("hook capture stays off until both org and repository are enabled", () => {
     device_id: "TEST-DEVICE",
     hash_salt: "0123456789abcdef0123456789abcdef",
     license_jwt: licenseJwt(),
-    org_telemetry_migration_version: 1,
   };
   writeJson(credentialPath, baseStore);
 
@@ -523,15 +524,8 @@ test("a skipped unselected-repository hook advances the transcript privacy curso
     device_id: "TEST-DEVICE",
     hash_salt: "0123456789abcdef0123456789abcdef",
     license_jwt: licenseJwt(),
-    org_telemetry_migration_version: 1,
-    org_telemetry_consents: {
-      "skillbench-ai": {
-        enabled: true,
-        policy_version: 1,
-        source: "user",
-      },
-    },
   });
+  writeTelemetryPolicy(stateDir, { orgs: { "skillbench-ai": true } });
   const env = {
     ...process.env,
     SKILLMETER_STATE_DIR: stateDir,
@@ -583,7 +577,6 @@ test("organization OFF deletes its repository queue and skipped hooks do not rec
     device_id: "TEST-DEVICE",
     hash_salt: "0123456789abcdef0123456789abcdef",
     license_jwt: licenseJwt(),
-    org_telemetry_migration_version: 1,
   });
   const env = {
     ...process.env,

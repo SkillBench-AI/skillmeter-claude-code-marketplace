@@ -4,7 +4,6 @@ const {
   retryFailedLogs,
   retryFailedTranscripts,
   cleanupStaleFiles,
-  purgeLegacyUnboundQueue,
   initializeTranscriptCursor,
 } = require("./lib/transfer");
 const { refreshLicense } = require("./lib/license-activation");
@@ -20,6 +19,7 @@ const {
   telemetryFailedNotice,
 } = require("./lib/banner.js");
 const credstore = require("./credstore.js");
+const telemetryStore = require("./lib/telemetry-store");
 
 // Pre-hook work: refresh the license (silent gh) so the banner decision below
 // reflects the freshest state, and ensure the sign-in sentinel file exists so
@@ -32,8 +32,7 @@ async function prepareSession() {
   initializeBackfillLifecycle();
   const deviceId = credstore.getDeviceId();
   credstore.ensureSigninResultFile();
-  purgeLegacyUnboundQueue();
-  if (!deviceId || credstore.getTelemetryDisabled()) return;
+  if (!deviceId || telemetryStore.getGlobalDisabled()) return;
   try { await refreshLicense(deviceId); } catch {}
 }
 

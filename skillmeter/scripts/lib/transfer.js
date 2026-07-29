@@ -26,10 +26,6 @@ const { parseJsonl, buildChunkPlan } = require("./transcript-delta");
 const {
   PLUGIN_ROOT,
   LOG_DIR,
-  LOG_FILE,
-  TRANSCRIPTS_PENDING_DIR,
-  TRANSCRIPTS_CHUNKS_DIR,
-  TRANSCRIPTS_CURSORS_DIR,
   PLUGIN_VERSION,
   repositoryQueuePaths,
 } = require("./paths");
@@ -928,28 +924,6 @@ function sealEventLogAndTriggerDrain(input, deviceId, repository) {
   }
 }
 
-// Remove pre-SSOT queue artifacts from the persistent data root. They have no
-// repository identity, so retrying them could transmit under the wrong org
-// after a later sign-in.
-function purgeLegacyUnboundQueue() {
-  try {
-    fs.mkdirSync(LOG_DIR, { recursive: true });
-    for (const candidate of [
-      LOG_FILE,
-      TRANSCRIPTS_PENDING_DIR,
-      TRANSCRIPTS_CHUNKS_DIR,
-      TRANSCRIPTS_CURSORS_DIR,
-    ]) {
-      try { fs.rmSync(candidate, { recursive: true, force: true }); } catch {}
-    }
-    for (const entry of fs.readdirSync(LOG_DIR, { withFileTypes: true })) {
-      if (entry.isFile() && /^events\.jsonl\.\d+$/.test(entry.name)) {
-        try { fs.unlinkSync(path.join(LOG_DIR, entry.name)); } catch {}
-      }
-    }
-  } catch {}
-}
-
 function listSealedEventLogs() {
   const files = [];
   const contexts = [
@@ -1056,7 +1030,7 @@ function retryFailedTranscripts() {
 }
 
 /**
- * Delete delivered event logs and obsolete pre-delta pending files. Unsent
+ * Delete event logs already delivered (the `.sent` markers). Unsent
  * repository-bound chunks and cursors are intentionally retained.
  */
 function cleanupStaleFiles() {
@@ -1095,19 +1069,6 @@ function cleanupStaleFiles() {
     }
   }
 
-  // Orphan GC only: the legacy full-file pending queue is no longer written or
-  // uploaded (transcript upload is delta-only). Sweep it so any full transcript
-  // left by a pre-cutover client version is eventually reclaimed off disk.
-  if (fs.existsSync(TRANSCRIPTS_PENDING_DIR)) {
-    try {
-      for (const f of fs.readdirSync(TRANSCRIPTS_PENDING_DIR)) {
-        candidates.push(path.join(TRANSCRIPTS_PENDING_DIR, f));
-      }
-    } catch {
-      // fall through
-    }
-  }
-
   let deleted = 0;
   for (const p of candidates) {
     try {
@@ -1128,7 +1089,6 @@ function cleanupStaleFiles() {
 }
 
 module.exports = {
-  sealEventLogAndTriggerDrain,
   readCursor,
   writeCursor,
   sealDeltaChunk,
@@ -1149,7 +1109,6 @@ module.exports = {
   retryFailedLogs,
   retryFailedTranscripts,
   cleanupStaleFiles,
-  purgeLegacyUnboundQueue,
   purgeRepositoryQueue,
   purgeOrganizationQueues,
   purgeOrganizationAuditQueues,

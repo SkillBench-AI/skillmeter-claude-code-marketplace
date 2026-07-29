@@ -283,10 +283,10 @@ function toggleDescription({ gate, projectSetting, org }) {
 
 function buildRepositoryTelemetryState(roots, {
   getScopeDecision = getRepoScopeDecision,
-  getProjectSetting = (repoKey, repoRoot) =>
-    telemetryStore.getRepositoryOverride(repoKey, repoRoot),
-  getOrgConsent = credstore.getOrgTelemetryConsent,
-  getGlobalDisabled = credstore.getTelemetryDisabled,
+  getProjectSetting = (repoKey) =>
+    telemetryStore.getRepositoryOverride(repoKey),
+  getOrgConsent = telemetryStore.getOrganizationConsent,
+  getGlobalDisabled = telemetryStore.getGlobalDisabled,
   hasValidLicense = credstore.hasValidLicense,
   getHashSalt = credstore.getOrCreateHashSalt,
   getConfiguredRepositories = () =>
@@ -308,9 +308,8 @@ function buildRepositoryTelemetryState(roots, {
     }
     if (!scope || !scope.allowed || !scope.remoteOrg) continue;
 
-    // Import every checkout before rendering. A later clone/worktree may carry
-    // a legacy OFF value, which must win over an earlier legacy ON.
-    getProjectSetting(scope.repoKey, repoRoot);
+    // Clones and worktrees collapse onto one canonical repoKey, so the first
+    // checkout that resolves it is enough to render the decision.
     if (!discovered.has(scope.repoKey)) {
       discovered.set(scope.repoKey, { repoRoot, scope });
     }
@@ -345,7 +344,7 @@ function buildRepositoryTelemetryState(roots, {
   }
 
   for (const { repoRoot, scope } of discovered.values()) {
-    const projectSetting = getProjectSetting(scope.repoKey, "");
+    const projectSetting = getProjectSetting(scope.repoKey);
     const orgConsent = getOrgConsent(scope.remoteOrg);
     const gate = resolveTelemetryGate({
       globalDisabled,
@@ -564,15 +563,11 @@ module.exports = {
   SESSION_FILE_RE,
   getClaudeProjectsDir,
   getClaudeStateFile,
-  canonicalRepositoryRoot,
   safeDisplayComponent,
   repositoryNameFromRemote,
-  repositoryDisplayName,
   collectTranscriptCwds,
   collectClaudeStateCwds,
   discoverRepositoryRoots,
-  repositoryId,
-  buildRepositoryTelemetryState,
   publicRepositoryState,
   applyRepositoryToggles,
   applyOnboardingSelection,

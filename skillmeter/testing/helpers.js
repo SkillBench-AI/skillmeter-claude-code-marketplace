@@ -1,5 +1,8 @@
 "use strict";
 
+// Forces an isolated CLAUDE_PLUGIN_DATA before any scripts/ module can load.
+require("./bootstrap");
+
 const { after } = require("node:test");
 const fs = require("fs");
 const os = require("os");
@@ -31,6 +34,42 @@ function writeJson(filePath, value) {
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
+}
+
+/**
+ * Write a telemetry-policy.json fixture into a test state dir. Consent lives
+ * exclusively in this machine policy SSOT, so tests grant it here rather than
+ * through credentials.json or a project settings file.
+ */
+function writeTelemetryPolicy(
+  stateDir,
+  { enabled = true, orgs = {}, repositories = {} } = {}
+) {
+  const decidedAt = Date.now();
+  const policy = {
+    schema_version: 1,
+    revision: 1,
+    global: { enabled, decided_at: decidedAt, source: "user" },
+    organizations: Object.fromEntries(
+      Object.entries(orgs).map(([org, value]) => [
+        org.toLowerCase(),
+        {
+          enabled: value,
+          consent_version: 1,
+          decided_at: decidedAt,
+          source: "user",
+        },
+      ])
+    ),
+    repositories: Object.fromEntries(
+      Object.entries(repositories).map(([repoKey, value]) => [
+        repoKey.toLowerCase(),
+        { enabled: value, decided_at: decidedAt, source: "user" },
+      ])
+    ),
+  };
+  writeJson(path.join(stateDir, "telemetry-policy.json"), policy);
+  return policy;
 }
 
 function makeJwt(payload) {
@@ -65,6 +104,7 @@ module.exports = {
   writeFile,
   writeJson,
   readJson,
+  writeTelemetryPolicy,
   makeJwt,
   setTestEnv,
   runNode,
