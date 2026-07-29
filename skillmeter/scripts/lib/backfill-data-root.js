@@ -46,7 +46,5 @@ function bindBackfillDataRoot(lifecycleId) {
 }
 
 module.exports = {
-  LIFECYCLE_ID_RE,
   bindBackfillDataRoot,
-  resolveBackfillDataRoot,
 };

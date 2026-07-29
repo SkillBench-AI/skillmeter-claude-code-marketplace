@@ -366,7 +366,6 @@ module.exports = {
   getSshHostAliases,
   extractGitHubOrgFromRemote,
   extractGitHubRepositoryFromRemote,
-  getRemoteEntriesForRepo,
   getRemoteUrlsForRepo,
   getRepoScopeDecision,
   _resetConfigCache: resetConfigCache,

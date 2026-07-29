@@ -8,18 +8,10 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 
-const { STATE_DIR } = require("./config");
 const { atomicWriteJson, safeReadJson } = require("./io");
-const {
-  BACKFILL_STATE_FILE: PLUGIN_DATA_BACKFILL_STATE_FILE,
-} = require("./paths");
+const { BACKFILL_STATE_FILE } = require("./paths");
 
 const SCHEMA_VERSION = 1;
-// Direct Node runs and older Claude Code versions do not provide
-// CLAUDE_PLUGIN_DATA. Keep their state out of the plugin source/cache tree.
-const BACKFILL_STATE_FILE = process.env.CLAUDE_PLUGIN_DATA
-  ? PLUGIN_DATA_BACKFILL_STATE_FILE
-  : path.join(STATE_DIR, "backfill-state.json");
 const LOCK_FILE = `${BACKFILL_STATE_FILE}.lock`;
 const LOCK_STALE_MS = 10_000;
 const RUNNING_STALE_MS = 30 * 60_000;
@@ -222,18 +214,6 @@ function isBackfillUploadAuthorized({
   );
 }
 
-function restoreClaimedOffer(offerId, reason = "offer_consumed") {
-  return mutateBackfillState((state) => {
-    if (state.status !== "running" || state.offer_id !== offerId) return null;
-    return {
-      ...state,
-      status: "declined",
-      reason,
-      error: undefined,
-    };
-  });
-}
-
 function updateBackfillProgress(offerId, progress) {
   return mutateBackfillState((state) => {
     if (state.status !== "running" || state.offer_id !== offerId) return null;
@@ -276,7 +256,6 @@ module.exports = {
   claimBackfillOffer,
   markBackfillDeclined,
   beginBackfill,
-  restoreClaimedOffer,
   updateBackfillProgress,
   finishBackfill,
   isBackfillRunning,

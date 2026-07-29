@@ -15,8 +15,13 @@ agreement with SkillBench may also apply.
 
 ## Consent and scope
 
-Installing the plugin does not enable telemetry. Telemetry is sent only when
-all of the following are true:
+Installing the plugin does not enable telemetry. There are two independent
+consent paths, and neither one implies the other.
+
+### Ongoing telemetry
+
+Telemetry from current sessions is sent only when all of the following are
+true:
 
 1. a valid SkillMeter license is present;
 2. the user has explicitly authorized the licensed GitHub organization;
@@ -31,11 +36,32 @@ The plugin may create local device and policy state, inspect repository
 ownership, and display consent UI before telemetry is enabled. That local
 processing is not uploaded as telemetry.
 
-After organization and repository consent, a new plugin installation can
-separately ask once whether to send completed historical transcripts from the
-repositories just enabled. Declining or cancelling does not enable historical
-processing and the plugin does not ask again during that installation
-lifecycle.
+### One-time historical backfill
+
+A plugin installation may separately ask **once** whether to send completed
+historical transcripts. This is a distinct decision with its own conditions:
+
+1. a valid SkillMeter license is present;
+2. the offered repositories belong to a GitHub organization encoded in that
+   license;
+3. the user has explicitly approved the one-time historical question for the
+   named set of repositories shown; and
+4. the machine-global telemetry kill-switch is not active — it pauses
+   historical transmission just as it pauses ongoing telemetry.
+
+Because this consent is independent, the offer covers every repository of the
+licensed organization that the plugin can discover locally, **including
+repositories whose ongoing telemetry is off**, and approving it neither
+requires nor grants organization authorization or repository enablement.
+Conversely, ongoing telemetry consent never causes historical transcripts to be
+sent.
+
+Approval applies only to the specific repositories and the transcript cutoff
+recorded when the question was answered; sessions modified after that point are
+excluded. Declining or cancelling does not enable historical processing, and
+the plugin does not ask again during that installation lifecycle. The user may
+still start a backfill deliberately with `/skillmeter:backfill`, which asks the
+same question again before doing anything.
 
 ## Data processed
 

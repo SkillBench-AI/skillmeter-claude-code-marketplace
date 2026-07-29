@@ -155,7 +155,12 @@ async function main() {
     return;
   }
   if (action === "status") {
+    // bindBackfillDataRoot matched the lifecycle id against the raw file, which
+    // does not validate the rest of the record. A corrupt status field makes
+    // readBackfillState return null, and `status` is the command a user runs to
+    // diagnose exactly that — so report it instead of throwing a type error.
     const state = runtime.backfillState.readBackfillState();
+    if (!state) fail("the backfill lifecycle record is unreadable or corrupt.");
     process.stdout.write(JSON.stringify({
       lifecycleId: state.lifecycle_id,
       status: state.status,
