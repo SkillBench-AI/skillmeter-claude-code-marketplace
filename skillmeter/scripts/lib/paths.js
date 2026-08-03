@@ -10,21 +10,24 @@
 const path = require("path");
 const crypto = require("crypto");
 const { safeReadJson } = require("./io");
+const { resolvePluginDataRoot } = require("./plugin-data-root");
 
 const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, "..", "..");
 
 // The telemetry queue + lock files must survive plugin updates, so they live
-// exclusively in CLAUDE_PLUGIN_DATA, the host-provided persistent data dir.
-// PLUGIN_ROOT is deliberately NOT a fallback: it is the install/cache dir, it
-// changes on every update, and the old copy is deleted after about 14 days —
-// writing a queue there strands it. A missing variable is a misconfigured host
-// (or a `node` invocation without one), and failing loudly here beats writing
-// state to a directory that is about to be reclaimed.
-const DATA_ROOT = process.env.CLAUDE_PLUGIN_DATA;
+// exclusively in the host's persistent data dir. PLUGIN_ROOT is deliberately
+// NOT a fallback: it is the install/cache dir, it changes on every update, and
+// the old copy is reclaimed after about 14 days, stranding any queue there.
+//
+// Claude Code injects CLAUDE_PLUGIN_DATA into hooks but NOT into monitors or
+// the `node ...` commands inside SKILL.md, so resolvePluginDataRoot derives the
+// same directory for those. See lib/plugin-data-root.js.
+const DATA_ROOT = resolvePluginDataRoot();
 if (!DATA_ROOT) {
   throw new Error(
-    "[skillmeter] CLAUDE_PLUGIN_DATA is not set. It is provided by Claude Code " +
-    "when a plugin hook runs; set it explicitly to run a script directly."
+    "[skillmeter] Could not resolve the plugin data directory. Claude Code " +
+    "provides CLAUDE_PLUGIN_DATA to plugin processes; set it explicitly to run " +
+    "a script directly."
   );
 }
 const LOG_DIR = path.join(DATA_ROOT, "logs");

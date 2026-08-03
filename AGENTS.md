@@ -12,7 +12,7 @@ There is no package manager manifest or build step. Use direct Node commands for
 - `CLAUDE_PLUGIN_DATA=$(mktemp -d) node skillmeter/scripts/session_start.js < sample.json`: run a hook handler with fixture stdin.
 - `CLAUDE_PLUGIN_DATA=$(mktemp -d) node skillmeter/scripts/telemetry.js`: exercise the telemetry command script.
 
-`CLAUDE_PLUGIN_DATA` is the persistent plugin data dir and is **required** — Claude Code provides it when a hook runs, and `scripts/lib/paths.js` throws without it. It has no fallback on purpose: the install dir changes on every plugin update and is reclaimed afterwards, so a queue written there would be stranded. Point it at a throwaway dir for direct runs; never at a real `~/.claude/plugins/data/*` entry.
+`CLAUDE_PLUGIN_DATA` is the persistent plugin data dir and is **required**. Claude Code injects it into hook processes only — monitors (`monitors.json`) and the `node ...` commands inside `SKILL.md` get `CLAUDE_PLUGIN_ROOT` but no data dir, so `scripts/lib/plugin-data-root.js` derives the same directory for them from the host's `cache/<marketplace>/<plugin>/<version>` → `data/<plugin>-<marketplace>` layout. Deriving rather than falling back to the install dir is the point: a monitor writing somewhere else would drain a queue the hooks never fill, and the install dir is reclaimed after an update. When neither the variable nor the derivation applies, `paths.js` throws instead of guessing. Point it at a throwaway dir for direct runs; never at a real `~/.claude/plugins/data/*` entry.
 
 When changing hook mappings, inspect `skillmeter/hooks/hooks.json` and run the affected script directly with representative JSON input.
 
