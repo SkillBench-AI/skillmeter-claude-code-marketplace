@@ -16,6 +16,10 @@ const { PLUGIN_VERSION } = require("./paths");
 
 // Content-sized card (2-space body padding). All glyphs used here are
 // single-column, so [...value].length measures the visible width correctly.
+//
+// Every card starts with a newline: the renderers that show these prefix the
+// first line ("SessionStart:startup says: ", "FileChanged says: "), which would
+// otherwise indent the top border past the rest of the box.
 function card(lines) {
   const title = `SkillMeter v${PLUGIN_VERSION}`;
   const bodyWidth = Math.max(
@@ -29,7 +33,7 @@ function card(lines) {
     const padding = " ".repeat(bodyWidth - [...line].length);
     return `│  ${line}${padding}  │`;
   });
-  return [top, ...body, `╰${"─".repeat(innerWidth)}╯`].join("\n");
+  return ["", top, ...body, `╰${"─".repeat(innerWidth)}╯`].join("\n");
 }
 
 function orgLine(org) {

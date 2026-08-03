@@ -13,7 +13,10 @@ const {
 } = require("../scripts/lib/banner");
 
 function assertCard(value) {
-  const lines = value.split("\n");
+  // The card opens with a newline so the renderer's "… says: " prefix cannot
+  // indent the top border out of line with the rest of the box.
+  assert.match(value, /^\n╭/);
+  const lines = value.slice(1).split("\n");
   assert.ok(lines.length >= 3);
   assert.match(lines[0], /^╭─ SkillMeter v/);
   assert.match(lines.at(-1), /^╰─+╯$/);
