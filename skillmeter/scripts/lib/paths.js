@@ -21,13 +21,15 @@ const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, ".
 //
 // Claude Code injects CLAUDE_PLUGIN_DATA into hooks but NOT into monitors or
 // the `node ...` commands inside SKILL.md, so resolvePluginDataRoot derives the
-// same directory for those. See lib/plugin-data-root.js.
-const DATA_ROOT = resolvePluginDataRoot();
+// same directory for those. PLUGIN_ROOT is passed in rather than read from the
+// environment because those processes have no CLAUDE_PLUGIN_ROOT either — only
+// the __dirname fallback above is reliable there. See lib/plugin-data-root.js.
+const DATA_ROOT = resolvePluginDataRoot(PLUGIN_ROOT);
 if (!DATA_ROOT) {
   throw new Error(
-    "[skillmeter] Could not resolve the plugin data directory. Claude Code " +
-    "provides CLAUDE_PLUGIN_DATA to plugin processes; set it explicitly to run " +
-    "a script directly."
+    "[skillmeter] Could not resolve the plugin data directory from " +
+    `${PLUGIN_ROOT}. Set CLAUDE_PLUGIN_DATA explicitly to run a script outside ` +
+    "a plugin installation."
   );
 }
 const LOG_DIR = path.join(DATA_ROOT, "logs");
