@@ -67,13 +67,62 @@ test("a derived root is published to the env so children inherit it", () => {
   assert.equal(env.CLAUDE_PLUGIN_DATA, expected);
 });
 
-// `${CLAUDE_PLUGIN_ROOT}` in monitors.json / SKILL.md is substituted into the
-// command text, not exported. Reading the plugin root from the environment is
-// therefore never valid for those processes.
+// Only hooks and MCP/LSP subprocesses get these exported; monitor commands and
+// skill content get the `${...}` placeholders substituted instead. Reading the
+// plugin root from the environment is therefore never valid for those.
 test("the plugin root comes from the caller, never from the environment", () => {
   const { pluginRoot, expected } = makeHostLayout();
   const env = { CLAUDE_PLUGIN_ROOT: "/somewhere/else" };
   assert.equal(resolvePluginDataRoot(pluginRoot, env), expected);
+});
+
+test("an unsubstituted placeholder is never treated as a path", () => {
+  const { pluginRoot, expected } = makeHostLayout();
+  const env = { CLAUDE_PLUGIN_DATA: "${CLAUDE_PLUGIN_DATA}" };
+  assert.equal(resolvePluginDataRoot(pluginRoot, env), expected);
+});
+
+test("monitor commands pass the data dir through the supported substitution", () => {
+  const monitors = JSON.parse(
+    fs.readFileSync(path.resolve(__dirname, "..", "monitors", "monitors.json"), "utf8")
+  );
+  assert.ok(monitors.length > 0);
+  for (const monitor of monitors) {
+    assert.match(
+      monitor.command,
+      /CLAUDE_PLUGIN_DATA="\$\{CLAUDE_PLUGIN_DATA\}"/,
+      `${monitor.name} must pass CLAUDE_PLUGIN_DATA explicitly`
+    );
+  }
+});
+
+// Skills cannot use the same trick as monitors: their `allowed-tools` grant is
+// `Bash(node *)`, so an env-assignment prefix would stop matching and every
+// command would prompt. Skill processes therefore rely on the derivation, and
+// their commands must keep starting with `node`.
+test("skill commands stay shaped for the Bash(node *) grant", () => {
+  const skills = path.resolve(__dirname, "..", "skills");
+  let checked = 0;
+  for (const entry of fs.readdirSync(skills)) {
+    const file = path.join(skills, entry, "SKILL.md");
+    if (!fs.existsSync(file)) continue;
+    const content = fs.readFileSync(file, "utf8");
+    assert.match(
+      content,
+      /allowed-tools:.*Bash\(node \*\)/,
+      `${entry}/SKILL.md should grant Bash(node *)`
+    );
+    for (const line of content.split("\n")) {
+      if (!line.includes("${CLAUDE_PLUGIN_ROOT}/scripts/")) continue;
+      checked++;
+      assert.match(
+        line.trim(),
+        /^node \$\{CLAUDE_PLUGIN_ROOT\}\/scripts\//,
+        `${entry}/SKILL.md must invoke node directly: ${line.trim()}`
+      );
+    }
+  }
+  assert.ok(checked > 0, "expected skill commands to check");
 });
 
 // Regression for v0.32.0 and v0.32.1. Monitors (monitors.json) and the

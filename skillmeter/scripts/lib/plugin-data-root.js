@@ -1,24 +1,23 @@
 /**
  * Resolve the host-provided persistent plugin data dir.
  *
- * CLAUDE_PLUGIN_DATA is authoritative, but Claude Code only injects it into
- * hook processes. Monitors (monitors.json) and the `node ...` commands inside
- * SKILL.md must derive the SAME directory the hooks use. Deriving matters more
- * than merely having somewhere to write: a monitor that picked a different root
- * would drain a queue the hooks never fill.
+ * Per the plugins reference, Claude Code exports CLAUDE_PLUGIN_ROOT /
+ * CLAUDE_PLUGIN_DATA as environment variables only to hook processes and to
+ * MCP/LSP subprocesses. Monitor commands and skill content instead get the
+ * `${...}` placeholders substituted inline, so monitors.json and every SKILL.md
+ * command passes CLAUDE_PLUGIN_DATA explicitly — that substitution is the
+ * supported mechanism and the primary path here.
  *
- * Note that `${CLAUDE_PLUGIN_ROOT}` in monitors.json / SKILL.md is substituted
- * into the command TEXT; it is not exported to the child process. So the plugin
- * root must come from the caller (paths.js resolves it from __dirname when the
- * variable is absent) rather than being read out of the environment here.
+ * Derivation below is only a backstop for a host that did not substitute. The
+ * documented location is `~/.claude/plugins/data/{id}/`, where {id} is the
+ * `plugin@marketplace` identifier with characters outside [a-zA-Z0-9_-] replaced
+ * by `-`; the installed plugin root is
+ * `<config>/plugins/cache/<marketplace>/<plugin>/<version>`, which yields the
+ * same {id}. It is accepted only when the host's `plugins/data` parent already
+ * exists, so an unexpected layout fails loudly rather than writing elsewhere.
  *
- * Layout created by the host:
- *   <config>/plugins/cache/<marketplace>/<plugin>/<version>  <- CLAUDE_PLUGIN_ROOT
- *   <config>/plugins/data/<plugin>-<marketplace>             <- CLAUDE_PLUGIN_DATA
- *
- * The derivation is a fallback, never a guess: it is accepted only when the
- * `plugins/data` parent the host owns actually exists. If the host ever changes
- * this layout we fail loudly (as before) instead of silently writing elsewhere.
+ * The plugin root is taken from the caller, never from the environment: a
+ * monitor has no CLAUDE_PLUGIN_ROOT exported, only the substituted command text.
  *
  * This is a LEAF module — fs/path only, so paths.js can use it without a cycle.
  */
@@ -57,7 +56,12 @@ function derivePluginDataRoot(pluginRoot) {
  * backfill_worker) inherit the identical root instead of re-deriving it.
  */
 function resolvePluginDataRoot(pluginRoot, env = process.env) {
-  if (env.CLAUDE_PLUGIN_DATA) return env.CLAUDE_PLUGIN_DATA;
+  // A host that does not substitute the placeholder hands us the literal
+  // "${CLAUDE_PLUGIN_DATA}". Creating a directory by that name would be worse
+  // than falling through to derivation.
+  const provided = env.CLAUDE_PLUGIN_DATA;
+  if (provided && !provided.includes("${")) return provided;
+
   const derived = derivePluginDataRoot(pluginRoot);
   if (derived) env.CLAUDE_PLUGIN_DATA = derived;
   return derived;
