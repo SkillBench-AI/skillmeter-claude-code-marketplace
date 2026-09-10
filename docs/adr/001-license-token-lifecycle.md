@@ -98,10 +98,15 @@ Failure handling:
 
 - `/refresh` is the only call made on a routine expiry. The silent `gh`
   re-activation runs only when there is no usable token to rotate: the stored
-  token is absent (decision 4) or the server returned 410 (sliding window
-  exceeded). It reads the gh CLI's stored credential with `gh auth token`; it
-  never opens a browser or a device-code flow, and when gh is not
-  authenticated it fails immediately.
+  token is absent (decision 4), or the server rejected the token itself with
+  410 (sliding window exceeded) or 401 (signature no longer valid, for
+  example after a signing-key rotation). Every other refresh failure (network
+  error, 404, 5xx, malformed response) is transient: the daemon keeps the
+  token, backs off, and retries `/refresh`; it does not re-activate. Today
+  `refreshLicense` falls through to re-activation on any failure; A2 narrows
+  it to the cases above. Re-activation reads the gh CLI's stored credential
+  with `gh auth token`; it never opens a browser or a device-code flow, and
+  when gh is not authenticated it fails immediately.
 - Consecutive refresh failures back off exponentially from the sweep interval
   up to the same 30-minute cap the drain backoff uses, and reset on the first
   success. This bounds calls to the activation Lambda and to GitHub during an
@@ -155,9 +160,18 @@ identity the user consented to: `github_id`, the organization (`sub` and
 `org.login`), and the meter audience (`aud`) from the accepted token. Before
 calling `/activate`, the client reads the current gh identity and proceeds
 only when its GitHub id matches the marker; after minting, the new token's
-`github_id` and organization are checked against the marker again before it
-is committed. Any mismatch discards the token, invalidates the marker,
-records the outcome, and notifies the user. Sign-out clears the marker.
+`github_id`, organization, and `aud` are all checked against the marker
+before it is committed. Any mismatch discards the token, invalidates the
+marker, records the outcome, and notifies the user. Sign-out clears the
+marker. A tenant whose meter hostname changes therefore requires one
+interactive sign-in; that is deliberate, since the destination of the data
+is part of what the user consented to.
+
+Devices that signed in before the marker existed have no marker. On upgrade,
+the marker is created from the claims of the stored token at the next
+successful `/refresh` or SessionStart (the token is proof of a completed
+sign-in on this device). A device that has no stored token at upgrade time
+cannot be recovered silently and is asked to sign in once (B1).
 
 Rationale: the current rule exists so the plugin never signs a user in
 without consent. A completed sign-in on the same device is that consent, and
@@ -180,13 +194,16 @@ checked against it and against the VS Code extension's auth service (A6).
 - Long-lived sessions keep recording; the recorded-versus-skipped gap
   disappears and becomes measurable.
 - Events recorded during a stale window are held locally until the next
-  successful refresh, for at most 7 days. This is a new retention surface:
+  successful token recovery (a `/refresh` rotation or a silent `/activate`),
+  for at most 7 days. This is a new retention surface:
   today unsent data is never age-deleted, and sign-out and 402 do not purge
   repository queues; A3 implements all three removals.
 - The daemon becomes a required component for reliability, so its failure
   has to be visible to the user (B1).
-- The user needs to act only when both `/refresh` and the silent
-  re-activation fail, or after an explicit sign-out.
+- The user needs to act only in the terminal states of decision 2: license
+  revoked (402), gh identity mismatch, gh not authenticated, refresh backoff
+  cap reached, a missing token on a device without a marker, or after an
+  explicit sign-out.
 - Rollout order: client changes first (they work with the 15-minute TTL),
   then the server TTL.
 
@@ -203,8 +220,8 @@ checked against it and against the VS Code extension's auth service (A6).
 ## Open items
 
 - The prior-sign-in marker for decision 4 does not exist yet; A4 defines
-  where it is written and how devices signed in before this change are
-  treated (they have no marker, so they fall back to notification).
+  where it is written. Migration for devices signed in before this change is
+  settled in decision 4.
 - `/refresh` accepts any `device_id` with an expired token. Binding refresh to
   a device claim inside the token is a server-side follow-up for
   `skillmeter-license-activation`, tracked with A5.
