@@ -7,6 +7,7 @@ const {
   initializeTranscriptCursor,
 } = require("./lib/transfer");
 const { refreshLicense } = require("./lib/license-activation");
+const { clearTerminal } = require("./lib/license-status");
 const { detectHarness } = require("./harness.js");
 const { PLUGIN_ROOT, PLUGIN_VERSION } = require("./lib/paths");
 const { initializeBackfillLifecycle } = require("./lib/backfill-state");
@@ -33,7 +34,10 @@ async function prepareSession() {
   const deviceId = credstore.getDeviceId();
   credstore.ensureSigninResultFile();
   if (!deviceId || telemetryStore.getGlobalDisabled()) return;
-  try { await refreshLicense(deviceId); } catch {}
+  // A new session gets one fresh attempt even if the daemon gave up last time
+  // (ADR 001, decision 2: SessionStart clears the terminal state).
+  clearTerminal({ source: "session_start" });
+  try { await refreshLicense(deviceId, { source: "session_start" }); } catch {}
 }
 
 function runSessionStartHook() {

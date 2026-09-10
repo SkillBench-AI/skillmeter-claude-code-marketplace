@@ -11,6 +11,7 @@
 const credstore = require("./credstore.js");
 const telemetryStore = require("./lib/telemetry-store");
 const { trySilentGhActivate } = require("./lib/license-activation");
+const { clearLicenseStatus } = require("./lib/license-status");
 const { readStdinJson } = require("./lib/io");
 const {
   loadRepositoryTelemetryState,
@@ -100,6 +101,7 @@ async function main() {
   // Re-running signin re-arms the gh fallback and clears any signed-out
   // sentinel left by /skillmeter:signout — one atomic write.
   credstore.markEngaged();
+  clearLicenseStatus({ source: "signin" });
 
   const existingToken = credstore.getLicenseToken();
   if (existingToken && !credstore.isLicenseTokenExpired(existingToken)) {

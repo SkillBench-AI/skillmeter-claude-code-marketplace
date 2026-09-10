@@ -329,6 +329,31 @@ Logs are sent to the backend from durable filesystem queues:
 
 All uploads use gzip compression. Queues are partitioned by canonical GitHub repository identity, and the current global, organization, and repository policy is checked again immediately before each request. Successfully uploaded event batches are renamed with `.sent`; successfully uploaded transcript delta chunks are deleted. Failed uploads remain queued for retry.
 
+### License refresh
+
+Uploads authenticate with a short-lived license JWT. The plugin keeps it fresh
+without user action for as long as a session is open (see
+[ADR 001](../docs/adr/001-license-token-lifecycle.md)):
+
+- The `skillmeter-retry-daemon` monitor checks the token on every sweep
+  (`SKILLMETER_RETRY_DAEMON_INTERVAL_MS`, default 2 minutes) and rotates it
+  through the activation service's `/refresh` endpoint when it is within five
+  minutes of expiry. `SessionStart` does the same once at session start, and
+  queue drains do it right before an upload.
+- Silent re-activation through the GitHub CLI's stored credential
+  (`gh auth token`, never a browser or device-code flow) runs only when the
+  token itself can no longer be rotated: `/refresh` answered 410 (7-day
+  sliding window exceeded) or 401. Any other refresh failure keeps the token
+  and retries later.
+- Consecutive failures back off exponentially from the sweep interval up to
+  30 minutes. A 402 (organization license no longer active), a gh CLI that is
+  missing or not logged in, or an exhausted backoff is terminal: the plugin
+  stops retrying until the next `SessionStart` or `/skillmeter:signin`.
+- Outcomes are recorded in `~/.skillbench/license-status.json` (next to
+  `credentials.json`; `SKILLMETER_STATE_DIR` relocates both). The record holds
+  timestamps, the failure count, the next retry time, and the terminal reason;
+  it never contains the token.
+
 Historical backfill keeps snapshotting and upload detached from the interactive
 sign-in command. The always-on `skillmeter-backfill-monitor` watches that
 pipeline and reports scan, snapshot, upload-pass, and failure transitions to
@@ -371,6 +396,7 @@ Telemetry decisions are never read from a project's `.claude/settings.local.json
 | `SKILLMETER_ACTIVATE_URL`      | `https://api.skillbench.ai/activate`                                          | Activation endpoint that exchanges a GitHub OAuth token for a SkillMeter license JWT. Point at `https://api.dev.skillbench.com/activate` to run against dev. |
 | `SKILLMETER_GITHUB_CLIENT_ID`  | prod SkillMeter GitHub OAuth App                                              | Override the GitHub OAuth App used for the device-code login. Set to the dev App's `client_id` when activating against dev.                  |
 | `SKILLMETER_TIMEOUT`           | `10`                                                                          | Upload timeout (seconds)                                                                                                                     |
+| `SKILLMETER_RETRY_DAEMON_INTERVAL_MS` | `120000`                                                               | Retry monitor sweep interval (ms). Also the cadence of the background license refresh check and the base of its failure backoff.          |
 
 In production the telemetry hostname is per-tenant and looks like `https://<slug>.meter.skillbench.ai` (non-prod: `https://<slug>.meter.<env>.skillbench.com`). The activation Lambda mints it into the license JWT against the tenant slug at issuance, and the plugin reads it back at upload time.
 

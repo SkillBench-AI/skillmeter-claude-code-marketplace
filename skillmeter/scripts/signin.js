@@ -23,6 +23,7 @@ const { startSpinner } = require("./lib/spinner.js");
 const { getRepoScopeDecision } = require("./lib/repo-scope");
 const telemetryStore = require("./lib/telemetry-store");
 const { postBearerJson } = require("./lib/http");
+const { clearLicenseStatus } = require("./lib/license-status");
 const {
   STATE_DIR,
   getActivateUrl,
@@ -223,6 +224,7 @@ async function main() {
   // so a user who just fixed their `gh auth` scopes or who signed out
   // earlier isn't bounced.
   credstore.markEngaged();
+  clearLicenseStatus({ source: "signin" });
 
   const existingToken = credstore.getLicenseToken();
   if (existingToken && !credstore.isLicenseTokenExpired(existingToken)) {
