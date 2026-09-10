@@ -331,28 +331,16 @@ All uploads use gzip compression. Queues are partitioned by canonical GitHub rep
 
 ### License refresh
 
-Uploads authenticate with a short-lived license JWT. The plugin keeps it fresh
-without user action for as long as a session is open (see
-[ADR 001](../docs/adr/001-license-token-lifecycle.md)):
-
-- The `skillmeter-retry-daemon` monitor checks the token on every sweep
-  (`SKILLMETER_RETRY_DAEMON_INTERVAL_MS`, default 2 minutes) and rotates it
-  through the activation service's `/refresh` endpoint when it is within five
-  minutes of expiry. `SessionStart` does the same once at session start, and
-  queue drains do it right before an upload.
-- Silent re-activation through the GitHub CLI's stored credential
-  (`gh auth token`, never a browser or device-code flow) runs only when the
-  token itself can no longer be rotated: `/refresh` answered 410 (7-day
-  sliding window exceeded) or 401. Any other refresh failure keeps the token
-  and retries later.
-- Consecutive failures back off exponentially from the sweep interval up to
-  30 minutes. A 402 (organization license no longer active), a gh CLI that is
-  missing or not logged in, or an exhausted backoff is terminal: the plugin
-  stops retrying until the next `SessionStart` or `/skillmeter:signin`.
-- Outcomes are recorded in `~/.skillbench/license-status.json` (next to
-  `credentials.json`; `SKILLMETER_STATE_DIR` relocates both). The record holds
-  timestamps, the failure count, the next retry time, and the terminal reason;
-  it never contains the token.
+Uploads authenticate with a short-lived license. While a session is open the
+plugin keeps it fresh on its own: the retry monitor renews it in the
+background (every `SKILLMETER_RETRY_DAEMON_INTERVAL_MS`, 2 minutes by
+default), `SessionStart` renews it once at session start, and uploads renew it
+right before sending. If renewal keeps failing the plugin backs off and, after
+about an hour, stops trying until the next session or `/skillmeter:signin`;
+it also stops when the organization license is no longer active or when the
+GitHub CLI credential it needs for re-activation is unavailable. Renewal
+outcomes are recorded in `~/.skillbench/license-status.json` (timestamps,
+failure count, stop reason; never the token itself).
 
 Historical backfill keeps snapshotting and upload detached from the interactive
 sign-in command. The always-on `skillmeter-backfill-monitor` watches that
