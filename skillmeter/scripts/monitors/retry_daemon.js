@@ -33,7 +33,7 @@
 const transfer = require("../lib/transfer");
 const credstore = require("../credstore");
 const { ensureFreshLicense } = require("../lib/license-activation");
-const { readLicenseStatus, refreshBlockedReason } = require("../lib/license-status");
+const { readLicenseStatus, refreshBlockedReason, clearTerminal } = require("../lib/license-status");
 const { getRetryDaemonIntervalMs } = require("../lib/config");
 
 const INITIAL_DELAY_MS = 60_000;
@@ -77,6 +77,15 @@ async function maybeRefreshLicense(state = {}) {
   if (credstore.getSignedOut()) return;
 
   const status = readLicenseStatus();
+  // A valid token wins over any recorded failure: a sign-in, a SessionStart
+  // refresh, or another client sharing credentials.json may have renewed it
+  // while this daemon was backing off or stopped.
+  if (credstore.hasValidLicense()) {
+    if (status.terminal || status.next_retry_at || status.consecutive_failures) {
+      clearTerminal({ source: "daemon" });
+    }
+    return;
+  }
   const blocked = refreshBlockedReason(status, Date.now());
   if (blocked === "terminal") {
     const at = status.terminal && status.terminal.at;

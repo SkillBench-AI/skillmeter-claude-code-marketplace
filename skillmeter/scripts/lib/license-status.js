@@ -67,11 +67,23 @@ function readLicenseStatus() {
   return { ...emptyStatus(), ...raw };
 }
 
+let persistenceFailureReported = false;
+
 function writeLicenseStatus(status) {
   try {
     atomicWriteJson(LICENSE_STATUS_FILE, status);
-  } catch {
-    // Best-effort: a missing status record only degrades backoff and notices.
+    persistenceFailureReported = false;
+  } catch (err) {
+    // Best-effort, like every other store in the plugin: a status record that
+    // cannot be written degrades backoff (extra attempts, still bounded by the
+    // refresh lock cooldown) and notices, never correctness — a revoked
+    // license is re-detected on the next attempt. Say so once in the debug log.
+    if (!persistenceFailureReported) {
+      persistenceFailureReported = true;
+      console.error(
+        `[skillmeter] license status not persisted (${err && err.message ? err.message : err}); backoff will restart from the on-disk record`
+      );
+    }
   }
   return status;
 }
@@ -141,6 +153,19 @@ function recordRefreshFailure({
   const prev = readLicenseStatus();
   const failures = (prev.consecutive_failures || 0) + 1;
   const error = { kind, status, message: String(message || "").slice(0, 200) };
+  // A terminal state is sticky: a late transient-failure write from another
+  // process (SessionStart bypasses the refresh lock) must not turn a revoked
+  // or gh_unauthenticated record back into a retrying one. Only a success,
+  // SessionStart's clearTerminal, or /skillmeter:signin lifts it.
+  if (prev.terminal) {
+    return writeLicenseStatus({
+      ...prev,
+      last_attempt_at: now,
+      last_error: error,
+      consecutive_failures: failures,
+      updated_by: source,
+    });
+  }
   if (backoffExhausted(failures, baseMs, capMs)) {
     return writeLicenseStatus({
       ...prev,

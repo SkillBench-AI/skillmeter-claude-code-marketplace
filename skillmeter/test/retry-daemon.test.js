@@ -59,3 +59,25 @@ test("maybeRefreshLicense makes no network call while the record is terminal, an
   const terminalLines = lines.filter((l) => l.includes("license refresh stopped"));
   assert.equal(terminalLines.length, 1, "terminal state is logged once, not every tick");
 });
+
+test("maybeRefreshLicense clears a stale terminal record once the token is valid again", async () => {
+  writeJson(path.join(stateDir, "credentials.json"), {
+    device_id: "11111111-2222-4333-8444-555555555555",
+    hash_salt: "0123456789abcdef0123456789abcdef",
+    license_jwt: makeJwt({ exp: Math.floor(Date.now() / 1000) + 3600, aud: "https://x.meter.skillbench.ai" }),
+  });
+  licenseStatus.recordTerminal({ source: "daemon", reason: "revoked", status: 402 });
+
+  const realFetch = global.fetch;
+  let fetched = 0;
+  global.fetch = async () => { fetched++; throw new Error("must not be called"); };
+  try {
+    await daemon.maybeRefreshLicense({});
+  } finally {
+    global.fetch = realFetch;
+  }
+  assert.equal(fetched, 0, "a fresh token needs no network call");
+  const s = licenseStatus.readLicenseStatus();
+  assert.equal(s.terminal, null, "stale terminal state is dropped");
+  assert.equal(s.updated_by, "daemon");
+});

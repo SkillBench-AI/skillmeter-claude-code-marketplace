@@ -119,6 +119,16 @@ test("clearTerminal keeps history but re-arms retries; clearLicenseStatus wipes"
   assert.equal(s.last_error, null);
 });
 
+test("a terminal record stays terminal when a late transient failure lands", () => {
+  ls.clearLicenseStatus();
+  ls.recordTerminal({ source: "daemon", reason: ls.TERMINAL_REASONS.REVOKED, status: 402, now: 50 });
+  const s = ls.recordRefreshFailure({ source: "session_start", kind: "refresh", status: 500, now: 60, baseMs: BASE, capMs: CAP });
+  assert.equal(s.terminal.reason, "revoked", "terminal is not overwritten by a failure write");
+  assert.equal(s.next_retry_at, null);
+  assert.equal(s.last_attempt_at, 60);
+  assert.equal(s.last_error.status, 500, "the late failure is still recorded as history");
+});
+
 test("a record with another schema version is ignored", () => {
   fs.writeFileSync(ls.LICENSE_STATUS_FILE, JSON.stringify({ schema_version: 99, terminal: { reason: "x" } }));
   assert.equal(ls.readLicenseStatus().terminal, null);

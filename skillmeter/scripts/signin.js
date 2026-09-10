@@ -191,6 +191,9 @@ async function runBackgroundPoll(deviceId, deviceCode, interval) {
       credstore.writeSigninResult({ status: "discarded" });
       process.exit(0);
     }
+    // The daemon may have recorded a terminal state against the old token
+    // while the user was approving; the new sign-in supersedes it.
+    clearLicenseStatus({ source: "signin" });
     log(`[${new Date().toISOString()}] activation complete`);
     // Record success so the in-session FileChanged notifier can surface the
     // welcome banner without the user re-running /skillmeter:signin.
@@ -298,6 +301,7 @@ async function runForegroundPoll(deviceId, device) {
       say("Sign-in discarded: signed out during issuance.");
       process.exit(0);
     }
+    clearLicenseStatus({ source: "signin" });
     showSigninStatus();
   } catch (err) {
     stop();

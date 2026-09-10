@@ -239,6 +239,37 @@ function shouldRefresh(
 }
 
 /**
+ * Exclusive-create the refresh lock. Returns false when another process holds a
+ * live lock. A stale lock (older than the cooldown, as decided by the caller)
+ * is removed first; if the re-create then fails, someone else got there.
+ * Best-effort: I/O errors other than EEXIST let the refresh proceed, matching
+ * the plugin's never-block policy.
+ */
+function acquireRefreshLock(staleLockPresent) {
+  const stamp = `${process.pid} ${Date.now()}\n`;
+  try {
+    fs.mkdirSync(LOG_DIR, { recursive: true });
+  } catch {
+    return true;
+  }
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      fs.writeFileSync(LICENSE_REFRESH_LOCK_FILE, stamp, { flag: "wx" });
+      return true;
+    } catch (err) {
+      if (!err || err.code !== "EEXIST") return true;
+      if (!staleLockPresent || attempt > 0) return false;
+      try {
+        fs.unlinkSync(LICENSE_REFRESH_LOCK_FILE);
+      } catch {
+        // someone else removed or replaced it; the retry decides
+      }
+    }
+  }
+  return false;
+}
+
+/**
  * Orchestrate one refresh and record its outcome. Returns the freshest token
  * or null. Reads the token uncached so a refresh written by another process is
  * observed.
@@ -349,16 +380,12 @@ async function ensureFreshLicense(deviceId, { source = "drain", aheadMs = 0 } = 
   // return_current or skip_locked: hand back what we have without blocking.
   if (action !== "acquire_and_refresh") return current;
 
-  // Record the attempt time — serves as both the in-flight marker (single
-  // flight) and the cooldown anchor. Intentionally not deleted afterward; the
-  // mtime ages out past STALE/COOLDOWN. Not matched by listSealedEventLogs /
+  // Take the lock with an exclusive create so two processes that both saw no
+  // (or a stale) lock cannot both proceed. The file doubles as the cooldown
+  // anchor: it is intentionally left in place and ages out past the cooldown;
+  // a stale one is replaced. Not matched by listSealedEventLogs /
   // cleanupStaleFiles (same as .drain-once.lock), so it's never swept.
-  try {
-    fs.mkdirSync(LOG_DIR, { recursive: true });
-    fs.writeFileSync(LICENSE_REFRESH_LOCK_FILE, `${process.pid} ${Date.now()}\n`);
-  } catch {
-    // best-effort lock; proceed even if it couldn't be written
-  }
+  if (!acquireRefreshLock(lockMtimeMs != null)) return current;
 
   try {
     return (await refreshLicense(deviceId, { source, aheadMs })) || current;
