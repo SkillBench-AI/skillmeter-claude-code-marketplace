@@ -9,4 +9,4 @@ supersede with a new ADR rather than rewriting history. Every ADR carries a
 
 | # | Title | Date | Status |
 |---|---|---|---|
-| [001](001-license-token-lifecycle.md) | License token lifecycle: lifetime, refresh, and recovery | 2026-09-10 | Proposed (decision 4 pending) |
+| [001](001-license-token-lifecycle.md) | License token lifecycle: lifetime, refresh, and recovery | 2026-09-10 | Proposed (PR #104) |

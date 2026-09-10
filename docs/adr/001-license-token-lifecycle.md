@@ -1,7 +1,7 @@
 # License Token Lifecycle: Lifetime, Refresh, and Recovery
 
 **Date:** 2026-09-10
-**Status:** Proposed (decision 4 pending confirmation)
+**Status:** Proposed (under review in PR #104)
 **Tracker:** INF-167 (2026 Q3 Production Readiness / Telemetry pipeline)
 **Related:** `skillmeter-license-activation` (server-side counterpart for decision 1), `skillmeter-codex-marketplace`, `skillmeter-vscode-extension`
 
@@ -104,7 +104,7 @@ existing purge path handles both.
 Rationale: authentication is required to send, not to observe. Dropping at
 record time is what turns a transient expiry into permanent data loss.
 
-### 4. Proposed: silent re-activation is allowed when the device has a prior sign-in and is not signed out
+### 4. Silent re-activation is allowed when the device has a prior sign-in and is not signed out
 
 When no token is stored, the daemon and SessionStart may attempt the `gh`
 re-activation if this device completed a sign-in before (a local marker
@@ -112,9 +112,12 @@ written by `commitSignin`) and `signed_out` is not set. Otherwise the client
 stops and notifies the user (B1).
 
 Rationale: the current rule exists so the plugin never signs a user in
-without consent. A completed sign-in on the same device is that consent. The
-Codex plugin already re-activates without a stored token. The alternative
-kept in view is to keep the current rule and rely on notification alone.
+without consent. A completed sign-in on the same device is that consent, and
+an explicit sign-out (`signed_out`) still blocks re-activation, so the rule
+only recovers the accidental case where the stored token is gone. Decision 3
+alone does not cover this case: with no token the capture gate stays closed
+and there is nothing to refresh. The Codex plugin already re-activates without
+a stored token.
 
 ### 5. All three clients follow decisions 2 to 4
 
@@ -150,7 +153,7 @@ checked against it and against the VS Code extension's auth service (A6).
 
 ## Open items
 
-- Decision 4 needs confirmation before A4 starts.
+- The prior-sign-in marker for decision 4 does not exist yet; A4 defines where it is written and how devices signed in before this change are treated.
 - Whether a stale token should gate the exclusion-audit path the same way as
   decision 3 (follows C1, INF-171).
 - The status surface hooks use to tell the user about refresh failures is
