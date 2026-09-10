@@ -71,45 +71,93 @@ The activation Lambda reads the TTL from an environment variable (default
 3600 seconds) and applies it to tokens from both `/activate` and `/refresh`.
 The sliding window is unchanged.
 
-Rationale: `exp` is the revocation latency. One hour bounds a cancelled
-license or a leaked token to at most an hour of telemetry writes into the
-tenant's own store, which is an acceptable blast radius, while removing the
-need to refresh on every Stop. Longer values were rejected because the window
-is the only revocation control. The TTL alone does not fix long sessions;
-decision 2 does.
+Rationale: `exp` is the revocation latency for a cancelled license. Every
+`/refresh` re-checks the organization in the database and returns 402 when
+the license is gone, so a device keeps writing for at most one more hour after
+cancellation instead of fifteen minutes. That is an acceptable blast radius
+into the tenant's own store, and it removes the need to refresh on every Stop.
+
+The TTL does not bound a leaked token. `/refresh` accepts an expired token
+together with any `device_id` string, so a stolen token can be rotated for the
+rest of its 7-day window; that horizon is set by the window, not by `exp`.
+Tightening `/refresh` (for example binding it to a device claim in the token)
+is a server-side change outside this ADR and is listed under open items.
+Longer TTLs were rejected because cancellation latency is the one control the
+TTL does provide. The TTL alone does not fix long sessions; decision 2 does.
 
 ### 2. The retry-daemon monitor refreshes the token in the background, independent of queue state
 
 On every sweep the daemon first runs the refresh path when the token is
-inside the expiry skew window, then drains. The refresh step runs on every
-tick regardless of the adaptive drain backoff. SessionStart keeps its
-refresh. The existing lock-file cooldown remains the single-flight mechanism
-across concurrent sessions; a daemon-owner lock may be added if duplicate
-refreshes are observed.
+inside the expiry skew window, then drains. The refresh step is not subject
+to the adaptive drain backoff; it has its own failure backoff described
+below. SessionStart keeps its refresh. The existing lock-file cooldown
+remains the single-flight mechanism across concurrent sessions; a
+daemon-owner lock may be added if duplicate refreshes are observed.
+
+Failure handling:
+
+- `/refresh` is the only call made on a routine expiry. The silent `gh`
+  re-activation runs only when there is no usable token to rotate: the stored
+  token is absent (decision 4) or the server returned 410 (sliding window
+  exceeded). It reads the gh CLI's stored credential with `gh auth token`; it
+  never opens a browser or a device-code flow, and when gh is not
+  authenticated it fails immediately.
+- Consecutive refresh failures back off exponentially from the sweep interval
+  up to the same 30-minute cap the drain backoff uses, and reset on the first
+  success. This bounds calls to the activation Lambda and to GitHub during an
+  outage.
+- A 402, a gh identity mismatch (decision 4), gh not authenticated, or the
+  backoff cap being reached is a terminal state for the session: the daemon
+  stops retrying, writes the outcome to the local status record, and B1 shows
+  the user what to do. A later SessionStart or `/skillmeter:signin` clears
+  the state.
 
 Rationale: the monitor already exists for the life of the session, and the
-Codex plugin has run this exact pattern since skillmeter-codex-marketplace
-#28. A fresh token costs nothing on the hot path; the check is a local `exp`
-comparison. From the user's point of view the token stays valid for as long
-as a session is open, without any action.
+Codex plugin has run this pattern since skillmeter-codex-marketplace
+issue `#28`. A fresh token costs nothing on the hot path; the check is a
+local `exp` comparison. From the user's point of view the token stays valid
+for as long as a session is open, without any action, and the user is asked
+to act only when the client has stopped trying.
 
 ### 3. Hooks record while signed in, regardless of expiry; freshness is enforced at transmission
 
 The capture gate uses "a token exists and the user has not signed out"
 instead of "the token is unexpired". Drains refresh before uploading, as
-they do today. Recorded-but-unsent data is discarded only on explicit
-sign-out or when the server reports the license as revoked (402); the
-existing purge path handles both.
+they do today.
+
+Recorded-but-unsent data is removed in these cases:
+
+- Explicit sign-out. Today `signout.js` drops the token and purges only the
+  organization-audit queue; A3 extends it to every repository queue.
+- Server-reported license revocation: 402 from `/refresh` or `/activate`.
+  Today 402 is handled as a generic failure with no purge; A3 adds the purge.
+- Repository or organization telemetry turned off in policy. This is the
+  existing `purgeDisallowedQueues` path, unchanged.
+- Age. Unsent events and transcript chunks older than the 7-day refresh
+  sliding window are deleted. Today unsent data is never age-deleted, which
+  under this decision would mean indefinite local retention when refresh
+  keeps failing. Seven days matches the point at which the token chain is
+  dead anyway and re-activation is required.
 
 Rationale: authentication is required to send, not to observe. Dropping at
-record time is what turns a transient expiry into permanent data loss.
+record time is what turns a transient expiry into permanent data loss. The
+explicit removal list keeps the local footprint bounded now that expiry no
+longer stops recording.
 
 ### 4. Silent re-activation is allowed when the device has a prior sign-in and is not signed out
 
 When no token is stored, the daemon and SessionStart may attempt the `gh`
-re-activation if this device completed a sign-in before (a local marker
-written by `commitSignin`) and `signed_out` is not set. Otherwise the client
-stops and notifies the user (B1).
+re-activation if this device completed a sign-in before and `signed_out` is
+not set. Otherwise the client stops and notifies the user (B1).
+
+The prior sign-in is recorded by `commitSignin` as a marker holding the
+identity the user consented to: `github_id`, the organization (`sub` and
+`org.login`), and the meter audience (`aud`) from the accepted token. Before
+calling `/activate`, the client reads the current gh identity and proceeds
+only when its GitHub id matches the marker; after minting, the new token's
+`github_id` and organization are checked against the marker again before it
+is committed. Any mismatch discards the token, invalidates the marker,
+records the outcome, and notifies the user. Sign-out clears the marker.
 
 Rationale: the current rule exists so the plugin never signs a user in
 without consent. A completed sign-in on the same device is that consent, and
@@ -132,8 +180,9 @@ checked against it and against the VS Code extension's auth service (A6).
 - Long-lived sessions keep recording; the recorded-versus-skipped gap
   disappears and becomes measurable.
 - Events recorded during a stale window are held locally until the next
-  successful refresh. Retention of unsent local data is bounded by the
-  existing queue cleanup rules; no new retention surface is introduced.
+  successful refresh, for at most 7 days. This is a new retention surface:
+  today unsent data is never age-deleted, and sign-out and 402 do not purge
+  repository queues; A3 implements all three removals.
 - The daemon becomes a required component for reliability, so its failure
   has to be visible to the user (B1).
 - The user needs to act only when both `/refresh` and the silent
@@ -153,7 +202,12 @@ checked against it and against the VS Code extension's auth service (A6).
 
 ## Open items
 
-- The prior-sign-in marker for decision 4 does not exist yet; A4 defines where it is written and how devices signed in before this change are treated.
+- The prior-sign-in marker for decision 4 does not exist yet; A4 defines
+  where it is written and how devices signed in before this change are
+  treated (they have no marker, so they fall back to notification).
+- `/refresh` accepts any `device_id` with an expired token. Binding refresh to
+  a device claim inside the token is a server-side follow-up for
+  `skillmeter-license-activation`, tracked with A5.
 - Whether a stale token should gate the exclusion-audit path the same way as
   decision 3 (follows C1, INF-171).
 - The status surface hooks use to tell the user about refresh failures is
