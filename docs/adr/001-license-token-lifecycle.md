@@ -1,7 +1,7 @@
 # License Token Lifecycle: Lifetime, Refresh, and Recovery
 
 **Date:** 2026-09-10
-**Status:** Proposed (under review in PR #104)
+**Status:** Accepted (PR #104, merged 2026-09-10)
 **Tracker:** INF-167 (2026 Q3 Production Readiness / Telemetry pipeline)
 **Related:** `skillmeter-license-activation` (server-side counterpart for decision 1), `skillmeter-codex-marketplace`, `skillmeter-vscode-extension`
 
