@@ -38,8 +38,7 @@ test("backfill monitor is registered as an always-on plugin monitor", () => {
     command:
       'CLAUDE_PLUGIN_DATA="${CLAUDE_PLUGIN_DATA}" ' +
       'node "${CLAUDE_PLUGIN_ROOT}/scripts/monitors/backfill_monitor.js"',
-    description:
-      "Reports detached historical backfill snapshot and upload progress",
+    description: "SkillMeter history backfill",
   });
 });
 

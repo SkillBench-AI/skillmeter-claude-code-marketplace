@@ -2,11 +2,11 @@
   {
     "name": "skillmeter-retry-daemon",
     "command": "CLAUDE_PLUGIN_DATA=\"${CLAUDE_PLUGIN_DATA}\" node \"${CLAUDE_PLUGIN_ROOT}/scripts/monitors/retry_daemon.js\"",
-    "description": "Drains pending event logs and transcripts while the session is alive"
+    "description": "SkillMeter telemetry sync"
   },
   {
     "name": "skillmeter-backfill-monitor",
     "command": "CLAUDE_PLUGIN_DATA=\"${CLAUDE_PLUGIN_DATA}\" node \"${CLAUDE_PLUGIN_ROOT}/scripts/monitors/backfill_monitor.js\"",
-    "description": "Reports detached historical backfill snapshot and upload progress"
+    "description": "SkillMeter history backfill"
   }
 ]
