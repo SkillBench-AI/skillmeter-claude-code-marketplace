@@ -329,6 +329,19 @@ Logs are sent to the backend from durable filesystem queues:
 
 All uploads use gzip compression. Queues are partitioned by canonical GitHub repository identity, and the current global, organization, and repository policy is checked again immediately before each request. Successfully uploaded event batches are renamed with `.sent`; successfully uploaded transcript delta chunks are deleted. Failed uploads remain queued for retry.
 
+### License refresh
+
+Uploads authenticate with a short-lived license. While a session is open the
+plugin keeps it fresh on its own: the retry monitor renews it in the
+background (every `SKILLMETER_RETRY_DAEMON_INTERVAL_MS`, 2 minutes by
+default), `SessionStart` renews it once at session start, and uploads renew it
+right before sending. If renewal keeps failing the plugin backs off and, after
+about an hour, stops trying until the next session or `/skillmeter:signin`;
+it also stops when the organization license is no longer active or when the
+GitHub CLI credential it needs for re-activation is unavailable. Renewal
+outcomes are recorded in `~/.skillbench/license-status.json` (timestamps,
+failure count, stop reason; never the token itself).
+
 Historical backfill keeps snapshotting and upload detached from the interactive
 sign-in command. The always-on `skillmeter-backfill-monitor` watches that
 pipeline and reports scan, snapshot, upload-pass, and failure transitions to
@@ -371,6 +384,7 @@ Telemetry decisions are never read from a project's `.claude/settings.local.json
 | `SKILLMETER_ACTIVATE_URL`      | `https://api.skillbench.ai/activate`                                          | Activation endpoint that exchanges a GitHub OAuth token for a SkillMeter license JWT. Point at `https://api.dev.skillbench.com/activate` to run against dev. |
 | `SKILLMETER_GITHUB_CLIENT_ID`  | prod SkillMeter GitHub OAuth App                                              | Override the GitHub OAuth App used for the device-code login. Set to the dev App's `client_id` when activating against dev.                  |
 | `SKILLMETER_TIMEOUT`           | `10`                                                                          | Upload timeout (seconds)                                                                                                                     |
+| `SKILLMETER_RETRY_DAEMON_INTERVAL_MS` | `120000`                                                               | Retry monitor sweep interval (ms). Also the cadence of the background license refresh check and the base of its failure backoff.          |
 
 In production the telemetry hostname is per-tenant and looks like `https://<slug>.meter.skillbench.ai` (non-prod: `https://<slug>.meter.<env>.skillbench.com`). The activation Lambda mints it into the license JWT against the tenant slug at issuance, and the plugin reads it back at upload time.
 

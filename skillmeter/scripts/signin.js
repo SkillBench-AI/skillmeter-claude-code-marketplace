@@ -23,6 +23,7 @@ const { startSpinner } = require("./lib/spinner.js");
 const { getRepoScopeDecision } = require("./lib/repo-scope");
 const telemetryStore = require("./lib/telemetry-store");
 const { postBearerJson } = require("./lib/http");
+const { clearLicenseStatus } = require("./lib/license-status");
 const {
   STATE_DIR,
   getActivateUrl,
@@ -190,6 +191,9 @@ async function runBackgroundPoll(deviceId, deviceCode, interval) {
       credstore.writeSigninResult({ status: "discarded" });
       process.exit(0);
     }
+    // The daemon may have recorded a terminal state against the old token
+    // while the user was approving; the new sign-in supersedes it.
+    clearLicenseStatus({ source: "signin" });
     log(`[${new Date().toISOString()}] activation complete`);
     // Record success so the in-session FileChanged notifier can surface the
     // welcome banner without the user re-running /skillmeter:signin.
@@ -223,6 +227,7 @@ async function main() {
   // so a user who just fixed their `gh auth` scopes or who signed out
   // earlier isn't bounced.
   credstore.markEngaged();
+  clearLicenseStatus({ source: "signin" });
 
   const existingToken = credstore.getLicenseToken();
   if (existingToken && !credstore.isLicenseTokenExpired(existingToken)) {
@@ -296,6 +301,7 @@ async function runForegroundPoll(deviceId, device) {
       say("Sign-in discarded: signed out during issuance.");
       process.exit(0);
     }
+    clearLicenseStatus({ source: "signin" });
     showSigninStatus();
   } catch (err) {
     stop();

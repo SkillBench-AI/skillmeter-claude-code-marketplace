@@ -246,6 +246,7 @@ module.exports = {
   getLicenseTokenUncached,
   setLicenseToken,
   isLicenseTokenExpired,
+  LICENSE_EXPIRY_SKEW_SECONDS,
   hasValidLicense,
   getAllowedGitHubOrgs,
   isTelemetryTransmissionAllowed,
