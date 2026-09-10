@@ -239,34 +239,60 @@ function shouldRefresh(
 }
 
 /**
- * Exclusive-create the refresh lock. Returns false when another process holds a
- * live lock. A stale lock (older than the cooldown, as decided by the caller)
- * is removed first; if the re-create then fails, someone else got there.
- * Best-effort: I/O errors other than EEXIST let the refresh proceed, matching
- * the plugin's never-block policy.
+ * Take the refresh lock. Returns true only for the single process that ends up
+ * owning it.
+ *
+ * Fast path: exclusive create (`wx`). When a lock exists and the caller judged
+ * it stale, the takeover is a two-step atomic claim: re-check that the file is
+ * still older than the cooldown, then `rename` it to a per-process claim name.
+ * Only one process can rename a given file, so a second taker gets ENOENT and
+ * backs off, and a live lock created by a faster process in the meantime fails
+ * the re-check and is left alone. After a successful claim the new lock is
+ * created with `wx` again; EEXIST there means a third process created one
+ * between our claim and our create, and we back off too.
+ *
+ * Best-effort: I/O errors other than the expected EEXIST/ENOENT let the refresh
+ * proceed, matching the plugin's never-block policy.
  */
-function acquireRefreshLock(staleLockPresent) {
-  const stamp = `${process.pid} ${Date.now()}\n`;
+function acquireRefreshLock(staleLockPresent, cooldownMs = LICENSE_REFRESH_COOLDOWN_MS, now = Date.now()) {
+  const stamp = `${process.pid} ${now}\n`;
   try {
     fs.mkdirSync(LOG_DIR, { recursive: true });
   } catch {
     return true;
   }
-  for (let attempt = 0; attempt < 2; attempt++) {
+  const tryCreate = () => {
     try {
       fs.writeFileSync(LICENSE_REFRESH_LOCK_FILE, stamp, { flag: "wx" });
-      return true;
+      return "owned";
     } catch (err) {
-      if (!err || err.code !== "EEXIST") return true;
-      if (!staleLockPresent || attempt > 0) return false;
-      try {
-        fs.unlinkSync(LICENSE_REFRESH_LOCK_FILE);
-      } catch {
-        // someone else removed or replaced it; the retry decides
-      }
+      return err && err.code === "EEXIST" ? "exists" : "error";
+    }
+  };
+  const first = tryCreate();
+  if (first !== "exists") return true;
+  if (!staleLockPresent) return false;
+
+  // Re-check staleness right before claiming: another process may already have
+  // replaced the stale lock with a live one.
+  try {
+    if (now - fs.statSync(LICENSE_REFRESH_LOCK_FILE).mtimeMs < cooldownMs) return false;
+  } catch {
+    // vanished: someone else claimed it; fall through to a final create
+  }
+  const claim = `${LICENSE_REFRESH_LOCK_FILE}.${process.pid}.${now}.stale`;
+  try {
+    fs.renameSync(LICENSE_REFRESH_LOCK_FILE, claim);
+    try { fs.unlinkSync(claim); } catch {}
+  } catch (err) {
+    if (err && err.code === "ENOENT") {
+      // Lost the claim race; only proceed if the winner has not created its
+      // lock yet (then the create below succeeds and we own the new one).
+    } else {
+      return false;
     }
   }
-  return false;
+  return tryCreate() !== "exists";
 }
 
 /**
@@ -385,7 +411,7 @@ async function ensureFreshLicense(deviceId, { source = "drain", aheadMs = 0 } = 
   // anchor: it is intentionally left in place and ages out past the cooldown;
   // a stale one is replaced. Not matched by listSealedEventLogs /
   // cleanupStaleFiles (same as .drain-once.lock), so it's never swept.
-  if (!acquireRefreshLock(lockMtimeMs != null)) return current;
+  if (!acquireRefreshLock(lockMtimeMs != null, LICENSE_REFRESH_COOLDOWN_MS, Date.now())) return current;
 
   try {
     return (await refreshLicense(deviceId, { source, aheadMs })) || current;
@@ -398,4 +424,7 @@ module.exports = {
   trySilentGhActivate,
   refreshLicense,
   ensureFreshLicense,
+  // exported for tests
+  _acquireRefreshLock: acquireRefreshLock,
+  _LICENSE_REFRESH_LOCK_FILE: LICENSE_REFRESH_LOCK_FILE,
 };

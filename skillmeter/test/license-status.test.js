@@ -133,3 +133,31 @@ test("a record with another schema version is ignored", () => {
   fs.writeFileSync(ls.LICENSE_STATUS_FILE, JSON.stringify({ schema_version: 99, terminal: { reason: "x" } }));
   assert.equal(ls.readLicenseStatus().terminal, null);
 });
+
+test("updateLicenseStatus re-applies a mutation on top of a concurrent write instead of overwriting it", () => {
+  ls.clearLicenseStatus();
+  let injected = false;
+  const result = ls.updateLicenseStatus((prev) => {
+    if (!injected) {
+      injected = true;
+      // Simulate another process committing between our read and our write.
+      const other = { ...ls.readLicenseStatus(), terminal: { reason: "revoked", at: 1, status: 402, message: "" }, revision: (prev.revision || 0) + 1 };
+      fs.writeFileSync(ls.LICENSE_STATUS_FILE, JSON.stringify(other));
+    }
+    return { ...prev, last_attempt_at: 777, updated_by: "daemon" };
+  });
+  assert.equal(result.last_attempt_at, 777, "our change landed");
+  assert.equal(result.terminal.reason, "revoked", "the concurrent terminal write was preserved, not overwritten");
+  const onDisk = ls.readLicenseStatus();
+  assert.equal(onDisk.terminal.reason, "revoked");
+  assert.equal(onDisk.last_attempt_at, 777);
+  assert.equal(onDisk.revision, result.revision);
+});
+
+test("revision increases by one per committed transition", () => {
+  ls.clearLicenseStatus();
+  const r0 = ls.readLicenseStatus().revision;
+  ls.recordRefreshFailure({ source: "daemon", now: 1, baseMs: BASE, capMs: CAP });
+  ls.recordRefreshSuccess({ source: "daemon", now: 2 });
+  assert.equal(ls.readLicenseStatus().revision, r0 + 2);
+});

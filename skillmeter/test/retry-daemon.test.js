@@ -14,6 +14,7 @@ const stateDir = makeTempDir("skm-retry-daemon-");
 setTestEnv("SKILLMETER_STATE_DIR", stateDir);
 setTestEnv("SKILLMETER_RETRY_DAEMON_INTERVAL_MS", "120000");
 setTestEnv("SKILLMETER_BACKEND_URL", undefined);
+setTestEnv("SKILLMETER_ACTIVATE_URL", "https://activation.test/activate");
 
 const daemon = require("../scripts/monitors/retry_daemon");
 const licenseStatus = require("../scripts/lib/license-status");
@@ -80,4 +81,34 @@ test("maybeRefreshLicense clears a stale terminal record once the token is valid
   const s = licenseStatus.readLicenseStatus();
   assert.equal(s.terminal, null, "stale terminal state is dropped");
   assert.equal(s.updated_by, "daemon");
+});
+
+test("maybeRefreshLicense renews a token that hooks still accept but that expires within one sweep", async () => {
+  const fs = require("fs");
+  const { LOG_DIR } = require("../scripts/lib/paths");
+  try { fs.unlinkSync(path.join(LOG_DIR, ".license-refresh.lock")); } catch {}
+  licenseStatus.clearLicenseStatus({ source: "test" });
+  // Expires in 6 minutes: outside the hooks' 5-minute skew, inside the daemon's
+  // 5 + 2 minute look-ahead, so the daemon must renew it on this tick.
+  const soon = makeJwt({ exp: Math.floor(Date.now() / 1000) + 6 * 60, aud: "https://x.meter.skillbench.ai" });
+  writeJson(path.join(stateDir, "credentials.json"), {
+    device_id: "11111111-2222-4333-8444-555555555555",
+    hash_salt: "0123456789abcdef0123456789abcdef",
+    license_jwt: soon,
+  });
+  const renewed = makeJwt({ exp: Math.floor(Date.now() / 1000) + 3600, aud: "https://x.meter.skillbench.ai" });
+  const realFetch = global.fetch;
+  const urls = [];
+  global.fetch = async (url) => {
+    urls.push(String(url));
+    return { ok: true, status: 200, json: async () => ({ token: renewed }), text: async () => "" };
+  };
+  try {
+    await daemon.maybeRefreshLicense({});
+  } finally {
+    global.fetch = realFetch;
+  }
+  assert.deepEqual(urls, ["https://activation.test/refresh"]);
+  const store = JSON.parse(fs.readFileSync(path.join(stateDir, "credentials.json"), "utf8"));
+  assert.equal(store.license_jwt, renewed, "token rotated ahead of the hooks' threshold");
 });

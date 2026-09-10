@@ -21,10 +21,20 @@
  *   terminal              null, or { reason, at, status, message } — retrying is
  *                         pointless until SessionStart or /skillmeter:signin clears it
  *   updated_by            "daemon" | "session_start" | "drain" | "signin" | ...
+ *   revision              monotonically increasing write counter used for
+ *                         compare-and-update (see updateLicenseStatus)
  *
- * Leaf module: requires only path, ./config and ./io.
+ * Concurrency: several processes (daemon, drains, SessionStart, sign-in) mutate
+ * this file. Every transition goes through updateLicenseStatus, which re-reads
+ * the record, applies the mutation, and commits only if the on-disk revision is
+ * still the one it read; otherwise it retries on the newer record. A stale
+ * writer therefore re-applies its change on top of the newer state instead of
+ * overwriting it.
+ *
+ * Leaf module: requires only fs, path, ./config and ./io.
  */
 
+const fs = require("fs");
 const path = require("path");
 const { STATE_DIR, getRetryDaemonIntervalMs } = require("./config");
 const { safeReadJson, atomicWriteJson } = require("./io");
@@ -56,6 +66,7 @@ function emptyStatus() {
     next_retry_at: null,
     terminal: null,
     updated_by: null,
+    revision: 0,
   };
 }
 
@@ -69,21 +80,90 @@ function readLicenseStatus() {
 
 let persistenceFailureReported = false;
 
+function reportPersistenceFailure(err) {
+  // Best-effort, like every other store in the plugin: a status record that
+  // cannot be written degrades backoff (extra attempts, still bounded by the
+  // refresh lock cooldown) and notices, never correctness — a revoked license
+  // is re-detected on the next attempt. Say so once in the debug log.
+  if (persistenceFailureReported) return;
+  persistenceFailureReported = true;
+  console.error(
+    `[skillmeter] license status not persisted (${err && err.message ? err.message : err}); backoff will restart from the on-disk record`
+  );
+}
+
+/** Current on-disk revision, or 0 when the record is absent or unreadable. */
+function currentRevision() {
+  const raw = safeReadJson(LICENSE_STATUS_FILE, null);
+  return raw && typeof raw.revision === "number" ? raw.revision : 0;
+}
+
+/**
+ * Write `next` only if the on-disk revision is still `expectedRevision`.
+ * Same write discipline as io.atomicWriteJson (temp file + fsync + rename) with
+ * the revision check placed right before the rename, so the window in which a
+ * concurrent writer can slip in is the rename itself rather than the whole
+ * read-modify-write. Returns true when committed, false when the record moved.
+ */
+function writeIfRevisionUnchanged(next, expectedRevision) {
+  const dir = path.dirname(LICENSE_STATUS_FILE);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const tempPath = `${LICENSE_STATUS_FILE}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2, 8)}`;
+  let fd;
+  try {
+    fd = fs.openSync(tempPath, "w", 0o600);
+    fs.writeSync(fd, JSON.stringify(next, null, 2) + "\n");
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = undefined;
+    if (currentRevision() !== expectedRevision) {
+      try { fs.unlinkSync(tempPath); } catch {}
+      return false;
+    }
+    fs.renameSync(tempPath, LICENSE_STATUS_FILE);
+    return true;
+  } catch (err) {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch {}
+    }
+    try { fs.unlinkSync(tempPath); } catch {}
+    throw err;
+  }
+}
+
+const MAX_UPDATE_ATTEMPTS = 5;
+
+/**
+ * Apply `mutate(prev)` to the record with compare-and-update. `mutate` must be
+ * pure (it may run more than once). Returns the committed record. Persistence
+ * failures degrade to the in-memory result and are reported once.
+ */
+function updateLicenseStatus(mutate) {
+  let next;
+  for (let attempt = 0; attempt < MAX_UPDATE_ATTEMPTS; attempt++) {
+    const prev = readLicenseStatus();
+    next = { ...mutate(prev), revision: (prev.revision || 0) + 1 };
+    try {
+      if (writeIfRevisionUnchanged(next, prev.revision || 0)) {
+        persistenceFailureReported = false;
+        return next;
+      }
+    } catch (err) {
+      reportPersistenceFailure(err);
+      return next;
+    }
+  }
+  // Pathological contention: fall back to last-writer-wins so the caller still
+  // gets its transition recorded.
+  return writeLicenseStatus(next);
+}
+
 function writeLicenseStatus(status) {
   try {
     atomicWriteJson(LICENSE_STATUS_FILE, status);
     persistenceFailureReported = false;
   } catch (err) {
-    // Best-effort, like every other store in the plugin: a status record that
-    // cannot be written degrades backoff (extra attempts, still bounded by the
-    // refresh lock cooldown) and notices, never correctness — a revoked
-    // license is re-detected on the next attempt. Say so once in the debug log.
-    if (!persistenceFailureReported) {
-      persistenceFailureReported = true;
-      console.error(
-        `[skillmeter] license status not persisted (${err && err.message ? err.message : err}); backoff will restart from the on-disk record`
-      );
-    }
+    reportPersistenceFailure(err);
   }
   return status;
 }
@@ -122,8 +202,7 @@ function refreshBlockedReason(status, now = Date.now()) {
 }
 
 function recordRefreshSuccess({ source = "unknown", outcome = "rotated", now = Date.now() } = {}) {
-  const prev = readLicenseStatus();
-  return writeLicenseStatus({
+  return updateLicenseStatus((prev) => ({
     ...prev,
     last_attempt_at: now,
     last_success_at: now,
@@ -133,7 +212,7 @@ function recordRefreshSuccess({ source = "unknown", outcome = "rotated", now = D
     next_retry_at: null,
     terminal: null,
     updated_by: source,
-  });
+  }));
 }
 
 /**
@@ -150,24 +229,24 @@ function recordRefreshFailure({
   baseMs = getRetryDaemonIntervalMs(),
   capMs = BACKOFF_CAP_MS,
 } = {}) {
-  const prev = readLicenseStatus();
-  const failures = (prev.consecutive_failures || 0) + 1;
   const error = { kind, status, message: String(message || "").slice(0, 200) };
+  return updateLicenseStatus((prev) => {
+  const failures = (prev.consecutive_failures || 0) + 1;
   // A terminal state is sticky: a late transient-failure write from another
   // process (SessionStart bypasses the refresh lock) must not turn a revoked
   // or gh_unauthenticated record back into a retrying one. Only a success,
   // SessionStart's clearTerminal, or /skillmeter:signin lifts it.
   if (prev.terminal) {
-    return writeLicenseStatus({
+    return {
       ...prev,
       last_attempt_at: now,
       last_error: error,
       consecutive_failures: failures,
       updated_by: source,
-    });
+    };
   }
   if (backoffExhausted(failures, baseMs, capMs)) {
-    return writeLicenseStatus({
+    return {
       ...prev,
       last_attempt_at: now,
       last_outcome: "terminal",
@@ -176,9 +255,9 @@ function recordRefreshFailure({
       next_retry_at: null,
       terminal: { reason: TERMINAL_REASONS.BACKOFF_EXHAUSTED, at: now, status, message: error.message },
       updated_by: source,
-    });
+    };
   }
-  return writeLicenseStatus({
+  return {
     ...prev,
     last_attempt_at: now,
     last_outcome: "transient_failure",
@@ -187,14 +266,14 @@ function recordRefreshFailure({
     next_retry_at: now + backoffDelayMs(failures, baseMs, capMs),
     terminal: null,
     updated_by: source,
+  };
   });
 }
 
 /** Record a terminal outcome (402, gh unavailable, identity mismatch). */
 function recordTerminal({ source = "unknown", reason, status = null, message = "", now = Date.now() } = {}) {
-  const prev = readLicenseStatus();
   const msg = String(message || "").slice(0, 200);
-  return writeLicenseStatus({
+  return updateLicenseStatus((prev) => ({
     ...prev,
     last_attempt_at: now,
     last_outcome: "terminal",
@@ -203,7 +282,7 @@ function recordTerminal({ source = "unknown", reason, status = null, message = "
     next_retry_at: null,
     terminal: { reason, at: now, status, message: msg },
     updated_by: source,
-  });
+  }));
 }
 
 /**
@@ -214,18 +293,18 @@ function recordTerminal({ source = "unknown", reason, status = null, message = "
 function clearTerminal({ source = "session_start" } = {}) {
   const prev = readLicenseStatus();
   if (!prev.terminal && !prev.next_retry_at && !prev.consecutive_failures) return prev;
-  return writeLicenseStatus({
-    ...prev,
+  return updateLicenseStatus((cur) => ({
+    ...cur,
     consecutive_failures: 0,
     next_retry_at: null,
     terminal: null,
     updated_by: source,
-  });
+  }));
 }
 
 /** /skillmeter:signin entry point: start from a clean record. */
 function clearLicenseStatus({ source = "signin" } = {}) {
-  return writeLicenseStatus({ ...emptyStatus(), updated_by: source });
+  return updateLicenseStatus(() => ({ ...emptyStatus(), updated_by: source }));
 }
 
 module.exports = {
@@ -236,6 +315,7 @@ module.exports = {
   backoffDelayMs,
   backoffExhausted,
   refreshBlockedReason,
+  updateLicenseStatus,
   recordRefreshSuccess,
   recordRefreshFailure,
   recordTerminal,

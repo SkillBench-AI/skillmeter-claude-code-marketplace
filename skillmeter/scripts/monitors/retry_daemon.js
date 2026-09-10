@@ -76,16 +76,24 @@ async function maybeRefreshLicense(state = {}) {
   if (!deviceId) return;
   if (credstore.getSignedOut()) return;
 
-  const status = readLicenseStatus();
-  // A valid token wins over any recorded failure: a sign-in, a SessionStart
-  // refresh, or another client sharing credentials.json may have renewed it
-  // while this daemon was backing off or stopped.
-  if (credstore.hasValidLicense()) {
-    if (status.terminal || status.next_retry_at || status.consecutive_failures) {
-      clearTerminal({ source: "daemon" });
-    }
-    return;
+  let status = readLicenseStatus();
+  const token = credstore.getLicenseTokenUncached();
+  // Two thresholds. Hooks accept a token until LICENSE_EXPIRY_SKEW_SECONDS
+  // before exp; the daemon must renew one sweep earlier than that so no hook
+  // ever meets an expired token between two ticks.
+  const hookValid = Boolean(token) && !credstore.isLicenseTokenExpired(token);
+  const proactiveFresh =
+    Boolean(token) &&
+    !credstore.isLicenseTokenExpired(token, credstore.LICENSE_EXPIRY_SKEW_SECONDS + Math.ceil(INTERVAL_MS / 1000));
+
+  // A token hooks accept wins over any recorded failure: a sign-in, a
+  // SessionStart refresh, or another client sharing credentials.json may have
+  // renewed it while this daemon was backing off or stopped.
+  if (hookValid && (status.terminal || status.next_retry_at || status.consecutive_failures)) {
+    status = clearTerminal({ source: "daemon" });
   }
+  if (proactiveFresh) return;
+
   const blocked = refreshBlockedReason(status, Date.now());
   if (blocked === "terminal") {
     const at = status.terminal && status.terminal.at;

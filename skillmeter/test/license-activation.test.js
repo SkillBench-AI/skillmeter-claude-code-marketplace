@@ -24,7 +24,7 @@ setTestEnv("SKILLMETER_BACKEND_URL", undefined);
 
 const credstore = require("../scripts/credstore");
 const licenseStatus = require("../scripts/lib/license-status");
-const { refreshLicense, ensureFreshLicense } = require("../scripts/lib/license-activation");
+const { refreshLicense, ensureFreshLicense, _acquireRefreshLock: acquireRefreshLock } = require("../scripts/lib/license-activation");
 const { LOG_DIR } = require("../scripts/lib/paths");
 
 const DEVICE_ID = "11111111-2222-4333-8444-555555555555";
@@ -242,4 +242,21 @@ test("signed out: neither path makes a network call", async () => {
   assert.equal(await refreshLicense(DEVICE_ID, { source: "daemon" }), null);
   assert.equal(await ensureFreshLicense(DEVICE_ID, { source: "daemon" }), null);
   assert.equal(calls.length, 0);
+});
+
+test("refresh lock: exclusive create, live lock refused, stale lock claimed and replaced, replaced-by-live lock refused", () => {
+  const now = Date.now();
+  try { fs.unlinkSync(LOCK_FILE); } catch {}
+  assert.equal(acquireRefreshLock(false, 60_000, now), true, "no lock: acquired");
+  assert.match(fs.readFileSync(LOCK_FILE, "utf8"), new RegExp(`^${process.pid} `));
+
+  assert.equal(acquireRefreshLock(false, 60_000, now), false, "live lock, not judged stale: refused");
+  assert.equal(acquireRefreshLock(true, 60_000, now), false, "judged stale by the caller, but the re-check sees a live lock: refused");
+
+  // Age the lock past the cooldown: the takeover claims and replaces it.
+  const old = new Date(now - 120_000);
+  fs.utimesSync(LOCK_FILE, old, old);
+  assert.equal(acquireRefreshLock(true, 60_000, now), true, "stale lock: claimed and replaced");
+  assert.ok(now - fs.statSync(LOCK_FILE).mtimeMs < 60_000, "the replacement lock is fresh");
+  assert.equal(fs.readdirSync(LOG_DIR).filter((f) => f.endsWith(".stale")).length, 0, "claim file cleaned up");
 });
