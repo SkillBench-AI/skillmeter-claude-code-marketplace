@@ -89,7 +89,9 @@ async function maybeRefreshLicense(state = {}) {
   if (blocked === "backoff") return;
 
   try {
-    await ensureFreshLicense(deviceId, { source: "daemon" });
+    // Renew one sweep interval ahead of the hooks' expiry threshold so no hook
+    // ever sees an expired token between two ticks.
+    await ensureFreshLicense(deviceId, { source: "daemon", aheadMs: INTERVAL_MS });
   } catch (err) {
     log(`license refresh error: ${err && err.message ? err.message : err}`);
   }

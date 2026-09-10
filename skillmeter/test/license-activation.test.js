@@ -95,6 +95,20 @@ test("fresh token: no network call, token returned as-is", async () => {
   assert.equal(calls.length, 0);
 });
 
+test("renew-ahead: a token inside the daemon's look-ahead but outside the hooks' skew is refreshed only when asked", async () => {
+  // Expires in 6 minutes: hooks (5-minute skew) still accept it.
+  const soon = jwt({ expiresInSec: 6 * 60 });
+  writeCreds(soon);
+  assert.equal(await refreshLicense(DEVICE_ID, { source: "drain" }), soon);
+  assert.equal(calls.length, 0, "default callers leave a 6-minute token alone");
+
+  // The daemon looks 2 minutes further ahead (5 + 2 = 7 min) and renews it now.
+  const next = FRESH();
+  responses = [respond(200, { token: next })];
+  assert.equal(await refreshLicense(DEVICE_ID, { source: "daemon", aheadMs: 120_000 }), next);
+  assert.equal(calls.length, 1);
+});
+
 test("no stored token: nothing happens (A4 relaxes this)", async () => {
   writeCreds(null);
   assert.equal(await refreshLicense(DEVICE_ID, { source: "daemon" }), null);

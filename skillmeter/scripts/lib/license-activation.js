@@ -207,6 +207,17 @@ const LICENSE_REFRESH_LOCK_FILE = path.join(LOG_DIR, ".license-refresh.lock");
 const LICENSE_REFRESH_COOLDOWN_MS = 60_000;
 
 /**
+ * Hooks treat a token as expired LICENSE_EXPIRY_SKEW_SECONDS before `exp`. A
+ * periodic caller (the daemon) must renew at least one period earlier than
+ * that, otherwise hooks skip events between the moment the token crosses the
+ * hooks' threshold and the caller's next tick. Pure.
+ */
+function renewSkewSeconds(aheadMs = 0) {
+  const ahead = Number.isFinite(aheadMs) && aheadMs > 0 ? Math.ceil(aheadMs / 1000) : 0;
+  return credstore.LICENSE_EXPIRY_SKEW_SECONDS + ahead;
+}
+
+/**
  * Pure single-flight + cooldown decision (no I/O — unit-testable). All callers
  * are best-effort/proactive (there's no reactive force path), so a lock younger
  * than the cooldown simply means "someone else has it / just refreshed" → skip.
@@ -235,10 +246,12 @@ function shouldRefresh(
  * @param {string} deviceId
  * @param {object} [opts]
  * @param {string} [opts.source] who is asking ("session_start", "daemon", "drain")
+ * @param {number} [opts.aheadMs] renew this much earlier than the hooks'
+ *   expiry threshold (see renewSkewSeconds)
  */
-async function refreshLicense(deviceId, { source = "unknown" } = {}) {
+async function refreshLicense(deviceId, { source = "unknown", aheadMs = 0 } = {}) {
   const current = credstore.getLicenseTokenUncached();
-  if (current && !credstore.isLicenseTokenExpired(current)) return current;
+  if (current && !credstore.isLicenseTokenExpired(current, renewSkewSeconds(aheadMs))) return current;
   // SessionStart and queue drainers may refresh an existing sign-in, but must
   // never create a brand-new sign-in before the user invokes /skillmeter:signin.
   // (ADR 001 decision 4 relaxes this for devices with a prior-sign-in marker;
@@ -310,12 +323,13 @@ async function refreshLicense(deviceId, { source = "unknown" } = {}) {
  * already fresh, non-blocking when another process holds the refresh lock, and
  * silent while the status record says to back off or stop.
  */
-async function ensureFreshLicense(deviceId, { source = "drain" } = {}) {
+async function ensureFreshLicense(deviceId, { source = "drain", aheadMs = 0 } = {}) {
   if (!deviceId) return null;
   if (credstore.getSignedOut()) return null;
 
   const current = credstore.getLicenseTokenUncached();
-  const tokenFresh = Boolean(current) && !credstore.isLicenseTokenExpired(current);
+  const tokenFresh =
+    Boolean(current) && !credstore.isLicenseTokenExpired(current, renewSkewSeconds(aheadMs));
   if (tokenFresh) return current;
 
   // Backoff / terminal decisions are shared across processes through the
@@ -347,7 +361,7 @@ async function ensureFreshLicense(deviceId, { source = "drain" } = {}) {
   }
 
   try {
-    return (await refreshLicense(deviceId, { source })) || current;
+    return (await refreshLicense(deviceId, { source, aheadMs })) || current;
   } catch {
     return current;
   }
