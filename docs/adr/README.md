@@ -1,0 +1,12 @@
+# Architectural Decision Records
+
+Decisions that shape this plugin. IaC and platform-level ADRs live in
+`skillbench-infra/docs/adr/` and `skillbench-docs/adr/`.
+
+Conventions: ADRs are point-in-time artifacts. Amend with a dated note or
+supersede with a new ADR rather than rewriting history. Every ADR carries a
+`**Status:**` line; when superseded, both ends link to each other.
+
+| # | Title | Date | Status |
+|---|---|---|---|
+| [001](001-license-token-lifecycle.md) | License token lifecycle: lifetime, refresh, and recovery | 2026-09-10 | Proposed (decision 4 pending) |
