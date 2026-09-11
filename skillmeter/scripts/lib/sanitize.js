@@ -362,7 +362,11 @@ function hashPathSegments(p, hashSalt, redactions) {
     return hashHmac(seg, hashSalt);
   });
   const joined = out.join("/") + (out.length ? trailing : "");
-  if (prefix) return joined ? `${prefix}/${joined}` : prefix;
+  if (prefix) {
+    // `${HOME}` → hash; `${HOME}/` → hash followed by the directory marker.
+    if (!joined) return leading ? `${prefix}/` : prefix;
+    return `${prefix}/${joined}`;
+  }
   return leading + joined;
 }
 

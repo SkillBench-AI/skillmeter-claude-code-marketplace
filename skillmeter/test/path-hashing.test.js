@@ -216,3 +216,9 @@ test("a whole-value path key with no salt produces no hash and no count", () => 
   assert.equal(value.cwd, "");
   assert.equal(meta.counts.path, 0);
 });
+
+test("the home directory itself keeps its trailing separator", () => {
+  assert.equal(s.hashPathSegments(HOME, SALT), homeHash);
+  assert.equal(s.hashPathSegments(`${HOME}/`, SALT), `${homeHash}/`);
+  assert.match(s.hashPathSegments(`${HOME}/work/`, SALT), new RegExp(`^${homeHash}/work/$`));
+});
