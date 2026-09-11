@@ -22,10 +22,13 @@ const SALT = "deadbeefcafe";
 const HOME = os.homedir();
 const HEX = "[0-9a-f]{12}";
 const homeHash = s.hashHmac(HOME, SALT);
+// When the home directory is the filesystem root there is no username to hide
+// and no prefix to hash, so the home-dependent expectations do not apply.
+const HOME_DEPENDENT = HOME === "/" || HOME === "" ? { skip: "home directory is the filesystem root" } : {};
 
 // --- hashPathSegments -------------------------------------------------------
 
-test("home-prefixed file path: home is one unit, names are hashed, structure and extension survive", () => {
+test("home-prefixed file path: home is one unit, names are hashed, structure and extension survive", HOME_DEPENDENT, () => {
   const out = s.hashPathSegments(`${HOME}/work/acme-portal/src/billing/invoice-acme.ts`, SALT);
   // `work`, `src`, `billing` are vocabulary; `acme-portal` and `invoice-acme` are not.
   assert.match(out, new RegExp(`^${homeHash}/work/${HEX}/src/billing/${HEX}\\.ts$`));
@@ -74,7 +77,7 @@ test("no salt: fail closed to an empty value, as before", () => {
   assert.equal(s.hashPathSegments("/Users/me/a.js", ""), "");
 });
 
-test("looksSegmentHashed recognises its own output and rejects raw paths", () => {
+test("looksSegmentHashed recognises its own output and rejects raw paths", HOME_DEPENDENT, () => {
   const out = s.hashPathSegments(`${HOME}/work/acme/src/x.ts`, SALT);
   assert.equal(s.looksSegmentHashed(out), true);
   assert.equal(s.looksSegmentHashed(`${HOME}/work/acme/src/x.ts`), false);
@@ -84,7 +87,7 @@ test("looksSegmentHashed recognises its own output and rejects raw paths", () =>
 
 // --- through sanitizeEventData -----------------------------------------------
 
-test("segment keys are segment-hashed; cwd and generic path stay whole-value hashes", () => {
+test("segment keys are segment-hashed; cwd and generic path stay whole-value hashes", HOME_DEPENDENT, () => {
   const { value } = s.sanitizeEventData(
     {
       cwd: `${HOME}/work/acme`,
@@ -109,7 +112,7 @@ test("segment keys are segment-hashed; cwd and generic path stay whole-value has
   assert.equal(JSON.stringify(withoutCommand).includes("invoice"), false);
 });
 
-test("counts.path tallies segment hashes, whole-value hashes and home-prefix replacements", () => {
+test("counts.path tallies segment hashes, whole-value hashes and home-prefix replacements", HOME_DEPENDENT, () => {
   const { meta, value } = s.sanitizeEventData(
     {
       cwd: `${HOME}/work/acme`, // 1 whole
@@ -127,7 +130,7 @@ test("counts.path tallies segment hashes, whole-value hashes and home-prefix rep
   assert.equal(meta.policyVersion, "3.1.0");
 });
 
-test("second pass over a stamped record is a no-op for segment-hashed paths", () => {
+test("second pass over a stamped record is a no-op for segment-hashed paths", HOME_DEPENDENT, () => {
   const first = s.sanitizeEventData(
     { tool_input: { file_path: `${HOME}/work/acme/src/x.ts`, edits: [{ file_path: "/opt/acme/y.py" }] }, cwd: `${HOME}/w` },
     SALT
@@ -137,7 +140,7 @@ test("second pass over a stamped record is a no-op for segment-hashed paths", ()
   assert.equal(second.meta.counts.path, 0);
 });
 
-test("a raw file path added to a stamped record is segment-hashed and leaks nothing", () => {
+test("a raw file path added to a stamped record is segment-hashed and leaks nothing", HOME_DEPENDENT, () => {
   const first = s.sanitizeEventData({ file_path: `${HOME}/work/a.ts` }, SALT);
   const tampered = { ...first.value, file_path: `${HOME}/work/new-secret-project/b.ts` };
   const { value, meta } = s.sanitizeEventData(tampered, SALT);
@@ -204,7 +207,7 @@ test("UNC prefix and trailing separator are preserved; inner repeats collapse", 
   assert.equal(s.hashPathSegments("/", SALT), "/");
 });
 
-test("home-prefix hashes applied to object keys are counted", () => {
+test("home-prefix hashes applied to object keys are counted", HOME_DEPENDENT, () => {
   const { value, meta } = s.sanitizeEventData({ toolUseResult: { [`${HOME}/work/acme/README.md`]: { size: 1 } } }, SALT);
   const key = Object.keys(value.toolUseResult)[0];
   assert.ok(key.startsWith(homeHash + "/"));
@@ -217,7 +220,7 @@ test("a whole-value path key with no salt produces no hash and no count", () => 
   assert.equal(meta.counts.path, 0);
 });
 
-test("the home directory itself keeps its trailing separator", () => {
+test("the home directory itself keeps its trailing separator", HOME_DEPENDENT, () => {
   assert.equal(s.hashPathSegments(HOME, SALT), homeHash);
   assert.equal(s.hashPathSegments(`${HOME}/`, SALT), `${homeHash}/`);
   assert.match(s.hashPathSegments(`${HOME}/work/`, SALT), new RegExp(`^${homeHash}/work/$`));
