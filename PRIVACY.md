@@ -121,11 +121,12 @@ Before telemetry is queued, the plugin:
   version-control author lines with `[PERSON]`, phone numbers with `[PHONE]`,
   IP addresses with `[IP]`, Korean resident registration and US Social
   Security numbers with `[ID_NUMBER]`, and payment card numbers with `[CARD]`;
-- hashes the home-directory prefix wherever it appears, hashes directory
-  fields whole, and hashes file paths segment by segment so that directory
-  structure, file extensions and common technical names (`src`, `test`,
-  `package.json`) stay readable while project, customer and file names do
-  not;
+- hashes the home-directory prefix wherever it appears; hashes directory
+  fields (`cwd`, `old_cwd`, `new_cwd`) and the generic `path` field as whole
+  values; and hashes file-path fields (`file_path`, `filePath`,
+  `notebook_path`) segment by segment so that directory structure, file
+  extensions and common technical names (`src`, `test`, `package.json`) stay
+  readable while project, customer and file names do not;
 - keeps the repository name (`organization/repository`) in clear for
   repositories the user has enabled, because consent is given per repository
   by name and the data goes to the organization that owns it;

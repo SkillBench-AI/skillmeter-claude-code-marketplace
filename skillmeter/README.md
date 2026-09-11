@@ -307,14 +307,14 @@ machine, by one shared boundary (`lib/sanitize.js`):
 - **The home-directory prefix** (which carries the OS username) is HMAC-hashed
   everywhere it appears — in message content, tool commands, and file paths —
   so the username never leaves the machine while relative structure is kept.
-- **File paths** (`file_path`, `notebook_path`) are hashed segment by
-  segment: directory structure, the extension and common technical names from
-  a shared vocabulary (`src`, `test`, `api`, `package.json`, …) stay readable,
-  every other directory or file name becomes its own hash. Example:
-  `/Users/jane/work/acme-portal/src/billing/invoice.ts` →
-  `000687bf6f7f/7788990011aa/2a1b3c4d5e6f/src/billing/1122334455aa.ts`.
-- **Directory fields** (`cwd`, `repo_root`, `repo_remote_org`) and the
-  generic `path` key are HMAC-hashed wholesale.
+- **File paths** (`file_path`, `filePath`, `notebook_path`) are hashed
+  segment by segment: directory structure, the extension and common technical
+  names from a shared vocabulary (`src`, `test`, `api`, `package.json`, …)
+  stay readable, every other directory or file name becomes its own hash.
+  Example: `/Users/jane/work/acme-portal/src/billing/invoice.ts` →
+  `000687bf6f7f/work/2a1b3c4d5e6f/src/billing/1122334455aa.ts`.
+- **Directory fields** (`cwd`, `old_cwd`, `new_cwd`, `repo_root`,
+  `repo_remote_org`) and the generic `path` key are HMAC-hashed wholesale.
 - **Repository name** (`org/repo`) is sent in clear for repositories you have
   enabled: consent is given per repository by name and the data goes to the
   organization that owns it.

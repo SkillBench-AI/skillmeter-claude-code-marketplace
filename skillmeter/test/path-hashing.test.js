@@ -165,8 +165,10 @@ test("vocabulary: lowercase, unique, no whitespace; patterns behave", () => {
   assert.equal(new Set(VOCAB.files).size, VOCAB.files.length, "files unique");
   for (const ce of VOCAB.compound_extensions) assert.ok(ce.startsWith("."), ce);
   const version = new RegExp(VOCAB.version_pattern);
-  for (const ok of ["v1", "v12", "2", "1.2.0", "1.2.3.4"]) assert.ok(version.test(ok), ok);
-  for (const no of ["2026-09-11", "v1beta", "1_2", "acme2"]) assert.equal(version.test(no), false, no);
+  for (const ok of ["v1", "v12", "1.2.0", "1.2.3.4", "v2.1"]) assert.ok(version.test(ok), ok);
+  for (const no of ["2", "2026", "123456789", "4111111111111111", "2026-09-11", "v1beta", "1_2", "acme2"]) {
+    assert.equal(version.test(no), false, `bare or non-version numeric ${no} must be hashed`);
+  }
   const structural = new RegExp(VOCAB.structural_pattern);
   for (const ok of [".", "..", "~", "C:", "d:"]) assert.ok(structural.test(ok), ok);
   assert.equal(structural.test("..."), false);
@@ -178,4 +180,39 @@ test("vocabulary never contains a person-like or customer-like token", () => {
     assert.ok(t.length <= 32, `${t} is suspiciously long`);
     assert.equal(/@/.test(t), false, t);
   }
+});
+
+// --- review follow-ups ------------------------------------------------------------
+
+test("bare numeric identifiers in paths are hashed, dotted or v-prefixed versions are kept", () => {
+  const card = s.hashPathSegments("/accounts/4111111111111111/file.txt", SALT);
+  assert.match(card, new RegExp(`^/accounts/${HEX}/${HEX}\\.txt$`));
+  assert.equal(card.includes("4111"), false);
+  const user = s.hashPathSegments("/users/123456789/data/file.json", SALT);
+  assert.match(user, new RegExp(`^/users/${HEX}/data/${HEX}\\.json$`));
+  assert.equal(s.hashPathSegments("api/v2/1.2.0/x", SALT).startsWith("api/v2/1.2.0/"), true);
+  assert.match(s.hashPathSegments("releases/2026/notes.txt", SALT), new RegExp(`^releases/${HEX}/${HEX}\\.txt$`));
+});
+
+test("UNC prefix and trailing separator are preserved; inner repeats collapse", () => {
+  const unc = s.hashPathSegments("\\\\fileserver\\share\\report.xlsx", SALT);
+  assert.match(unc, new RegExp(`^//${HEX}/${HEX}/${HEX}\\.xlsx$`));
+  assert.equal(unc.includes("fileserver"), false);
+  const dir = s.hashPathSegments("/opt/acme/src/", SALT);
+  assert.match(dir, new RegExp(`^/opt/${HEX}/src/$`), "trailing slash kept, last segment treated as a directory");
+  assert.match(s.hashPathSegments("/opt//acme///x.py", SALT), new RegExp(`^/opt/${HEX}/${HEX}\\.py$`));
+  assert.equal(s.hashPathSegments("/", SALT), "/");
+});
+
+test("home-prefix hashes applied to object keys are counted", () => {
+  const { value, meta } = s.sanitizeEventData({ toolUseResult: { [`${HOME}/work/acme/README.md`]: { size: 1 } } }, SALT);
+  const key = Object.keys(value.toolUseResult)[0];
+  assert.ok(key.startsWith(homeHash + "/"));
+  assert.equal(meta.counts.path, 1);
+});
+
+test("a whole-value path key with no salt produces no hash and no count", () => {
+  const { value, meta } = s.sanitizeEventData({ cwd: "/Users/me/x", path: "" }, "");
+  assert.equal(value.cwd, "");
+  assert.equal(meta.counts.path, 0);
 });

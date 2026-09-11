@@ -1,7 +1,7 @@
 {
   "version": "1",
-  "description": "Path segments kept in clear by segment-wise path hashing (ADR 002 amendment, decision 6). Everything not listed here, and not matching version_pattern or structural_pattern, is replaced by a per-segment HMAC. Matching is exact and case-insensitive. Directories: common repository layout and system directory names. Files: well-known manifest, config and entry-point names whose presence signals a stack, never a person or a customer. Compound extensions are kept together with the final extension. Shared by the Claude plugin, the Codex plugin and the session collector; a change here is a policy change and bumps the policy version.",
-  "version_pattern": "^v?\\d+(?:\\.\\d+){0,3}$",
+  "description": "Path segments kept in clear by segment-wise path hashing (ADR 002 amendment, decision 6). Everything not listed here, and not matching version_pattern (a v-prefixed or dotted version; a bare integer such as an account or card number is NOT version-like) or structural_pattern, is replaced by a per-segment HMAC. Matching is exact and case-insensitive. Directories: common repository layout and system directory names. Files: well-known manifest, config and entry-point names whose presence signals a stack, never a person or a customer. Compound extensions are kept together with the final extension. Shared by the Claude plugin, the Codex plugin and the session collector; a change here is a policy change and bumps the policy version.",
+  "version_pattern": "^(?:v\\d+(?:\\.\\d+){0,3}|\\d+(?:\\.\\d+){1,3})$",
   "structural_pattern": "^(?:\\.{1,2}|~|[A-Za-z]:)$",
   "compound_extensions": [
     ".test.ts", ".test.tsx", ".test.js", ".test.jsx", ".test.mjs", ".spec.ts", ".spec.tsx", ".spec.js", ".spec.jsx", ".d.ts", ".d.mts", ".d.cts", ".stories.tsx",

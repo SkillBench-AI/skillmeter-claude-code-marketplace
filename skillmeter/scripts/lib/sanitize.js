@@ -345,11 +345,15 @@ function hashPathSegments(p, hashSalt, redactions) {
     if (redactions) redactions.push(PATH_HASH);
     rest = rest.slice(HOME_DIR_NORM.length);
   }
-  const absolute = rest.startsWith("/");
+  // Root and trailing separators are structure and are kept: one leading
+  // slash for POSIX absolute paths, two for UNC paths (`\\host\share`), and a
+  // trailing slash on a directory path. Repeated inner separators collapse.
+  const leading = rest.startsWith("//") ? "//" : rest.startsWith("/") ? "/" : "";
+  const trailing = rest.length > leading.length && rest.endsWith("/") ? "/" : "";
   const segments = rest.split("/").filter(Boolean);
   const out = segments.map((seg, i) => {
     if (isClearSegment(seg)) return seg;
-    if (i === segments.length - 1) {
+    if (i === segments.length - 1 && !trailing) {
       const { base, ext } = splitExtension(seg);
       if (redactions) redactions.push(PATH_HASH);
       return hashHmac(base, hashSalt) + ext;
@@ -357,9 +361,9 @@ function hashPathSegments(p, hashSalt, redactions) {
     if (redactions) redactions.push(PATH_HASH);
     return hashHmac(seg, hashSalt);
   });
-  const joined = out.join("/");
+  const joined = out.join("/") + (out.length ? trailing : "");
   if (prefix) return joined ? `${prefix}/${joined}` : prefix;
-  return (absolute ? "/" : "") + joined;
+  return leading + joined;
 }
 
 /**
@@ -425,7 +429,9 @@ function scrubDeep(value, hashSalt, redactions = [], parentKey = null, opts = FR
     // a stamped record and the value is already a hash.
     if (parentKey && WHOLE_KEYS.has(parentKey)) {
       if (keepAsHash(value, opts)) return value;
-      redactions.push(PATH_HASH);
+      // Count only when a hash is actually produced (hashHmac yields "" for an
+      // empty value or a missing salt).
+      if (hashSalt && value) redactions.push(PATH_HASH);
       return hashHmac(value, hashSalt);
     }
     return scrubString(value, hashSalt, redactions);
@@ -438,9 +444,9 @@ function scrubDeep(value, hashSalt, redactions = [], parentKey = null, opts = FR
     for (const [key, val] of Object.entries(value)) {
       // Keys can themselves be sensitive — some transcript entries use absolute
       // file paths as map keys, which carry the home-dir/username. Scrub the key
-      // (redact + home-path hash) but decide `isSecretKey` value-forcing from the
-      // ORIGINAL key name.
-      const scrubbedKey = scrubString(key, hashSalt);
+      // (redact + home-path hash, both tallied like any other string) but decide
+      // `isSecretKey` value-forcing from the ORIGINAL key name.
+      const scrubbedKey = scrubString(key, hashSalt, redactions);
       out[scrubbedKey] = scrubDeep(val, hashSalt, redactions, key, opts);
     }
     return out;
