@@ -318,7 +318,9 @@ async function runHook(eventName, buildData, options = {}) {
       : undefined,
     permission_mode: input.permission_mode,
   };
-  if (meta.secrets > 0 || meta.pii > 0) data._sanitization = meta;
+  // Always attached, zeros included, so redaction rates per category can be
+  // read downstream without a full scan (ADR 002, decision 4).
+  data._sanitization = meta;
 
   const logged = logEvent(
     eventName,
