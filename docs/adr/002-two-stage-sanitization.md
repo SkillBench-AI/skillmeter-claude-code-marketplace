@@ -406,11 +406,14 @@ per whole-value hash (`cwd`, `old_cwd`, `new_cwd`, generic `path`), and one
 per home-prefix replacement inside free text. All three sanitizers count the
 same way, so totals are comparable in the dashboard of decision 1.
 
-Policy version `3.1.0`, plugin 0.34.1. Path-key values written under `3.0.0`
-and earlier are single hashes and do not join with `3.1.0` values; the
-policy version on each record tells them apart. The Codex plugin, the session
-collector and the VS Code extension (whose hashing service hashes whole
-paths) follow under the per-surface declaration rule of decision 4.
+Policy version `3.1.0`, plugin 0.34.1. Only `file_path`, `filePath` and
+`notebook_path` change representation: their values written under pre-`3.1.0`
+policies are single whole-value hashes and do not join with `3.1.0` values,
+and the policy version on each record tells the two apart. `cwd`, `old_cwd`,
+`new_cwd` and the generic `path` key keep the wholesale hash and stay
+comparable across policy versions. The Codex plugin, the session collector
+and the VS Code extension (whose hashing service hashes whole paths) follow
+under the per-surface declaration rule of decision 4.
 
 ### 7. Repository identity travels in clear to the owning tenant
 
@@ -461,8 +464,10 @@ default and audit trail.
 - Organization-level per-repository analysis becomes possible for the first
   time; the `repo_name` attribute is available to ClickHouse queries as soon
   as devices update.
-- Two representations of `file_path` coexist in storage until 3.0.0 devices
-  are gone; consumers must switch on `policyVersion`.
+- Two representations of `file_path`, `filePath` and `notebook_path` coexist
+  in storage until pre-`3.1.0` devices are gone; consumers switch on
+  `policyVersion` for those three keys and need no migration for the
+  whole-hashed keys (`cwd`, `old_cwd`, `new_cwd`, generic `path`).
 - The vocabulary list is a new shared artifact with its own review.
 
 ### Implementation mapping (amendment)
