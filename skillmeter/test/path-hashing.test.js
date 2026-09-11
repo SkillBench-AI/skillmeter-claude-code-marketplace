@@ -51,7 +51,8 @@ test("compound extensions and dotfiles", () => {
 
 test("absolute paths outside home and another user's home", () => {
   assert.match(s.hashPathSegments("/opt/acme/app.py", SALT), new RegExp(`^/opt/${HEX}/app\\.py$`));
-  const other = s.hashPathSegments("/Users/otheruser/notes/todo.md", SALT);
+  // `journal.md` is not a well-known file name (`todo.md` would be kept as vocabulary).
+  const other = s.hashPathSegments("/Users/otheruser/notes/journal.md", SALT);
   assert.match(other, new RegExp(`^/Users/${HEX}/${HEX}/${HEX}\\.md$`));
   assert.equal(other.includes("otheruser"), false);
 });
