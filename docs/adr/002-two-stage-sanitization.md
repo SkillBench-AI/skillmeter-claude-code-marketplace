@@ -120,14 +120,21 @@ detecting PII by sending it to a model provider is itself a transfer.
 
 ### 2. Uploaded objects are "stage-1 sanitized", read only by stage 2
 
-The object the plugin uploads is called stage-1 sanitized, never "raw":
-secrets and stage-1 PII categories are already gone and paths are hashed.
-Stage 2 writes a stage-2 object per input; the analysis pipeline and every
-other consumer read stage-2 objects only. The stage-1 object is deleted when
-stage 2 succeeds. When stage 2 fails, the stage-1 object is moved to a
-quarantine prefix with a 7-day lifecycle and readable only by the
-sanitizer's own role. Stage 2 is triggered per object on arrival, not by the
-weekly analysis batch, so a stage-1 object lives for minutes.
+Decided: the object the plugin uploads is called stage-1 sanitized, never
+"raw": secrets and stage-1 PII categories are already gone and paths are
+hashed. Stage 2 writes a stage-2 object per input; the analysis pipeline and
+every other consumer read stage-2 objects only. A stage-1 object is an
+intermediate form with a bounded lifetime, not a retained dataset.
+
+Proposed, not confirmed: how that lifetime is bounded is settled after
+stage 2 exists and its failure modes and run times have been measured on the
+SkillBench tenant. The working proposal, recorded so that implementation
+starts from it, is: delete the stage-1 object when stage 2 succeeds; when
+stage 2 fails, move it to a quarantine prefix with a 7-day lifecycle that
+only the sanitizer's own role can read; trigger stage 2 per object on
+arrival rather than from the weekly analysis batch, so the intermediate form
+lives for minutes. This ADR is amended with a dated note when these three
+parameters are confirmed or changed.
 
 `otel_logs` holds stage-1 content. It is classified internal-only, is never
 a source for user-facing reports, and is not rewritten by stage 2: its
@@ -136,10 +143,11 @@ wrong tool for row rewrites.
 
 Rationale: the question an installer will ask is whether unsanitized text
 sits in SkillBench storage. With this decision the answer is that nothing
-unsanitized leaves the device, the one intermediate form is deleted within
-minutes of a successful second pass, and the analysis never touches it.
-Event-driven processing rather than the Monday batch is what makes "minutes"
-true.
+unsanitized leaves the device, the one intermediate form has a bounded
+lifetime, and the analysis never touches it. The proposal above is what
+would make that lifetime minutes rather than days; whether it holds under
+real failure rates is a measurement question, which is why it is deferred
+rather than fixed here.
 
 ### 3. Stage 1 covers a fixed set of categories, each with a typed placeholder
 
@@ -218,10 +226,10 @@ does not claim complete PII removal anywhere.
   formatted numeric identifiers as phone numbers when they reach 9 digits.
   Both are visible in the per-category counts and can be tuned with negative
   fixtures.
-- Stage 2 is a new component in each tenant account with read, write and
-  delete rights on the transcripts bucket and its own quarantine prefix;
-  that is infrastructure work in the pipelines repository, tracked
-  separately.
+- Stage 2 is a new component in each tenant account with read and write
+  rights on the transcripts bucket, plus delete rights and a quarantine
+  prefix if the proposed lifecycle is confirmed; that is infrastructure work
+  in the pipelines repository, tracked separately.
 - `otel_logs` is formally internal-only. Anything shown to users must derive
   from stage-2 objects or from counts, never from `otel_logs` strings.
 - Events already in ClickHouse and objects already in S3 were sanitized under
@@ -240,6 +248,9 @@ does not claim complete PII removal anywhere.
 
 ## Open items
 
+- Stage-1 object lifecycle and trigger (the proposal in decision 2): confirm
+  delete-on-success, the 7-day quarantine and per-object triggering after
+  stage 2 has run on the SkillBench tenant, then amend this ADR.
 - Language coverage of stage 2. Presidio's default recognisers are
   English-centric; prompts in this tenant are frequently Korean, so the
   dashboard of decision 1 must report per language and a Korean model is a
