@@ -152,6 +152,7 @@ test("external repository emits only the allow-listed exclusion audit", () => {
   const raw = fs.readFileSync(auditFile, "utf8");
   const audit = JSON.parse(raw.trim());
   assert.deepEqual(Object.keys(audit.data).sort(), [
+    "_sanitization",
     "cwd",
     "gate_mode",
     "source_hook_event_name",
@@ -398,6 +399,7 @@ test("concurrent blocked hooks append complete audit records", async () => {
     const event = JSON.parse(line);
     assert.equal(event.hook_event_name, "TelemetryCaptureExcluded");
     assert.deepEqual(Object.keys(event.data).sort(), [
+      "_sanitization",
       "cwd",
       "gate_mode",
       "source_hook_event_name",

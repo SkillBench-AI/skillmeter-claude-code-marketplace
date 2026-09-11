@@ -291,14 +291,27 @@ machine, by one shared boundary (`lib/sanitize.js`):
 - **Secrets** are redacted to `[REDACTED_SECRET]` using a curated rule table
   ported from the [Gitleaks](https://github.com/gitleaks/gitleaks) default
   ruleset (MIT — see `NOTICE`), gated by Shannon entropy and a stopword
-  allow-list to limit false positives. Field names that denote secrets
-  (`api_key`, `token`, `password`, …) force redaction of their values too.
-- **Emails** are redacted to `[EMAIL]`.
+  allow-list to limit false positives. Identifier-like field names that denote
+  secrets (`api_key`, `token`, `password`, …) force redaction of their values
+  too; free-text keys such as question sentences are scrubbed by content only.
+- **Personal data** is replaced by a placeholder that keeps the category and
+  drops the value: e-mail addresses (any script) → `[EMAIL]`; the name on
+  `Author:` / `Committer:` / `Signed-off-by:` / `Co-authored-by:` lines →
+  `[PERSON]`; phone numbers → `[PHONE]`; IPv4 and IPv6 addresses → `[IP]`
+  (loopback and documentation ranges are left alone); Korean resident
+  registration and US Social Security numbers → `[ID_NUMBER]`; Luhn-valid
+  payment card numbers → `[CARD]`. Names in free text, postal addresses and
+  customer names need context a rule does not have and are not attempted here.
+- **Already sanitized text is left alone.** Placeholders are never matched
+  again, so running the sanitizer twice changes nothing.
 - **The home-directory prefix** (which carries the OS username) is HMAC-hashed
   everywhere it appears — in message content, tool commands, and file paths —
   so the username never leaves the machine while relative structure is kept.
 - **Path-bearing tool fields** (`file_path`, `path`, `command`, …) and the
   `cwd` / `repo_root` / `repo_remote_org` fields are HMAC-hashed wholesale.
+- **Every record carries `_sanitization`**: the policy version (`3.0.0`), the
+  number of redactions per category, and the detector ids. Counts only, never
+  the matched values.
 - **Device ID** is a random UUID stored in `~/.skillbench/credentials.json`, not derived from hardware.
 - **Harness data** (`SessionStart`) runs through the same sanitizer; see
   [Harness Data](#harness-data).

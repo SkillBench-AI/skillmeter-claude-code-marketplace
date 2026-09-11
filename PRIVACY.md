@@ -116,10 +116,22 @@ appear inside prompts, tool payloads, errors, or transcript records.
 Before telemetry is queued, the plugin:
 
 - attempts to replace recognized secrets with `[REDACTED_SECRET]`;
-- replaces recognized email addresses with `[EMAIL]`;
+- replaces recognized personal data with a placeholder that names the category
+  and never the value: e-mail addresses with `[EMAIL]`, the person name on
+  version-control author lines with `[PERSON]`, phone numbers with `[PHONE]`,
+  IP addresses with `[IP]`, Korean resident registration and US Social
+  Security numbers with `[ID_NUMBER]`, and payment card numbers with `[CARD]`;
 - HMAC-hashes the home-directory prefix and path-bearing fields;
-- records detector identifiers and redaction counts without the original
+- leaves already-sanitized text unchanged, so a second pass is a no-op;
+- attaches to every record the sanitization policy version, the number of
+  redactions per category, and the detector identifiers, without the original
   matched values.
+
+Person names in free text, postal addresses, and customer or organization
+names are not detected by this on-device step. SkillBench is introducing a
+second, server-side pass inside the tenant's own cloud account with a
+purpose-built PII-detection engine for those categories; until it is in
+place, only the on-device step above applies.
 
 Sanitization is a risk-reduction control, not an anonymization guarantee.
 Pattern-based detection can have false negatives. Prompts, tool responses,

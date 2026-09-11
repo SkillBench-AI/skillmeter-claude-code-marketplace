@@ -138,7 +138,9 @@ test("sanitizeEventData meta reports secret/pii counts and policy version", () =
 
 test("non-string scalars pass through untouched", () => {
   const { value } = s.sanitizeEventData({ n: 42, b: true, z: null }, SALT);
-  assert.deepEqual(value, { n: 42, b: true, z: null });
+  const { _sanitization, ...rest } = value;
+  assert.deepEqual(rest, { n: 42, b: true, z: null });
+  assert.equal(_sanitization.policyVersion, s.POLICY_VERSION);
 });
 
 test("secret-labelled key redaction does NOT clobber author-like fields (A1)", () => {
