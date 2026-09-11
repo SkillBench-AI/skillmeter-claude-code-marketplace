@@ -329,17 +329,30 @@ stricter representation costs nothing to relax later.
 
 ### Reversibility principle
 
-A sanitization change may move the default toward disclosing less, or add a
-tenant opt-in to disclose more. It never widens the default: data already
-sent cannot be un-sent, so a default that discloses more can only ever be
-regretted, while a default that discloses less can be relaxed per tenant when
-there is a reason. Decisions 6 to 8 follow this principle.
+Data already sent cannot be un-sent, so tightening and widening are not
+symmetric. Tightening the default (disclosing less) is an ordinary
+implementation change under the normal policy-version bump. Widening the
+default (disclosing more than the previous policy version did) is never done
+implicitly or as a side effect of an implementation change: it requires an
+ADR decision that names what becomes visible, why the recipient is entitled
+to it, and that the change is irreversible for data sent afterwards; and it
+is done as a tenant opt-in (decision 8) whenever the recipient's entitlement
+is not already established.
+
+Decisions 6 and 7 are deliberate widenings approved under this rule.
+Decision 6 discloses path structure, extensions and allow-listed vocabulary
+that 3.0.0 hid, because the analysis metrics need exactly that and no name.
+Decision 7 discloses the repository name, because consent was given per
+repository by name to the tenant that owns it. Clear file names, by
+contrast, are the widening this rule refuses as a default and routes through
+the opt-in of decision 8.
 
 ### 6. Path-key values are hashed per segment; structure and vocabulary survive
 
 Replaces the third bullet of decision 4.
 
-For `file_path`, `filePath`, `path` and `notebook_path`:
+For `file_path`, `filePath` and `notebook_path`, the keys Claude Code's own
+file tools use for filesystem paths:
 
 - The home-directory prefix is hashed as one unit with the existing HMAC, so
   it stays byte-compatible with the prefix hash used inside free text.
@@ -370,6 +383,15 @@ the list is hashed.
 directory for the exclusion-audit record and for per-device correlation, and
 one stable identifier is all those uses need.
 
+The generic `path` key also keeps the wholesale hash. It appears in
+arbitrary tool and MCP payloads, where it may be an API route
+(`/customers/acme/v1`) rather than a filesystem path, and segment parsing
+would expose its shape together with any allow-listed or version-like
+segments. The implementation may segment a `path` value only when the
+surrounding tool context establishes that it is a filesystem path (the
+built-in Glob and Grep tools); without that context the value is hashed
+whole.
+
 Free text keeps the 2.0.0 behaviour: only the home-directory prefix is
 hashed. Rationale: commands, prompts and tool output are read by the analysis
 for what they say, and a command whose paths are turned into hash chains
@@ -378,8 +400,11 @@ built to find; and per the reversibility principle this can be tightened
 later without cost. The asymmetry is therefore accepted and documented in
 PRIVACY.md.
 
-`_sanitization.counts` gains a `path` entry with the number of hashed
-segments, so hashing volume becomes measurable like the other categories.
+`_sanitization.counts` gains a `path` entry counting every HMAC applied to a
+path element in the record: one per hashed segment of a segmented key, one
+per whole-value hash (`cwd`, `old_cwd`, `new_cwd`, generic `path`), and one
+per home-prefix replacement inside free text. All three sanitizers count the
+same way, so totals are comparable in the dashboard of decision 1.
 
 Policy version `3.1.0`, plugin 0.34.1. Path-key values written under `3.0.0`
 and earlier are single hashes and do not join with `3.1.0` values; the
@@ -425,8 +450,11 @@ default and audit trail.
 ### Consequences of the amendment
 
 - Analysis regains extension, hierarchy, per-directory grouping and
-  manifest-based stack detection without receiving any project, customer or
-  file name.
+  manifest-based stack detection. What it receives in clear is bounded to
+  the allow-listed technical vocabulary, well-known file names, version-like
+  tokens, extensions and, by decision 7, the repository name; every other
+  segment, including arbitrary project, customer and file names, arrives
+  hashed.
 - Free text still carries relative paths and their names below the home
   prefix, as it does today. This is the largest remaining path exposure and
   is assigned to stage 2.
