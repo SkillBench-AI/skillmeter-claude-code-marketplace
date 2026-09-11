@@ -7,6 +7,8 @@
     { "id": "email-unicode-name-prefix", "text": "renée.dubois@example.org sent it", "expect": "[EMAIL] sent it", "kinds": ["email"], "note": "GitHub issue #102: previously became rené[EMAIL], leaking the given name" },
     { "id": "email-cjk-local", "text": "用户@example.com", "expect": "[EMAIL]", "kinds": ["email"] },
     { "id": "email-plus-subdomain-trailing-dot", "text": "contact: dev-team+ops@sub.example.co.uk.", "expect": "contact: [EMAIL].", "kinds": ["email"] },
+    { "id": "email-punycode-tld", "text": "user@example.xn--p1ai wrote", "expect": "[EMAIL] wrote", "kinds": ["email"], "note": "A-label form of an internationalised top-level domain" },
+    { "id": "email-unicode-tld", "text": "user@пример.рф wrote", "expect": "[EMAIL] wrote", "kinds": ["email"] },
     { "id": "not-email-no-tld", "text": "not an email: foo@bar", "expect": "not an email: foo@bar", "kinds": [] },
 
     { "id": "placeholder-embedded-secret", "text": "API_KEY=[REDACTED_SECRET]", "expect": "API_KEY=[REDACTED_SECRET]", "kinds": [], "note": "GitHub issue #103: a second pass must not re-redact or count its own placeholder" },

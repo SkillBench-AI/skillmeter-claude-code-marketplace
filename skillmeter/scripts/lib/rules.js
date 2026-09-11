@@ -387,11 +387,12 @@ const RULES = [
   {
     // Unicode-aware: letters of any script in the local part and in domain
     // labels (IDN), so `josé@example.com` is replaced whole instead of leaving
-    // the accented prefix behind.
+    // the accented prefix behind. The top-level label may also be the ASCII
+    // A-label form of an IDN (`xn--p1ai`).
     id: "email",
     category: "pii",
     kind: "email",
-    re: /(?<![\p{L}\p{N}._%+-])[\p{L}\p{N}._%+-]+@(?:[\p{L}\p{N}-]+\.)+\p{L}{2,}(?![\p{L}\p{N}-])/gu,
+    re: /(?<![\p{L}\p{N}._%+-])[\p{L}\p{N}._%+-]+@(?:[\p{L}\p{N}-]+\.)+(?:\p{L}{2,}|xn--[a-z0-9-]{2,})(?![\p{L}\p{N}-])/giu,
     keywords: ["@"],
     replacement: EMAIL_PLACEHOLDER,
   },

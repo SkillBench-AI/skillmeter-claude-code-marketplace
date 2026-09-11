@@ -319,7 +319,9 @@ async function runHook(eventName, buildData, options = {}) {
     permission_mode: input.permission_mode,
   };
   // Always attached, zeros included, so redaction rates per category can be
-  // read downstream without a full scan (ADR 002, decision 4).
+  // read downstream without a full scan (ADR 002, decision 4). The spread
+  // above already carries the stamp; this keeps it authoritative over any
+  // same-named field a hook might emit.
   data._sanitization = meta;
 
   const logged = logEvent(

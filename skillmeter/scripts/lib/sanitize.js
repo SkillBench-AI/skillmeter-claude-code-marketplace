@@ -188,9 +188,26 @@ function hashHmac(str, salt) {
   return crypto.createHmac("sha256", salt).update(str).digest("hex").slice(0, 12);
 }
 
-// Shape of a hashHmac output. A path-key value that already has this shape is
-// left alone so a second pass over sanitized data is a no-op (idempotency).
-const HASH_RE = /^[0-9a-f]{12}$/;
+/**
+ * True when a record already carries this module's `_sanitization` metadata,
+ * which is the provenance signal that it has been through a pass. Path values
+ * in such a record are not hashed again and no path features are added, so a
+ * second pass is a no-op. Provenance rather than value shape is used on
+ * purpose: a raw relative path that happens to be twelve hex characters must
+ * still be hashed.
+ */
+function hasSanitizationMarker(obj) {
+  return Boolean(
+    obj &&
+      typeof obj === "object" &&
+      !Array.isArray(obj) &&
+      obj._sanitization &&
+      typeof obj._sanitization === "object" &&
+      typeof obj._sanitization.policyVersion === "string"
+  );
+}
+
+const FRESH = Object.freeze({ rehash: true });
 
 function escapeRegExp(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -278,7 +295,7 @@ function scrubString(str, hashSalt, redactions) {
  * context: a secret-labelled key forces redaction of its string value even if
  * the value matches no pattern. Non-string scalars pass through untouched.
  */
-function scrubDeep(value, hashSalt, redactions = [], parentKey = null) {
+function scrubDeep(value, hashSalt, redactions = [], parentKey = null, opts = FRESH) {
   if (typeof value === "string") {
     // Secret-labelled identifier key → force redaction regardless of the
     // value's content, unless the value is already a placeholder.
@@ -291,16 +308,16 @@ function scrubDeep(value, hashSalt, redactions = [], parentKey = null) {
       });
       return SECRET_PLACEHOLDER;
     }
-    // Path-bearing key → HMAC-hash the whole value (covers nested paths too),
-    // unless it is already a hash from an earlier pass.
+    // Path-bearing key → HMAC-hash the whole value (covers nested paths too).
+    // A record that already carries `_sanitization` has been through this
+    // once; its path values are hashes and are left alone.
     if (parentKey && PATH_KEYS.has(parentKey)) {
-      if (HASH_RE.test(value)) return value;
-      return hashHmac(value, hashSalt);
+      return opts.rehash ? hashHmac(value, hashSalt) : value;
     }
     return scrubString(value, hashSalt, redactions);
   }
   if (Array.isArray(value)) {
-    return value.map((item) => scrubDeep(item, hashSalt, redactions, parentKey));
+    return value.map((item) => scrubDeep(item, hashSalt, redactions, parentKey, opts));
   }
   if (value && typeof value === "object") {
     const out = {};
@@ -310,10 +327,10 @@ function scrubDeep(value, hashSalt, redactions = [], parentKey = null) {
       // (redact + home-path hash) but decide `isSecretKey` value-forcing from the
       // ORIGINAL key name.
       const scrubbedKey = scrubString(key, hashSalt);
-      out[scrubbedKey] = scrubDeep(val, hashSalt, redactions, key);
+      out[scrubbedKey] = scrubDeep(val, hashSalt, redactions, key, opts);
       // A string under a file-path key is hashed above; record its coarse
       // features beside the hash (never clobbering a field the source has).
-      if (FILE_KEYS.has(key) && typeof val === "string" && val && !HASH_RE.test(val)) {
+      if (opts.rehash && FILE_KEYS.has(key) && typeof val === "string" && val) {
         const { depth, ext } = pathFeatures(val);
         const depthKey = `${key}_depth`;
         const extKey = `${key}_ext`;
@@ -347,15 +364,31 @@ function summarizeRedactions(redactions) {
 }
 
 /**
+ * Scrub a record and, when it is a plain object, stamp the metadata summary
+ * (`{ policyVersion, secrets, pii, counts, ids }`) on it as `_sanitization`.
+ * The stamp goes on every record, including when nothing was redacted, so
+ * redaction rates per category are a plain query downstream, and it is the
+ * provenance a later pass reads to leave hashes alone. A record that already
+ * carries a stamp keeps it: the stamp describes the pass that saw the raw
+ * data, and a re-run adds nothing.
+ */
+function sanitizeRecord(record, hashSalt) {
+  const redactions = [];
+  const marked = hasSanitizationMarker(record);
+  const value = scrubDeep(record, hashSalt, redactions, null, { rehash: !marked });
+  const meta = summarizeRedactions(redactions);
+  if (value && typeof value === "object" && !Array.isArray(value) && !marked) {
+    value._sanitization = meta;
+  }
+  return { value, redactions, meta };
+}
+
+/**
  * Scrub an event-data object before it is logged/uploaded. Returns the scrubbed
- * clone plus the metadata summary (`{ policyVersion, secrets, pii, counts,
- * ids }`). The summary is attached to every record, including when nothing was
- * redacted, so redaction rates per category are a plain query downstream.
+ * clone (stamped with `_sanitization`) plus the metadata summary.
  */
 function sanitizeEventData(data, hashSalt) {
-  const redactions = [];
-  const value = scrubDeep(data, hashSalt, redactions);
-  return { value, redactions, meta: summarizeRedactions(redactions) };
+  return sanitizeRecord(data, hashSalt);
 }
 
 // ---------------------------------------------------------------------------
@@ -365,11 +398,12 @@ function sanitizeEventData(data, hashSalt) {
 /**
  * Sanitize a single parsed transcript line by scrubbing the whole object:
  * secret/PII redaction + home-path hashing on content, and wholesale HMAC of
- * path-bearing keys (incl. `cwd`) via scrubDeep's PATH_KEYS branch. Returns a
- * scrubbed copy; the input is not mutated.
+ * path-bearing keys (incl. `cwd`) via scrubDeep's PATH_KEYS branch. The line
+ * is stamped with `_sanitization` like every other record. Returns a scrubbed
+ * copy; the input is not mutated.
  */
 function sanitizeLine(obj, hashSalt) {
-  return scrubDeep(obj, hashSalt);
+  return sanitizeRecord(obj, hashSalt).value;
 }
 
 module.exports = {
@@ -384,4 +418,5 @@ module.exports = {
   pathFeatures,
   isPlaceholder,
   isSecretKey,
+  hasSanitizationMarker,
 };

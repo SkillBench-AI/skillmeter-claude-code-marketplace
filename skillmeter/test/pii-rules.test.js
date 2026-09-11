@@ -100,6 +100,8 @@ test("sanitizeLine is a fixed point for a transcript line", () => {
   const twice = s.sanitizeLine(once, SALT);
   assert.deepEqual(twice, once);
   assert.equal(once.message.content, "ping [EMAIL] from [IP]");
+  assert.equal(once._sanitization.counts.email, 1);
+  assert.equal(once._sanitization.counts.ip, 1);
 });
 
 // --- Key-name heuristic -----------------------------------------------------
@@ -195,10 +197,29 @@ test("path features never clobber fields the source already carries", () => {
   assert.equal(value.file_path_ext, "custom");
 });
 
-test("an already-hashed path value is not re-hashed and gets no features", () => {
-  const hashed = s.hashHmac("/Users/me/a.js", SALT);
-  const { value } = s.sanitizeEventData({ file_path: hashed }, SALT);
-  assert.deepEqual(value, { file_path: hashed });
+test("a twelve-hex relative path without provenance is hashed like any other path", () => {
+  const { value } = s.sanitizeEventData({ path: "deadbeefcafe" }, SALT);
+  assert.notEqual(value.path, "deadbeefcafe");
+  assert.match(value.path, /^[0-9a-f]{12}$/);
+  assert.equal(value.path_depth, 1);
+  assert.equal("path_ext" in value, false);
+});
+
+test("a record stamped with _sanitization is not re-hashed and gets no new features", () => {
+  const first = s.sanitizeEventData({ file_path: "/Users/me/a.js", cwd: "/Users/me" }, SALT);
+  assert.equal(s.hasSanitizationMarker(first.value), true);
+  assert.deepEqual(first.value._sanitization, first.meta);
+  const second = s.sanitizeEventData(first.value, SALT);
+  assert.deepEqual(second.value, first.value);
+  assert.equal(second.meta.pii + second.meta.secrets, 0);
+});
+
+test("every record is stamped, transcript lines included", () => {
+  const line = s.sanitizeLine({ type: "user", message: { content: "hi" } }, SALT);
+  assert.equal(line._sanitization.policyVersion, "3.0.0");
+  assert.deepEqual(Object.keys(line._sanitization), ["policyVersion", "secrets", "pii", "counts", "ids"]);
+  const audit = s.sanitizeEventData({ source_hook_event_name: "Stop", gate_mode: "out_of_scope", cwd: "/x" }, SALT);
+  assert.equal(audit.value._sanitization.policyVersion, "3.0.0");
 });
 
 // --- Reporting --------------------------------------------------------------
