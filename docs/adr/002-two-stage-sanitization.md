@@ -111,8 +111,11 @@ only after the engine pass; it is never the privacy control.
 Rationale: the device is the only place where unsanitized data can be
 stopped from travelling, so the local stage must exist and must be cheap.
 Context-dependent entities need a model, and a model belongs where CPU,
-memory and language packs are not the user's problem. Two stages also give
-two independent chances to catch a secret. The engine choice reuses prior
+memory and language packs are not the user's problem. For the PII categories
+stage 2 covers, two stages also give two chances: a rule miss on the device
+is caught by the engine, and the engine's findings are measurable against
+the rules' own counts. Secrets are stage 1 only, which is why stage 1 is
+fail-closed for them. The engine choice reuses prior
 internal evaluation of both products and the ongoing Presidio work in the
 research pipeline; a prompt-based detector was rejected because the privacy
 guarantee would then depend on a non-deterministic component and because
@@ -124,7 +127,12 @@ Decided: the object the plugin uploads is called stage-1 sanitized, never
 "raw": secrets and stage-1 PII categories are already gone and paths are
 hashed. Stage 2 writes a stage-2 object per input; the analysis pipeline and
 every other consumer read stage-2 objects only. A stage-1 object is an
-intermediate form with a bounded lifetime, not a retained dataset.
+intermediate form with a bounded lifetime, not a retained dataset. Stage 2 is
+idempotent per input object: the stage-2 key derives from the stage-1 key, a
+re-delivered object reproduces the same stage-2 object, and a stage-1 object
+is removed or quarantined only after its stage-2 object is durably written.
+The mechanics (conditional writes, retry policy) belong to the
+implementation.
 
 Proposed, not confirmed: how that lifetime is bounded is settled after
 stage 2 exists and its failure modes and run times have been measured on the
@@ -136,10 +144,15 @@ arrival rather than from the weekly analysis batch, so the intermediate form
 lives for minutes. This ADR is amended with a dated note when these three
 parameters are confirmed or changed.
 
-`otel_logs` holds stage-1 content. It is classified internal-only, is never
-a source for user-facing reports, and is not rewritten by stage 2: its
-strings are truncated to 100 characters and ClickHouse mutations are the
-wrong tool for row rewrites.
+`otel_logs` holds stage-1 content. It is classified internal-only: the
+ClickHouse service is reachable only over the tenant's private link, and its
+readers are operators and the tenant's own analysis jobs. Permitted uses are
+operational health, consent and audit events, and counts and aggregates;
+its strings are never quoted in anything shown to users. It is not
+rewritten by stage 2: strings are truncated to 100 characters and
+ClickHouse mutations are the wrong tool for row rewrites. Its retention is
+set by the table TTL and is aligned with this classification under the open
+items.
 
 Rationale: the question an installer will ask is whether unsanitized text
 sits in SkillBench storage. With this decision the answer is that nothing
@@ -156,7 +169,7 @@ The placeholder preserves the category and never the value. The generic
 
 | Category | Stage | Placeholder | Rule |
 | --- | --- | --- | --- |
-| Secrets (24 detectors) | 1 | `[REDACTED_SECRET]` | Unchanged |
+| Secrets (24 detectors) | 1 | `[REDACTED_SECRET]` | Handling unchanged: every detector keeps replacing its match with the placeholder |
 | E-mail address | 1 | `[EMAIL]` | Unicode letters in the local part and internationalised domain labels; the whole address is replaced |
 | Person name in VCS metadata | 1 | `[PERSON]` | `Author:`, `Committer:`, `Signed-off-by:`, `Co-authored-by:` lines in tool output; the name before `<` is replaced, the e-mail follows the e-mail rule |
 | Phone number | 1 | `[PHONE]` | `+` country code or separator-formatted national numbers with at least 9 digits; bare digit runs are not matched |
@@ -201,9 +214,12 @@ count per category.
 - `_sanitization` is attached to every record, with `policyVersion`, a
   per-category count map and the detector `ids`, including when every count
   is zero. This is what makes rates per detector a ClickHouse query.
-- The policy version becomes `3.0.0`. As with `2.0.0`, the version is
-  declared only when the Codex plugin and the session collector pass the
-  extended corpus; the VS Code extension keeps the unchanged HMAC scheme.
+- The policy version becomes `3.0.0`. Each surface declares `3.0.0` when it
+  passes the extended corpus, so `policyVersion` on a record always states
+  that record's actual coverage; this plugin declares it first. The shared
+  policy counts as rolled out only when the Codex plugin and the session
+  collector declare it too, as happened for `2.0.0`. The VS Code extension
+  keeps the unchanged HMAC scheme.
 
 ### 5. The user-facing statement lists categories, not adjectives
 
@@ -216,7 +232,7 @@ does not claim complete PII removal anywhere.
 
 ## Consequences
 
-- Data leaving the device carries typed PII placeholders; secrets are
+- Data leaving the device carries typed PII placeholders; secret handling is
   unchanged. Analysis loses the values and keeps the categories.
 - Stage 1 does more work per string. New rules get a cheap pre-check (a
   digit run or an `@`) before the full expression, and the transcript path
@@ -226,10 +242,11 @@ does not claim complete PII removal anywhere.
   formatted numeric identifiers as phone numbers when they reach 9 digits.
   Both are visible in the per-category counts and can be tuned with negative
   fixtures.
-- Stage 2 is a new component in each tenant account with read and write
-  rights on the transcripts bucket, plus delete rights and a quarantine
-  prefix if the proposed lifecycle is confirmed; that is infrastructure work
-  in the pipelines repository, tracked separately.
+- Stage 2 is a new component in each tenant account. Its role is scoped to
+  prefixes, never to the bucket: read on the stage-1 input prefix, write on
+  the stage-2 output prefix, and, if the proposed lifecycle is confirmed,
+  delete on the input prefix and write on the quarantine prefix. That is
+  infrastructure work in the pipelines repository, tracked separately.
 - `otel_logs` is formally internal-only. Anything shown to users must derive
   from stage-2 objects or from counts, never from `otel_logs` strings.
 - Events already in ClickHouse and objects already in S3 were sanitized under
@@ -251,6 +268,9 @@ does not claim complete PII removal anywhere.
 - Stage-1 object lifecycle and trigger (the proposal in decision 2): confirm
   delete-on-success, the 7-day quarantine and per-object triggering after
   stage 2 has run on the SkillBench tenant, then amend this ADR.
+- `otel_logs` retention. The table TTL per tenant has to be reviewed against
+  the internal-only classification above, since 100-character fragments can
+  still carry stage-2 categories; set it, record it here.
 - Language coverage of stage 2. Presidio's default recognisers are
   English-centric; prompts in this tenant are frequently Korean, so the
   dashboard of decision 1 must report per language and a Korean model is a
