@@ -8,8 +8,7 @@
  *      placeholders: the category survives, the value does not.
  *   2. Path hashing — the user's home-directory prefix (which carries the OS
  *      username) is HMAC-hashed everywhere it appears, and known path-bearing
- *      tool fields are hashed wholesale, with the file extension and directory
- *      depth recorded as separate fields before hashing.
+ *      tool fields are hashed wholesale.
  *
  * Design rules (ADR 002):
  *   - Fail-closed: when a value looks like a secret we redact it. Over-redacting
@@ -27,14 +26,13 @@
 
 const crypto = require("crypto");
 const os = require("os");
-const path = require("path");
 
 const { RULES, STOPWORDS, KINDS, PLACEHOLDER_RE, SECRET_PLACEHOLDER } = require("./rules");
 
 // Bump when the detection policy (rules, entropy gating, path hashing) changes
 // in a way analysis consumers should be able to distinguish. 3.0.0 = ADR 002
 // stage 1: typed PII placeholders, idempotency, identifier-only key heuristic,
-// path features, per-record reporting.
+// per-record reporting. Path handling is unchanged from 2.0.0.
 const POLICY_VERSION = "3.0.0";
 
 // ---------------------------------------------------------------------------
@@ -190,7 +188,8 @@ function hashHmac(str, salt) {
 
 /**
  * True when a record already carries this module's `_sanitization` metadata,
- * the provenance signal that it has been through a pass.
+ * the provenance signal that it has been through a pass. Path values in such a
+ * record are not hashed again (see keepAsHash), so a second pass is a no-op.
  */
 function hasSanitizationMarker(obj) {
   return Boolean(
@@ -241,28 +240,6 @@ const PATH_KEYS = new Set([
   "old_cwd",
   "new_cwd",
 ]);
-
-// Path keys that name files. Their extension and depth are recorded beside the
-// hash (ADR 002, decision 4). The cwd family names directories, feeds the
-// allow-listed exclusion-audit record, and stays hash-only.
-const FILE_KEYS = new Set(["file_path", "filePath", "path", "notebook_path"]);
-
-/**
- * Coarse, non-identifying features of a file path, recorded next to the hash
- * so analysis can keep extension and depth statistics without the path
- * itself: `depth` = number of segments, `ext` = lowercase extension without
- * the dot (empty for dotfiles and extension-less names).
- */
-function pathFeatures(p) {
-  const segments = String(p).replace(/\\/g, "/").split("/").filter(Boolean);
-  const base = segments.length ? segments[segments.length - 1] : "";
-  let ext = "";
-  if (base && !base.startsWith(".")) {
-    const raw = path.posix.extname(base).slice(1).toLowerCase();
-    if (/^[a-z0-9]{1,10}$/.test(raw)) ext = raw;
-  }
-  return { depth: segments.length, ext };
-}
 
 // Precompute the home-directory prefix matcher once. The OS home path carries
 // the username and appears throughout transcript content, tool commands, and
@@ -334,32 +311,14 @@ function scrubDeep(value, hashSalt, redactions = [], parentKey = null, opts = FR
     return value.map((item) => scrubDeep(item, hashSalt, redactions, parentKey, opts));
   }
   if (value && typeof value === "object") {
-    // File-path values that get hashed in this pass own their `_depth` / `_ext`
-    // fields: those are recomputed from the path actually hashed, so a stale or
-    // source-provided value never describes a different path.
-    const owned = new Set();
-    for (const [key, val] of Object.entries(value)) {
-      if (FILE_KEYS.has(key) && typeof val === "string" && val && !keepAsHash(val, opts)) {
-        owned.add(`${key}_depth`);
-        owned.add(`${key}_ext`);
-      }
-    }
     const out = {};
     for (const [key, val] of Object.entries(value)) {
-      if (owned.has(key)) continue;
       // Keys can themselves be sensitive — some transcript entries use absolute
       // file paths as map keys, which carry the home-dir/username. Scrub the key
       // (redact + home-path hash) but decide `isSecretKey` value-forcing from the
       // ORIGINAL key name.
       const scrubbedKey = scrubString(key, hashSalt);
       out[scrubbedKey] = scrubDeep(val, hashSalt, redactions, key, opts);
-      // A string under a file-path key is hashed above; record its coarse
-      // features beside the hash.
-      if (owned.has(`${key}_depth`)) {
-        const { depth, ext } = pathFeatures(val);
-        out[`${key}_depth`] = depth;
-        if (ext) out[`${key}_ext`] = ext;
-      }
     }
     return out;
   }
@@ -438,7 +397,6 @@ module.exports = {
   sanitizeEventData,
   sanitizeLine,
   summarizeRedactions,
-  pathFeatures,
   isPlaceholder,
   isSecretKey,
   hasSanitizationMarker,

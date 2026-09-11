@@ -148,17 +148,9 @@ test("isSecretKey: identifier shape is required", () => {
   assert.equal(s.isSecretKey("author_email"), false);
 });
 
-// --- Path features ----------------------------------------------------------
+// --- Path hashing and idempotency -------------------------------------------
 
-test("pathFeatures: depth and lowercase extension; dotfiles and bare names have none", () => {
-  assert.deepEqual(s.pathFeatures("/Users/me/proj/src/App.test.TSX"), { depth: 5, ext: "tsx" });
-  assert.deepEqual(s.pathFeatures("/Users/me/.env"), { depth: 3, ext: "" });
-  assert.deepEqual(s.pathFeatures("/Users/me/Makefile"), { depth: 3, ext: "" });
-  assert.deepEqual(s.pathFeatures("C:\\Users\\me\\a.py"), { depth: 4, ext: "py" });
-  assert.deepEqual(s.pathFeatures("relative/x.md"), { depth: 2, ext: "md" });
-});
-
-test("file-path keys get _depth and _ext beside the hash; cwd keys stay hash-only", () => {
+test("path-bearing keys are hashed wholesale and no sibling fields are added", () => {
   const { value } = s.sanitizeEventData(
     {
       tool_input: {
@@ -171,43 +163,19 @@ test("file-path keys get _depth and _ext beside the hash; cwd keys stay hash-onl
     SALT
   );
   const ti = value.tool_input;
-  assert.match(ti.file_path, /^[0-9a-f]{12}$/);
-  assert.equal(ti.file_path_depth, 5);
-  assert.equal(ti.file_path_ext, "tsx");
-  assert.equal(ti.notebook_path_depth, 4);
-  assert.equal("notebook_path_ext" in ti, false, "dotfile has no extension field");
-  assert.match(ti.cwd, /^[0-9a-f]{12}$/);
-  assert.deepEqual(Object.keys(ti).sort(), [
-    "cwd",
-    "file_path",
-    "file_path_depth",
-    "file_path_ext",
-    "notebook_path",
-    "notebook_path_depth",
-    "old_cwd",
-  ]);
-});
-
-test("path features describe the path actually hashed; stale or source-provided values are replaced", () => {
-  const { value } = s.sanitizeEventData(
-    { file_path: "/Users/me/a.js", file_path_depth: 99, file_path_ext: "custom" },
-    SALT
-  );
-  assert.equal(value.file_path_depth, 3);
-  assert.equal(value.file_path_ext, "js");
-  const noExt = s.sanitizeEventData({ file_path: "/Users/me/Makefile", file_path_ext: "stale" }, SALT);
-  assert.equal("file_path_ext" in noExt.value, false, "no extension means no field, stale one dropped");
+  for (const k of ["file_path", "notebook_path", "cwd", "old_cwd"]) {
+    assert.match(ti[k], /^[0-9a-f]{12}$/, k);
+  }
+  assert.deepEqual(Object.keys(ti).sort(), ["cwd", "file_path", "notebook_path", "old_cwd"]);
 });
 
 test("a twelve-hex relative path without provenance is hashed like any other path", () => {
   const { value } = s.sanitizeEventData({ path: "deadbeefcafe" }, SALT);
   assert.notEqual(value.path, "deadbeefcafe");
   assert.match(value.path, /^[0-9a-f]{12}$/);
-  assert.equal(value.path_depth, 1);
-  assert.equal("path_ext" in value, false);
 });
 
-test("a record stamped with _sanitization is not re-hashed and gets no new features", () => {
+test("a record stamped with _sanitization is not re-hashed", () => {
   const first = s.sanitizeEventData({ file_path: "/Users/me/a.js", cwd: "/Users/me" }, SALT);
   assert.equal(s.hasSanitizationMarker(first.value), true);
   assert.deepEqual(first.value._sanitization, first.meta);
@@ -222,8 +190,6 @@ test("a raw path added to an already stamped record is still hashed", () => {
   const { value } = s.sanitizeEventData(tampered, SALT);
   assert.match(value.file_path, /^[0-9a-f]{12}$/);
   assert.notEqual(value.file_path, first.value.file_path, "new path gets its own hash");
-  assert.equal(value.file_path_ext, "ts", "features follow the new path");
-  assert.equal(value.file_path_depth, 4);
   assert.match(value.cwd, /^[0-9a-f]{12}$/);
   assert.equal(JSON.stringify(value).includes("new-secret-project"), false);
 });

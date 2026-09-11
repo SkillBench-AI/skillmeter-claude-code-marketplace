@@ -121,8 +121,7 @@ Before telemetry is queued, the plugin:
   version-control author lines with `[PERSON]`, phone numbers with `[PHONE]`,
   IP addresses with `[IP]`, Korean resident registration and US Social
   Security numbers with `[ID_NUMBER]`, and payment card numbers with `[CARD]`;
-- HMAC-hashes the home-directory prefix and path-bearing fields, keeping only
-  the file extension and directory depth of hashed file paths;
+- HMAC-hashes the home-directory prefix and path-bearing fields;
 - leaves already-sanitized text unchanged, so a second pass is a no-op;
 - attaches to every record the sanitization policy version, the number of
   redactions per category, and the detector identifiers, without the original

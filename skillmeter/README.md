@@ -309,8 +309,6 @@ machine, by one shared boundary (`lib/sanitize.js`):
   so the username never leaves the machine while relative structure is kept.
 - **Path-bearing tool fields** (`file_path`, `path`, `command`, …) and the
   `cwd` / `repo_root` / `repo_remote_org` fields are HMAC-hashed wholesale.
-  File-path fields additionally carry their extension and directory depth
-  (`file_path_ext`, `file_path_depth`), recorded before hashing.
 - **Every record carries `_sanitization`**: the policy version (`3.0.0`), the
   number of redactions per category, and the detector ids. Counts only, never
   the matched values.
