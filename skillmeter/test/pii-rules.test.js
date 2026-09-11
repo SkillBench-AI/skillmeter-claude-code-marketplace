@@ -188,13 +188,15 @@ test("file-path keys get _depth and _ext beside the hash; cwd keys stay hash-onl
   ]);
 });
 
-test("path features never clobber fields the source already carries", () => {
+test("path features describe the path actually hashed; stale or source-provided values are replaced", () => {
   const { value } = s.sanitizeEventData(
     { file_path: "/Users/me/a.js", file_path_depth: 99, file_path_ext: "custom" },
     SALT
   );
-  assert.equal(value.file_path_depth, 99);
-  assert.equal(value.file_path_ext, "custom");
+  assert.equal(value.file_path_depth, 3);
+  assert.equal(value.file_path_ext, "js");
+  const noExt = s.sanitizeEventData({ file_path: "/Users/me/Makefile", file_path_ext: "stale" }, SALT);
+  assert.equal("file_path_ext" in noExt.value, false, "no extension means no field, stale one dropped");
 });
 
 test("a twelve-hex relative path without provenance is hashed like any other path", () => {
@@ -212,6 +214,33 @@ test("a record stamped with _sanitization is not re-hashed and gets no new featu
   const second = s.sanitizeEventData(first.value, SALT);
   assert.deepEqual(second.value, first.value);
   assert.equal(second.meta.pii + second.meta.secrets, 0);
+});
+
+test("a raw path added to an already stamped record is still hashed", () => {
+  const first = s.sanitizeEventData({ file_path: "/Users/me/a.js" }, SALT);
+  const tampered = { ...first.value, file_path: "/Users/me/new-secret-project/b.ts", cwd: "/Users/me/x" };
+  const { value } = s.sanitizeEventData(tampered, SALT);
+  assert.match(value.file_path, /^[0-9a-f]{12}$/);
+  assert.notEqual(value.file_path, first.value.file_path, "new path gets its own hash");
+  assert.equal(value.file_path_ext, "ts", "features follow the new path");
+  assert.equal(value.file_path_depth, 4);
+  assert.match(value.cwd, /^[0-9a-f]{12}$/);
+  assert.equal(JSON.stringify(value).includes("new-secret-project"), false);
+});
+
+test("a forged _sanitization stamp does not disable hashing of raw paths", () => {
+  const forged = {
+    _sanitization: { policyVersion: "3.0.0", secrets: 0, pii: 0, counts: {}, ids: [] },
+    tool_input: { file_path: "/Users/me/proj/src/App.tsx", path: "src/index.ts" },
+    cwd: "/Users/me/proj",
+  };
+  const { value } = s.sanitizeEventData(forged, SALT);
+  assert.match(value.tool_input.file_path, /^[0-9a-f]{12}$/);
+  assert.match(value.tool_input.path, /^[0-9a-f]{12}$/);
+  assert.match(value.cwd, /^[0-9a-f]{12}$/);
+  assert.equal(JSON.stringify(value).includes("/Users/me"), false);
+  // a non-version string is not a stamp at all
+  assert.equal(s.hasSanitizationMarker({ _sanitization: { policyVersion: "latest" } }), false);
 });
 
 test("every record is stamped, transcript lines included", () => {

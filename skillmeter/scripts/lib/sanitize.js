@@ -190,11 +190,7 @@ function hashHmac(str, salt) {
 
 /**
  * True when a record already carries this module's `_sanitization` metadata,
- * which is the provenance signal that it has been through a pass. Path values
- * in such a record are not hashed again and no path features are added, so a
- * second pass is a no-op. Provenance rather than value shape is used on
- * purpose: a raw relative path that happens to be twelve hex characters must
- * still be hashed.
+ * the provenance signal that it has been through a pass.
  */
 function hasSanitizationMarker(obj) {
   return Boolean(
@@ -203,8 +199,27 @@ function hasSanitizationMarker(obj) {
       !Array.isArray(obj) &&
       obj._sanitization &&
       typeof obj._sanitization === "object" &&
-      typeof obj._sanitization.policyVersion === "string"
+      typeof obj._sanitization.policyVersion === "string" &&
+      /^\d+\.\d+\.\d+$/.test(obj._sanitization.policyVersion)
   );
+}
+
+// Shape of a hashHmac output.
+const HASH_RE = /^[0-9a-f]{12}$/;
+
+// A path value is left un-hashed on a later pass only when BOTH hold: the
+// record carries the `_sanitization` stamp (provenance) AND the value already
+// has the hash shape. Either signal alone is insufficient: a raw relative path
+// that happens to be twelve hex characters must still be hashed when the record
+// is fresh, and a raw path added to (or a stamp forged onto) a stamped record
+// must still be hashed because it does not look like a hash. What remains is a
+// stamped record holding a twelve-hex-shaped raw file name, which identifies
+// nothing. Authenticated provenance would add little here: the salt is
+// readable by any local process, and a per-value marker would change the hash
+// format that ClickHouse, the analysis pipeline and the VS Code extension
+// already consume.
+function keepAsHash(value, opts) {
+  return !opts.rehash && HASH_RE.test(value);
 }
 
 const FRESH = Object.freeze({ rehash: true });
@@ -308,11 +323,10 @@ function scrubDeep(value, hashSalt, redactions = [], parentKey = null, opts = FR
       });
       return SECRET_PLACEHOLDER;
     }
-    // Path-bearing key → HMAC-hash the whole value (covers nested paths too).
-    // A record that already carries `_sanitization` has been through this
-    // once; its path values are hashes and are left alone.
+    // Path-bearing key → HMAC-hash the whole value (covers nested paths too),
+    // unless this is a stamped record and the value is already a hash.
     if (parentKey && PATH_KEYS.has(parentKey)) {
-      return opts.rehash ? hashHmac(value, hashSalt) : value;
+      return keepAsHash(value, opts) ? value : hashHmac(value, hashSalt);
     }
     return scrubString(value, hashSalt, redactions);
   }
@@ -320,8 +334,19 @@ function scrubDeep(value, hashSalt, redactions = [], parentKey = null, opts = FR
     return value.map((item) => scrubDeep(item, hashSalt, redactions, parentKey, opts));
   }
   if (value && typeof value === "object") {
+    // File-path values that get hashed in this pass own their `_depth` / `_ext`
+    // fields: those are recomputed from the path actually hashed, so a stale or
+    // source-provided value never describes a different path.
+    const owned = new Set();
+    for (const [key, val] of Object.entries(value)) {
+      if (FILE_KEYS.has(key) && typeof val === "string" && val && !keepAsHash(val, opts)) {
+        owned.add(`${key}_depth`);
+        owned.add(`${key}_ext`);
+      }
+    }
     const out = {};
     for (const [key, val] of Object.entries(value)) {
+      if (owned.has(key)) continue;
       // Keys can themselves be sensitive — some transcript entries use absolute
       // file paths as map keys, which carry the home-dir/username. Scrub the key
       // (redact + home-path hash) but decide `isSecretKey` value-forcing from the
@@ -329,13 +354,11 @@ function scrubDeep(value, hashSalt, redactions = [], parentKey = null, opts = FR
       const scrubbedKey = scrubString(key, hashSalt);
       out[scrubbedKey] = scrubDeep(val, hashSalt, redactions, key, opts);
       // A string under a file-path key is hashed above; record its coarse
-      // features beside the hash (never clobbering a field the source has).
-      if (opts.rehash && FILE_KEYS.has(key) && typeof val === "string" && val) {
+      // features beside the hash.
+      if (owned.has(`${key}_depth`)) {
         const { depth, ext } = pathFeatures(val);
-        const depthKey = `${key}_depth`;
-        const extKey = `${key}_ext`;
-        if (!(depthKey in value)) out[depthKey] = depth;
-        if (ext && !(extKey in value)) out[extKey] = ext;
+        out[`${key}_depth`] = depth;
+        if (ext) out[`${key}_ext`] = ext;
       }
     }
     return out;
