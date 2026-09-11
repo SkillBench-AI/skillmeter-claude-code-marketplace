@@ -1,7 +1,10 @@
 # Two-Stage Sanitization and Typed PII Placeholders
 
 **Date:** 2026-09-11
-**Status:** Accepted
+**Status:** Accepted (PR #107, merged 2026-09-11). Amended 2026-09-11 for path
+handling, repository identity and the file-name policy; see the
+[amendment](#amendment-2026-09-11-path-handling-repository-identity-and-file-name-policy)
+at the end.
 **Tracker:** INF-192 (2026 Q3 Production Readiness / Telemetry pipeline)
 **Related:** `skillmeter-codex-marketplace` and `session-collector` (sibling
 sanitizers under the same policy), `skillmeter-vscode-extension` (shared HMAC
@@ -207,10 +210,12 @@ count per category.
   key-name forced redaction; `sanitize(sanitize(x))` equals `sanitize(x)`
   and adds no redaction counts. The guard trusts placeholder shape, not
   provenance, and that trade is accepted.
-- Path values under the path keys are still hashed wholesale, but the file
-  extension and the directory depth are recorded as separate fields before
-  hashing. The hash itself, the salt and the home-prefix replacement are
-  unchanged, so cross-surface correlation on the same device is preserved.
+- *Superseded by the 2026-09-11 amendment; kept for history. It was not
+  shipped: 0.34.0 left path handling as in 2.0.0.* Path values under the path
+  keys are still hashed wholesale, but the file extension and the directory
+  depth are recorded as separate fields before hashing. The hash itself, the
+  salt and the home-prefix replacement are unchanged, so cross-surface
+  correlation on the same device is preserved.
 - `_sanitization` is attached to every record, with `policyVersion`, a
   per-category count map and the detector `ids`, including when every count
   is zero. This is what makes rates per detector a ClickHouse query.
@@ -281,6 +286,172 @@ does not claim complete PII removal anywhere.
   checksum that pre-2020 numbers carry, at the cost of missing newer ones.
 - Which national identifier formats beyond the two named here each tenant
   needs; the list is configuration, not policy.
-- Whether hashed paths should carry more than extension and depth (for
-  example a hashed top-level directory) if the analysis pipeline shows it
-  needs them.
+- *Resolved by the 2026-09-11 amendment (segment-wise hashing keeps the
+  structure).* Whether hashed paths should carry more than extension and
+  depth (for example a hashed top-level directory) if the analysis pipeline
+  shows it needs them.
+
+## Amendment 2026-09-11: path handling, repository identity and file-name policy
+
+**Status:** Accepted with decision 4 of this ADR. Decision 8 below is a
+proposal, not confirmed.
+
+### Context
+
+0.34.0 shipped stage 1 without the path bullet of decision 4: the extension
+and depth side fields were removed before merge because the path design
+deserved its own decision. What 0.34.0 therefore carries is the 2.0.0 path
+behaviour, which has two properties worth changing and one worth keeping.
+
+- Path-key values (`file_path`, `filePath`, `path`, `notebook_path`, `cwd`,
+  `old_cwd`, `new_cwd`) are hashed wholesale. Nothing of the path survives
+  except a stable identity per device, so the analysis pipeline has five
+  path-derived metrics (`fileTypeEntropy`, `languageUsage`,
+  `directoryJumpDistance`, `concernSpread`, `techStack`) it cannot compute in
+  production. What those metrics need is structure, extension, per-segment
+  identity and a handful of well-known file names, not the names themselves.
+- Repository identity is hashed with the per-device salt (`repo_root`,
+  `repo_remote_org`), so the same repository has a different identifier on
+  every device and organization-level analysis per repository is
+  structurally impossible. Consent, however, is granted per repository by
+  name, and the recipient is the organization that owns the repository.
+- Inside free text (`command`, `prompt`, tool output, object keys) only the
+  home-directory prefix is hashed; the relative structure and names below it
+  stay. This asymmetry with the path keys is deliberate and is kept (see
+  below).
+
+Two options were rejected. Sending file paths in clear everywhere: names in
+paths are where product structure, unreleased feature names and customer
+names live, and they are Tier 2 in the sanitization policy. Leaving the
+wholesale hash in place: safe, but it leaves the metrics unreachable and the
+inconsistency in place, and the reversibility argument below says the
+stricter representation costs nothing to relax later.
+
+### Reversibility principle
+
+A sanitization change may move the default toward disclosing less, or add a
+tenant opt-in to disclose more. It never widens the default: data already
+sent cannot be un-sent, so a default that discloses more can only ever be
+regretted, while a default that discloses less can be relaxed per tenant when
+there is a reason. Decisions 6 to 8 follow this principle.
+
+### 6. Path-key values are hashed per segment; structure and vocabulary survive
+
+Replaces the third bullet of decision 4.
+
+For `file_path`, `filePath`, `path` and `notebook_path`:
+
+- The home-directory prefix is hashed as one unit with the existing HMAC, so
+  it stays byte-compatible with the prefix hash used inside free text.
+- Every other segment is hashed individually with the device salt
+  (12 hex characters), except segments that are kept in clear:
+  - technical vocabulary on the shared path vocabulary list: common directory
+    names such as `src`, `lib`, `test`, `docs`, `api`, `auth`, `billing`,
+    `components`, `migrations`;
+  - well-known file names on the same list, such as `package.json`,
+    `Dockerfile`, `go.mod`, `README.md`, `Makefile`, `.env`;
+  - version-like tokens (`v1`, `1.2.0`) by pattern;
+  - the extension of the last segment, including known compound extensions
+    (`.test.ts`, `.d.ts`, `.spec.js`, `.tar.gz`).
+- Separators and segment count are preserved, so depth and hierarchy are
+  readable and two paths sharing a directory share its hashed segment.
+
+`/Users/jane/work/acme-portal/src/billing/invoice-acme.ts` therefore becomes
+`000687bf6f7f/7788990011aa/2a1b3c4d5e6f/src/billing/1122334455aa.ts`.
+
+The vocabulary list is a data file shared by the Claude plugin, the Codex
+plugin and the session collector; a change to it is a policy change and bumps
+the policy version. The initial list is drafted from common repository layout
+conventions and from segment frequencies in this organization's own
+repositories, then reviewed. Exact match, case-insensitive; anything not on
+the list is hashed.
+
+`cwd`, `old_cwd` and `new_cwd` keep the wholesale hash. They identify a
+directory for the exclusion-audit record and for per-device correlation, and
+one stable identifier is all those uses need.
+
+Free text keeps the 2.0.0 behaviour: only the home-directory prefix is
+hashed. Rationale: commands, prompts and tool output are read by the analysis
+for what they say, and a command whose paths are turned into hash chains
+loses most of its meaning; the names that remain are exactly what stage 2 is
+built to find; and per the reversibility principle this can be tightened
+later without cost. The asymmetry is therefore accepted and documented in
+PRIVACY.md.
+
+`_sanitization.counts` gains a `path` entry with the number of hashed
+segments, so hashing volume becomes measurable like the other categories.
+
+Policy version `3.1.0`, plugin 0.34.1. Path-key values written under `3.0.0`
+and earlier are single hashes and do not join with `3.1.0` values; the
+policy version on each record tells them apart. The Codex plugin, the session
+collector and the VS Code extension (whose hashing service hashes whole
+paths) follow under the per-surface declaration rule of decision 4.
+
+### 7. Repository identity travels in clear to the owning tenant
+
+Every event carries `repo_name` (`org/repo` as resolved from the remote) in
+clear, next to the existing hashed `repo_root` and `repo_remote_org`, which
+are kept for continuity.
+
+Rationale: the user turns telemetry on for a repository by its name, and the
+data goes to the tenant that owns that repository; the identifier adds
+nothing the recipient does not already know. Hashing it with a per-device
+salt only prevented the tenant from aggregating its own repositories. A
+tenant-wide salt would restore aggregation but not the dashboard label, at
+the same cost.
+
+Classification: Tier 2 inside the tenant. It may appear in reports whose
+audience is that tenant or the developer themself; it never crosses tenants,
+and any cross-tenant comparison uses derived measures only.
+
+Transport: `repo_name` is an ordinary event field. The collector flattens
+event fields into OTel attributes generically, so it lands in
+`LogAttributes['repo_name']` in `otel_logs` without a collector or schema
+change; a dedicated column is an optional later optimisation for query
+speed.
+
+### 8. Tenant switch for file names in clear (proposed, not confirmed)
+
+Principle decided: the data owner may choose to receive file and directory
+names in clear for its own repositories, since the names are its own asset
+and the trade-off (richer context for analysis against exposure inside its
+own store) is its to make. The default stays decision 6.
+
+Mechanics deferred: the plugin has no channel today through which a
+tenant-level setting reaches the device. This decision is implemented once
+such a channel exists, and this ADR is amended then with the setting's name,
+default and audit trail.
+
+### Consequences of the amendment
+
+- Analysis regains extension, hierarchy, per-directory grouping and
+  manifest-based stack detection without receiving any project, customer or
+  file name.
+- Free text still carries relative paths and their names below the home
+  prefix, as it does today. This is the largest remaining path exposure and
+  is assigned to stage 2.
+- Organization-level per-repository analysis becomes possible for the first
+  time; the `repo_name` attribute is available to ClickHouse queries as soon
+  as devices update.
+- Two representations of `file_path` coexist in storage until 3.0.0 devices
+  are gone; consumers must switch on `policyVersion`.
+- The vocabulary list is a new shared artifact with its own review.
+
+### Implementation mapping (amendment)
+
+| Decision | Where |
+| --- | --- |
+| 6 | 0.34.1 plugin PR (INF-192): segment hashing, vocabulary file, `counts.path`, PRIVACY.md and README |
+| 7 | Same plugin PR (`repo_name` field); verification query in ClickHouse after rollout |
+| 6, 7 parity | Codex plugin, session collector, VS Code extension: follow-up issues |
+| 8 | Deferred until a tenant-policy channel exists |
+
+### Open items (amendment)
+
+- Maintenance of the vocabulary list: who reviews additions, and whether
+  tenant-specific additions are allowed.
+- Whether stage 2 should also normalise free-text paths (name detection in
+  commands and prompts), given decision 6 leaves them in clear below the home
+  prefix.
+- Whether `cwd` should additionally carry `repo_name`-relative depth for the
+  analysis; not needed by the five metrics named above.
