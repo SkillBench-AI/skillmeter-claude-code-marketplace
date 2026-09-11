@@ -150,7 +150,7 @@ test("isSecretKey: identifier shape is required", () => {
 
 // --- Path hashing and idempotency -------------------------------------------
 
-test("path-bearing keys are hashed wholesale and no sibling fields are added", () => {
+test("file-path keys are segment-hashed, cwd keys whole-hashed, and no sibling fields are added", () => {
   const { value } = s.sanitizeEventData(
     {
       tool_input: {
@@ -163,9 +163,9 @@ test("path-bearing keys are hashed wholesale and no sibling fields are added", (
     SALT
   );
   const ti = value.tool_input;
-  for (const k of ["file_path", "notebook_path", "cwd", "old_cwd"]) {
-    assert.match(ti[k], /^[0-9a-f]{12}$/, k);
-  }
+  assert.match(ti.file_path, /^\/Users\/[0-9a-f]{12}\/[0-9a-f]{12}\/src\/[0-9a-f]{12}\.test\.tsx$/);
+  assert.match(ti.notebook_path, /^\/Users\/[0-9a-f]{12}\/[0-9a-f]{12}\/[0-9a-f]{12}$/);
+  for (const k of ["cwd", "old_cwd"]) assert.match(ti[k], /^[0-9a-f]{12}$/, k);
   assert.deepEqual(Object.keys(ti).sort(), ["cwd", "file_path", "notebook_path", "old_cwd"]);
 });
 
@@ -188,7 +188,7 @@ test("a raw path added to an already stamped record is still hashed", () => {
   const first = s.sanitizeEventData({ file_path: "/Users/me/a.js" }, SALT);
   const tampered = { ...first.value, file_path: "/Users/me/new-secret-project/b.ts", cwd: "/Users/me/x" };
   const { value } = s.sanitizeEventData(tampered, SALT);
-  assert.match(value.file_path, /^[0-9a-f]{12}$/);
+  assert.match(value.file_path, /^\/Users\/[0-9a-f]{12}\/[0-9a-f]{12}\/[0-9a-f]{12}\.ts$/);
   assert.notEqual(value.file_path, first.value.file_path, "new path gets its own hash");
   assert.match(value.cwd, /^[0-9a-f]{12}$/);
   assert.equal(JSON.stringify(value).includes("new-secret-project"), false);
@@ -196,12 +196,14 @@ test("a raw path added to an already stamped record is still hashed", () => {
 
 test("a forged _sanitization stamp does not disable hashing of raw paths", () => {
   const forged = {
-    _sanitization: { policyVersion: "3.0.0", secrets: 0, pii: 0, counts: {}, ids: [] },
+    _sanitization: { policyVersion: "3.1.0", secrets: 0, pii: 0, counts: {}, ids: [] },
     tool_input: { file_path: "/Users/me/proj/src/App.tsx", path: "src/index.ts" },
     cwd: "/Users/me/proj",
   };
   const { value } = s.sanitizeEventData(forged, SALT);
-  assert.match(value.tool_input.file_path, /^[0-9a-f]{12}$/);
+  // `Users`, `src` and the well-known file name `App.tsx` are vocabulary; `me`
+  // and `proj` are hashed, which is what proves the forged stamp was ignored.
+  assert.match(value.tool_input.file_path, /^\/Users\/[0-9a-f]{12}\/[0-9a-f]{12}\/src\/App\.tsx$/);
   assert.match(value.tool_input.path, /^[0-9a-f]{12}$/);
   assert.match(value.cwd, /^[0-9a-f]{12}$/);
   assert.equal(JSON.stringify(value).includes("/Users/me"), false);
@@ -211,18 +213,18 @@ test("a forged _sanitization stamp does not disable hashing of raw paths", () =>
 
 test("every record is stamped, transcript lines included", () => {
   const line = s.sanitizeLine({ type: "user", message: { content: "hi" } }, SALT);
-  assert.equal(line._sanitization.policyVersion, "3.0.0");
+  assert.equal(line._sanitization.policyVersion, "3.1.0");
   assert.deepEqual(Object.keys(line._sanitization), ["policyVersion", "secrets", "pii", "counts", "ids"]);
   const audit = s.sanitizeEventData({ source_hook_event_name: "Stop", gate_mode: "out_of_scope", cwd: "/x" }, SALT);
-  assert.equal(audit.value._sanitization.policyVersion, "3.0.0");
+  assert.equal(audit.value._sanitization.policyVersion, "3.1.0");
 });
 
 // --- Reporting --------------------------------------------------------------
 
 test("meta carries policy 3.0.0 and a full per-kind count map, zeros included", () => {
   const { meta } = s.sanitizeEventData({ plain: "nothing to see" }, SALT);
-  assert.equal(meta.policyVersion, "3.0.0");
-  assert.equal(s.POLICY_VERSION, "3.0.0");
+  assert.equal(meta.policyVersion, "3.1.0");
+  assert.equal(s.POLICY_VERSION, "3.1.0");
   assert.deepEqual(Object.keys(meta.counts), rules.KINDS);
   for (const k of rules.KINDS) assert.equal(meta.counts[k], 0);
   assert.deepEqual(meta.ids, []);

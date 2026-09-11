@@ -417,9 +417,11 @@ under the per-surface declaration rule of decision 4.
 
 ### 7. Repository identity travels in clear to the owning tenant
 
-Every event carries `repo_name` (`org/repo` as resolved from the remote) in
-clear, next to the existing hashed `repo_root` and `repo_remote_org`, which
-are kept for continuity.
+Every captured event from an enabled repository carries `repo_name`
+(`org/repo` as resolved from the remote) in clear, next to the existing hashed
+`repo_root` and `repo_remote_org`, which are kept for continuity. The
+exclusion-audit record for a repository that is not enabled does not carry
+it: consent by name has not been given there.
 
 Rationale: the user turns telemetry on for a repository by its name, and the
 data goes to the tenant that owns that repository; the identifier adds

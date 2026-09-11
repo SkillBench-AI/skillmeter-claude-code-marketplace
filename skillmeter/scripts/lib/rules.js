@@ -51,7 +51,9 @@ const PLACEHOLDER_RE =
 
 // Placeholder categories reported in `_sanitization.counts`, in this order, so
 // the metadata has a stable shape (every key present, zero when nothing hit).
-const KINDS = ["secret", "email", "person", "phone", "ip", "id_number", "card"];
+// `path` counts HMACs applied to path elements (hashed segments, whole-value
+// hashes, home-prefix replacements in text); it is neither a secret nor PII.
+const KINDS = ["secret", "email", "person", "phone", "ip", "id_number", "card", "path"];
 
 // ---------------------------------------------------------------------------
 // Validators for the digit-based PII rules (format checks a regex cannot do)
