@@ -21,8 +21,10 @@
  *   - Detection is deterministic regex + Shannon-entropy gating + format
  *     validators, with a small stopword allow-list to limit false positives
  *     without weakening recall.
- *   - Idempotent: a placeholder is never re-matched, so sanitizing already
- *     sanitized data changes nothing and adds no redaction counts.
+ *   - Idempotent for content: a placeholder is never re-matched, so sanitizing
+ *     already sanitized text changes nothing and adds no redaction counts.
+ *     Path values are hashed on every pass (a hash of a hash discloses
+ *     nothing); a value's shape is never taken as proof of prior hashing.
  *   - Key-name forced redaction applies to identifier-like keys only; free-text
  *     keys (questions, labels) are scrubbed by content rules alone.
  */
@@ -192,9 +194,11 @@ function hashHmac(str, salt) {
 }
 
 /**
- * True when a record already carries this module's `_sanitization` metadata,
- * the provenance signal that it has been through a pass. Path values in such a
- * record are not hashed again (see keepAsHash), so a second pass is a no-op.
+ * True when a record already carries this module's `_sanitization` metadata.
+ * The stamp describes the pass that saw the raw data and is kept as is on a
+ * later pass. It does not gate any transformation: value shape is never used
+ * as provenance, so a later pass hashes path values again (a hash of a hash
+ * discloses nothing) while placeholders, being fixed literals, are left alone.
  */
 function hasSanitizationMarker(obj) {
   return Boolean(
@@ -207,26 +211,6 @@ function hasSanitizationMarker(obj) {
       /^\d+\.\d+\.\d+$/.test(obj._sanitization.policyVersion)
   );
 }
-
-// Shape of a hashHmac output.
-const HASH_RE = /^[0-9a-f]{12}$/;
-
-// A path value is left un-hashed on a later pass only when BOTH hold: the
-// record carries the `_sanitization` stamp (provenance) AND the value already
-// has the hash shape. Either signal alone is insufficient: a raw relative path
-// that happens to be twelve hex characters must still be hashed when the record
-// is fresh, and a raw path added to (or a stamp forged onto) a stamped record
-// must still be hashed because it does not look like a hash. What remains is a
-// stamped record holding a twelve-hex-shaped raw file name, which identifies
-// nothing. Authenticated provenance would add little here: the salt is
-// readable by any local process, and a per-value marker would change the hash
-// format that ClickHouse, the analysis pipeline and the VS Code extension
-// already consume.
-function keepAsHash(value, opts) {
-  return !opts.rehash && HASH_RE.test(value);
-}
-
-const FRESH = Object.freeze({ rehash: true });
 
 function escapeRegExp(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -370,26 +354,6 @@ function hashPathSegments(p, hashSalt, redactions) {
   return leading + joined;
 }
 
-/**
- * True when a segment-key value already has the shape hashPathSegments emits:
- * every segment is either clear (vocabulary / version / structural) or a
- * twelve-hex hash, optionally followed by an extension on the last segment.
- * Used together with the record stamp to keep a second pass a no-op.
- */
-function looksSegmentHashed(value) {
-  const segments = String(value).split("/").filter(Boolean);
-  if (segments.length === 0) return false;
-  return segments.every((seg, i) => {
-    if (isClearSegment(seg)) return true;
-    if (HASH_RE.test(seg)) return true;
-    if (i === segments.length - 1) {
-      const { base, ext } = splitExtension(seg);
-      return ext !== "" && HASH_RE.test(base);
-    }
-    return false;
-  });
-}
-
 // ---------------------------------------------------------------------------
 // Combined content-scrub (redaction + home-path hashing)
 // ---------------------------------------------------------------------------
@@ -410,7 +374,7 @@ function scrubString(str, hashSalt, redactions) {
  * context: a secret-labelled key forces redaction of its string value even if
  * the value matches no pattern. Non-string scalars pass through untouched.
  */
-function scrubDeep(value, hashSalt, redactions = [], parentKey = null, opts = FRESH) {
+function scrubDeep(value, hashSalt, redactions = [], parentKey = null) {
   if (typeof value === "string") {
     // Secret-labelled identifier key → force redaction regardless of the
     // value's content, unless the value is already a placeholder.
@@ -423,16 +387,14 @@ function scrubDeep(value, hashSalt, redactions = [], parentKey = null, opts = FR
       });
       return SECRET_PLACEHOLDER;
     }
-    // File-path key → segment-wise hash (structure and vocabulary kept), unless
-    // this is a stamped record and the value already has the hashed shape.
+    // File-path key → segment-wise hash (structure and vocabulary kept). Always
+    // applied: a value's shape is never taken as proof that it was hashed
+    // before, so a raw path can never be preserved by looking like a hash.
     if (parentKey && SEGMENT_KEYS.has(parentKey)) {
-      if (!opts.rehash && looksSegmentHashed(value)) return value;
       return hashPathSegments(value, hashSalt, redactions);
     }
-    // Directory / generic path key → HMAC-hash the whole value, unless this is
-    // a stamped record and the value is already a hash.
+    // Directory / generic path key → HMAC-hash the whole value, always.
     if (parentKey && WHOLE_KEYS.has(parentKey)) {
-      if (keepAsHash(value, opts)) return value;
       // Count only when a hash is actually produced (hashHmac yields "" for an
       // empty value or a missing salt).
       if (hashSalt && value) redactions.push(PATH_HASH);
@@ -441,7 +403,7 @@ function scrubDeep(value, hashSalt, redactions = [], parentKey = null, opts = FR
     return scrubString(value, hashSalt, redactions);
   }
   if (Array.isArray(value)) {
-    return value.map((item) => scrubDeep(item, hashSalt, redactions, parentKey, opts));
+    return value.map((item) => scrubDeep(item, hashSalt, redactions, parentKey));
   }
   if (value && typeof value === "object") {
     const out = {};
@@ -451,7 +413,7 @@ function scrubDeep(value, hashSalt, redactions = [], parentKey = null, opts = FR
       // (redact + home-path hash, both tallied like any other string) but decide
       // `isSecretKey` value-forcing from the ORIGINAL key name.
       const scrubbedKey = scrubString(key, hashSalt, redactions);
-      out[scrubbedKey] = scrubDeep(val, hashSalt, redactions, key, opts);
+      out[scrubbedKey] = scrubDeep(val, hashSalt, redactions, key);
     }
     return out;
   }
@@ -484,15 +446,16 @@ function summarizeRedactions(redactions) {
  * Scrub a record and, when it is a plain object, stamp the metadata summary
  * (`{ policyVersion, secrets, pii, counts, ids }`) on it as `_sanitization`.
  * The stamp goes on every record, including when nothing was redacted, so
- * redaction rates per category are a plain query downstream, and it is the
- * provenance a later pass reads to leave hashes alone. A record that already
- * carries a stamp keeps it: the stamp describes the pass that saw the raw
- * data, and a re-run adds nothing.
+ * redaction rates per category are a plain query downstream. A record that
+ * already carries a stamp keeps it: the stamp describes the pass that saw the
+ * raw data. Content is idempotent (placeholders are never re-matched); path
+ * values are hashed on every pass, so a second pass yields a hash of a hash
+ * rather than trusting the value's shape.
  */
 function sanitizeRecord(record, hashSalt) {
   const redactions = [];
   const marked = hasSanitizationMarker(record);
-  const value = scrubDeep(record, hashSalt, redactions, null, { rehash: !marked });
+  const value = scrubDeep(record, hashSalt, redactions);
   const meta = summarizeRedactions(redactions);
   if (value && typeof value === "object" && !Array.isArray(value) && !marked) {
     value._sanitization = meta;
@@ -536,7 +499,6 @@ module.exports = {
   isSecretKey,
   hasSanitizationMarker,
   hashPathSegments,
-  looksSegmentHashed,
   splitExtension,
   isClearSegment,
 };

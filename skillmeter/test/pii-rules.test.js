@@ -61,7 +61,7 @@ test("every pii rule declares a kind listed in KINDS", () => {
   }
 });
 
-test("sanitizeEventData is a fixed point: second pass changes nothing and counts nothing", () => {
+test("second pass: content is a fixed point, path keys are hashed again, no redaction counts", () => {
   const input = {
     msg: "mail a@b.co card 4111 1111 1111 1111 Author: Jane Doe <j@x.io> ip 10.1.2.3 tel 010-1234-5678",
     token: "abcDEF123xyz",
@@ -74,11 +74,15 @@ test("sanitizeEventData is a fixed point: second pass changes nothing and counts
   };
   const one = s.sanitizeEventData(input, SALT);
   const two = s.sanitizeEventData(one.value, SALT);
-  assert.deepEqual(two.value, one.value);
+  const content = (v) => ({ msg: v.msg, token: v.token, mcp: v.mcp });
+  assert.deepEqual(content(two.value), content(one.value), "redacted content is a fixed point");
   assert.equal(two.meta.secrets, 0);
   assert.equal(two.meta.pii, 0);
   assert.deepEqual(two.meta.ids, []);
-  for (const k of rules.KINDS) assert.equal(two.meta.counts[k], 0, `count ${k} on second pass`);
+  for (const k of rules.KINDS.filter((k) => k !== "path")) assert.equal(two.meta.counts[k], 0, `count ${k} on second pass`);
+  assert.ok(two.meta.counts.path > 0, "path values are hashed again on a second pass, never trusted by shape");
+  assert.notEqual(two.value.tool_input.file_path, one.value.tool_input.file_path);
+  assert.deepEqual(two.value._sanitization, one.value._sanitization, "the first-pass stamp is kept");
   assert.ok(one.meta.secrets >= 2 && one.meta.pii >= 4, "first pass did redact");
 });
 
@@ -89,19 +93,21 @@ test("a placeholder under a secret-labelled key is kept as is (category survives
   assert.equal(redactions.length, 0);
 });
 
-test("sanitizeLine is a fixed point for a transcript line", () => {
+test("sanitizeLine: content is a fixed point across passes, path keys are hashed again", () => {
   const line = {
     type: "user",
     cwd: "/Users/me/proj",
-    message: { content: "ping josé@example.com from 10.0.0.7", author: "Author: X Y <x@y.z>" },
+    message: { content: "ping josé@example.com from 10.0.0.7", author: "Author: X Y <x@y.zz>" },
     toolUseResult: { file_path: "/Users/me/proj/README.md" },
   };
   const once = s.sanitizeLine(line, SALT);
   const twice = s.sanitizeLine(once, SALT);
-  assert.deepEqual(twice, once);
+  assert.deepEqual(twice.message, once.message);
   assert.equal(once.message.content, "ping [EMAIL] from [IP]");
-  assert.equal(once._sanitization.counts.email, 1);
+  assert.equal(once._sanitization.counts.email, 2);
   assert.equal(once._sanitization.counts.ip, 1);
+  assert.deepEqual(twice._sanitization, once._sanitization);
+  assert.notEqual(twice.cwd, once.cwd, "path keys are hashed again");
 });
 
 // --- Key-name heuristic -----------------------------------------------------
@@ -175,13 +181,16 @@ test("a twelve-hex relative path without provenance is hashed like any other pat
   assert.match(value.path, /^[0-9a-f]{12}$/);
 });
 
-test("a record stamped with _sanitization is not re-hashed", () => {
+test("a stamped record keeps its stamp; its path values are hashed again rather than trusted by shape", () => {
   const first = s.sanitizeEventData({ file_path: "/Users/me/a.js", cwd: "/Users/me" }, SALT);
   assert.equal(s.hasSanitizationMarker(first.value), true);
   assert.deepEqual(first.value._sanitization, first.meta);
   const second = s.sanitizeEventData(first.value, SALT);
-  assert.deepEqual(second.value, first.value);
+  assert.notEqual(second.value.file_path, first.value.file_path);
+  assert.notEqual(second.value.cwd, first.value.cwd);
+  assert.match(second.value.cwd, /^[0-9a-f]{12}$/);
   assert.equal(second.meta.pii + second.meta.secrets, 0);
+  assert.deepEqual(second.value._sanitization, first.meta, "stamp from the first pass is kept");
 });
 
 test("a raw path added to an already stamped record is still hashed", () => {

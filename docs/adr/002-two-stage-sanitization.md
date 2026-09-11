@@ -205,11 +205,17 @@ count per category.
   whitespace, at most 64 characters, matching `^[A-Za-z0-9_.:-]+$`. Free-text
   keys are scrubbed by content rules only. This removes problem 3 without
   weakening the `env`-block case the heuristic exists for.
-- Sanitization is idempotent. A string that is exactly a placeholder of the
-  vocabulary above is never matched by any rule and is never subject to
-  key-name forced redaction; `sanitize(sanitize(x))` equals `sanitize(x)`
-  and adds no redaction counts. The guard trusts placeholder shape, not
-  provenance, and that trade is accepted.
+- Sanitization is idempotent for content. A string that is exactly a
+  placeholder of the vocabulary above is never matched by any rule and is
+  never subject to key-name forced redaction; a second pass over sanitized
+  text changes nothing and adds no redaction counts. The guard trusts
+  placeholder shape, not provenance, and that trade is accepted because a
+  placeholder is a fixed literal. *(Clarified 2026-09-11 with the 3.1.0
+  implementation.)* The same trade is **not** made for hashes: a value that
+  merely looks like a hash is never preserved, so path values are hashed on
+  every pass and a second pass yields a hash of a hash. That discloses
+  nothing and removes any way for a raw path to be kept by resembling a
+  hash.
 - *Superseded by the 2026-09-11 amendment; kept for history. It was not
   shipped: 0.34.0 left path handling as in 2.0.0.* Path values under the path
   keys are still hashed wholesale, but the file extension and the directory

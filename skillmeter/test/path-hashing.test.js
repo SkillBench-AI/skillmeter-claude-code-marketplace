@@ -77,13 +77,6 @@ test("no salt: fail closed to an empty value, as before", () => {
   assert.equal(s.hashPathSegments("/Users/me/a.js", ""), "");
 });
 
-test("looksSegmentHashed recognises its own output and rejects raw paths", HOME_DEPENDENT, () => {
-  const out = s.hashPathSegments(`${HOME}/work/acme/src/x.ts`, SALT);
-  assert.equal(s.looksSegmentHashed(out), true);
-  assert.equal(s.looksSegmentHashed(`${HOME}/work/acme/src/x.ts`), false);
-  assert.equal(s.looksSegmentHashed("/Users/otheruser/x.ts"), false);
-  assert.equal(s.looksSegmentHashed("src/index.ts"), true, "all-clear paths are already in final form");
-});
 
 // --- through sanitizeEventData -----------------------------------------------
 
@@ -130,14 +123,17 @@ test("counts.path tallies segment hashes, whole-value hashes and home-prefix rep
   assert.equal(meta.policyVersion, "3.1.0");
 });
 
-test("second pass over a stamped record is a no-op for segment-hashed paths", HOME_DEPENDENT, () => {
+test("second pass over a stamped record hashes path values again and never restores them", HOME_DEPENDENT, () => {
   const first = s.sanitizeEventData(
     { tool_input: { file_path: `${HOME}/work/acme/src/x.ts`, edits: [{ file_path: "/opt/acme/y.py" }] }, cwd: `${HOME}/w` },
     SALT
   );
   const second = s.sanitizeEventData(first.value, SALT);
-  assert.deepEqual(second.value, first.value);
-  assert.equal(second.meta.counts.path, 0);
+  assert.notEqual(second.value.tool_input.file_path, first.value.tool_input.file_path);
+  assert.notEqual(second.value.cwd, first.value.cwd);
+  assert.ok(second.meta.counts.path > 0);
+  assert.deepEqual(second.value._sanitization, first.value._sanitization, "first-pass stamp kept");
+  assert.equal(JSON.stringify(second.value).includes("acme"), false);
 });
 
 test("a raw file path added to a stamped record is segment-hashed and leaks nothing", HOME_DEPENDENT, () => {
