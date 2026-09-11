@@ -164,7 +164,7 @@ test("secret-labelled key still forces redaction for real secret keys", () => {
   assert.equal(value.token, "[REDACTED_SECRET]");
 });
 
-test("path-bearing keys are HMAC-hashed wholesale, including nested (B3)", () => {
+test("file-path keys are hashed per segment, including nested (B3)", () => {
   const home = os.homedir();
   const { value } = s.sanitizeEventData(
     {
@@ -177,8 +177,10 @@ test("path-bearing keys are HMAC-hashed wholesale, including nested (B3)", () =>
     SALT
   );
   const ti = value.tool_input;
+  const CHAIN = /^[0-9a-f]{12}(?:\/[0-9a-f]{12})+\.(?:js|ipynb)$/;
   for (const v of [ti.file_path, ti.notebook_path, ti.edits[0].file_path]) {
-    assert.match(v, /^[0-9a-f]{12}$/, "path key value is a 12-hex HMAC");
+    assert.match(v, CHAIN, "file-path value is a chain of 12-hex segments with the extension kept");
+    assert.ok(!v.includes(home), "raw home path must not survive");
   }
 });
 

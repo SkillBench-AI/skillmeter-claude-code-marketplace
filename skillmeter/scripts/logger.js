@@ -310,6 +310,14 @@ async function runHook(eventName, buildData, options = {}) {
     cwd: hashHmac(cwd, hashSalt),
     repo_scope: repoScopeDecision.scope,
     repo_classification: repoScopeDecision.classification,
+    // Repository identity in clear (`org/repo`), ADR 002 amendment decision 7:
+    // consent is granted per repository by name and the recipient tenant owns
+    // it. Present only for an approved repository (this record is a captured
+    // event, so the gate was open); the exclusion-audit record never carries it.
+    repo_name:
+      repoScopeDecision.remoteOrg && repoScopeDecision.repoName
+        ? `${repoScopeDecision.remoteOrg}/${repoScopeDecision.repoName}`
+        : undefined,
     repo_root: repoScopeDecision.repoRoot
       ? hashHmac(repoScopeDecision.repoRoot, hashSalt)
       : undefined,
