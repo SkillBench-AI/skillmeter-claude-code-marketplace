@@ -99,24 +99,51 @@ the notice handler, the status command and the daemon all use:
 
 | State | Meaning | Source |
 | --- | --- | --- |
-| `recording` | signed in, gate open for the current repository | `credentials.json`, `telemetry-policy.json` |
 | `paused` | global kill-switch on | `telemetry-policy.json` |
-| `unconfigured` | signed in, organization or repository choice pending, or repository off | `telemetry-policy.json`, repo scope |
 | `signed_out` | `signed_out: true` (user ran `/skillmeter:signout`) | `credentials.json` |
-| `token_missing` | no `license_jwt` and no `signed_out` flag | `credentials.json` |
-| `refresh_failed` | `terminal` set in the status record | `license-status.json` |
+| `never_signed_in` | no `license_jwt`, no `signed_out`, and no evidence of a prior sign-in on this device | `credentials.json`, `license-status.json` |
+| `token_missing` | no `license_jwt`, no `signed_out`, and evidence of a prior sign-in | `credentials.json`, `license-status.json` |
+| `revoked` | `terminal.reason = revoked` in the status record (402: the organization license is inactive) | `license-status.json` |
+| `delivery_paused` | a token is still stored and the status record is terminal for `gh_unauthenticated`, `identity_mismatch` or `backoff_exhausted` | `credentials.json`, `license-status.json` |
+| `unconfigured` | signed in, organization or repository choice pending, or repository off | `telemetry-policy.json`, repo scope |
+| `recording` | signed in, gate open for the current repository | `credentials.json`, `telemetry-policy.json` |
 
-`recording`, `paused` and `unconfigured` are the healthy or user-chosen
-states; the last three are the "stopped" states this ADR is about. The
-resolver reads the same gate logic the capture hooks use
-(`resolveTelemetryGate`) so the state it reports is the state that decides
-capture.
+The states are evaluated in the order of the table and the first match wins,
+so one set of local inputs always resolves to one state. `paused` is listed
+first because the kill-switch is the user's explicit choice and silences
+every other reading; `signed_out` precedes `token_missing` for the same
+reason.
+
+Three groups follow from the table:
+
+- **Capture stopped**: `signed_out`, `token_missing`, `revoked`. Capture
+  authorization is gone; hooks record nothing. These are the states this ADR
+  announces.
+- **Delivery paused**: `delivery_paused`. The token is still on disk, so under
+  ADR 001 decision 3 hooks keep recording locally and uploads wait; only the
+  refresh has given up and the user must act. Until A3 (INF-170) ships, hooks
+  also skip while the stored token is expired, so in that window this state
+  under-reports the loss. The wording stays, because the next action is the
+  same either way.
+- **Healthy or user-chosen**: `recording`, `paused`, `unconfigured`,
+  `never_signed_in`. No notice; the SessionStart card covers them.
+
+The resolver reports; it never gates. Capture stays decided by
+`resolveTelemetryGate` and ADR 001 decision 3 (token presence, not
+freshness), so this ADR cannot reintroduce the data gap ADR 001 closed.
+
+"Evidence of a prior sign-in" is the prior-sign-in marker once A4 (ADR 001
+decision 4) writes it; until then, a non-null `last_success_at` in the status
+record. A device with neither is a fresh install and is asked to sign in by
+the card, not by a notice.
 
 The daemon records `token_missing` in `license-status.json` instead of
-returning silently. The record then always describes the present: either the
-last successful refresh, a failure with backoff, or the reason the client
-cannot continue. This is the "written where hooks can read them" requirement
-ADR 001 left to B1.
+returning silently. `credentials.json` and the resolver define the current
+state; the status record is the record of the last refresh attempt. It can
+lag an external credential change by up to one daemon sweep, after which the
+daemon reconciles it, and it is the input for `revoked` and
+`delivery_paused`. This is the "written where hooks can read them"
+requirement ADR 001 left to B1.
 
 ### 2. Transition notices: one line when collection stops, one when it resumes, nothing in between
 
@@ -124,15 +151,23 @@ SessionStart registers `credentials.json` and `license-status.json` in
 `watchPaths` next to `signin-result.json`. A FileChanged handler
 (`scripts/on_collection_state.js`) recomputes the state and emits a
 `systemMessage` plus the same OSC 777 desktop notification the sign-in notice
-uses, only when the state crosses between the healthy set and the stopped
-set:
+uses, only when the state enters or leaves the capture-stopped group or
+`delivery_paused`:
 
-- into a stopped state: `✗ SkillMeter · recording stopped · <reason> · run /skillmeter:signin`
+- into `signed_out`, `token_missing` or `revoked`: `✗ SkillMeter · recording stopped · <reason> · run /skillmeter:signin`
+- into `delivery_paused`: `✗ SkillMeter · uploads paused · <reason> · run /skillmeter:signin`
 - back to `recording`: `✓ SkillMeter · recording resumed · @<org>`
 
+The resume line is the one exemption from the wording rule in decision 5: it
+carries the state and the organization and no next command, because there is
+none.
+
 There are no periodic reminders. A stopped state stays visible through the
-monitor panel (decision 3), the SessionStart banner of the next session
-(decision 4), and `/skillmeter:status` (INF-179). Healthy state is silent.
+SessionStart card of the next session (decision 4) and `/skillmeter:status`
+(INF-179). The monitor's exit (decision 3) is a moment signal, not a
+persistent surface: the task panel stops saying "running" and Claude receives
+the reason; whether the panel keeps an ended entry is a Claude Code detail
+the design does not depend on. Healthy state is silent.
 
 Deduplication is per session and per state (a marker keyed by the hook's
 `session_id`), so every open session shows the line once and the daemon's
@@ -151,20 +186,31 @@ has scrolled away.
 
 The retry daemon keeps running through transient failures, backoff, expiry
 and the global kill-switch, exactly as ADR 001 decision 2 describes. It exits
-when the resolver reports a stopped state that only the user can clear:
-`signed_out`, `refresh_failed`, and `token_missing` once silent
+when the resolver reports a state that only the user can clear:
+`signed_out`, `revoked`, `delivery_paused`, and `token_missing` once silent
 re-activation (ADR 001 decision 4, A4) has been attempted and failed. Before
 exiting it writes the status record and prints one stdout line naming the
 state and `/skillmeter:signin`, so the task panel stops showing "running"
 and Claude receives the reason as a monitor notification.
 
+Two guards keep that exit from racing a sign-in. `/skillmeter:signin` writes
+a `pending` result to `signin-result.json` when it starts the device flow,
+and the daemon does not exit on `token_missing` while a pending result
+younger than the device-code lifetime (15 minutes) exists; the poller's final
+result (success, failure or discarded) ends the wait, and the sign-in notice
+handler ignores `pending`. Independently, a daemon never exits on
+`token_missing` during its first 15 minutes, so a monitor started by the
+sign-in skill outlives the GitHub approval even if the sentinel is missing.
+
 Restart is bound to the user's action: `monitors/monitors.json` gains a
 second entry for the same daemon with `"when": "on-skill-invoke:signin"`, so
 `/skillmeter:signin` brings the sync loop back in the session where it was
-run. New sessions start it as today. The existing refresh lock keeps
-concurrent daemons from duplicating work, so an overlap between the
-`always` and the `on-skill-invoke` instance is harmless. The backfill
-monitor is unchanged.
+run. The dispatch happens when the sign-in starts, before a token exists,
+which is why the guards above are part of this decision; the token the
+poller writes is picked up on the daemon's next sweep. New sessions start
+the daemon as today. The existing refresh lock keeps concurrent daemons from
+duplicating work, so an overlap between the `always` and the
+`on-skill-invoke` instance is harmless. The backfill monitor is unchanged.
 
 Rationale: a process that can neither refresh nor upload has nothing to
 monitor; letting it end is the only way the task panel can be truthful, and
@@ -175,18 +221,21 @@ daemon, in this session after sign-in or in the next session.
 ### 4. The SessionStart card names the reason
 
 The "sign in required" card uses the same resolver and adds one line for the
-state: never signed in, signed out, token missing, or refresh failed with its
-terminal reason. Wording follows the table in decision 5. The "telemetry on"
+state: not signed in, signed out, license token missing, organization license
+inactive, or uploads paused with its terminal reason. Wording follows the
+table in decision 5. The "telemetry on"
 card is unchanged.
 
 ### 5. Wording rules
 
 Every notice and card line is plain text, one line, and consists of a state,
-a reason and one next command. It never contains paths, tokens, device ids,
-or the name of another client. The reasons known today:
+a reason and one next command; the resume line of decision 2 is the only
+exemption. No line contains paths, tokens, device ids, or the name of another
+client. The reasons known today:
 
 | Reason | Text |
 | --- | --- |
+| `never_signed_in` | `not signed in` (card only, no notice) |
 | `token_missing` | `license token missing` |
 | `signed_out` | `signed out` |
 | `revoked` | `organization license inactive` |
@@ -251,6 +300,9 @@ reasons as decisions 1 and 5.
 - Until A4 ships, `token_missing` leads straight to the stopped state and the
   notice; with A4 the daemon first tries the gh re-activation and only then
   stops. The notice text does not change.
+- The `pending` sign-in sentinel and the prior-sign-in evidence rule do not
+  exist yet; B1 adds the sentinel to `signin.js`, and the evidence rule moves
+  from `last_success_at` to the A4 marker when A4 lands.
 - Whether `recording resumed` should also be shown when the token was restored
   by another client or session rather than by `/skillmeter:signin` in this
   one. The current answer is yes, since the resolver only sees the file.
