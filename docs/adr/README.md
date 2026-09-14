@@ -11,3 +11,4 @@ supersede with a new ADR rather than rewriting history. Every ADR carries a
 |---|---|---|---|
 | [001](001-license-token-lifecycle.md) | License token lifecycle: lifetime, refresh, and recovery | 2026-09-10 | Accepted |
 | [002](002-two-stage-sanitization.md) | Two-stage sanitization and typed PII placeholders | 2026-09-11 | Accepted, amended 2026-09-11 (paths, repository identity) |
+| [003](003-collection-state-visibility.md) | Collection state visibility: notices, monitor lifecycle, and the local status record | 2026-09-14 | Proposed |
