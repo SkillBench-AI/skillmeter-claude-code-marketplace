@@ -359,8 +359,10 @@ background (every `SKILLMETER_RETRY_DAEMON_INTERVAL_MS`, 2 minutes by
 default), `SessionStart` renews it once at session start, and uploads renew it
 right before sending. If renewal keeps failing the plugin backs off and, after
 about an hour, stops trying until the next session or `/skillmeter:signin`;
-it also stops when the organization license is no longer active or when the
-GitHub CLI credential it needs for re-activation is unavailable. Renewal
+it also stops when the workspace license is no longer active, and when the
+license has aged past the point where it can be renewed at all — at which
+point only `/skillmeter:signin` helps, because issuing a new one needs a
+browser. Renewal
 outcomes are recorded in `~/.skillbench/license-status.json` (timestamps,
 failure count, stop reason; never the token itself).
 
@@ -403,8 +405,9 @@ Telemetry decisions are never read from a project's `.claude/settings.local.json
 | Environment Variable           | Default                                                                       | Description                                                                                                                                  |
 |--------------------------------|-------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
 | `SKILLMETER_BACKEND_URL`       | unset — endpoint resolved from the license JWT's `aud` claim                  | Base-URL override for local development / integration tests (e.g. `http://localhost:8080`). Callers append `/logs/claude` and `/logs/claude/transcript`; upload authentication still requires a valid license JWT. |
-| `SKILLMETER_ACTIVATE_URL`      | `https://api.skillbench.ai/activate`                                          | Activation endpoint that exchanges a GitHub OAuth token for a SkillMeter license JWT. Point at `https://api.dev.skillbench.com/activate` to run against dev. |
-| `SKILLMETER_GITHUB_CLIENT_ID`  | prod SkillMeter GitHub OAuth App                                              | Override the GitHub OAuth App used for the device-code login. Set to the dev App's `client_id` when activating against dev.                  |
+| `SKILLMETER_ACTIVATE_URL`      | `https://api.skillbench.ai/activate`                                          | Activation endpoint that exchanges a sign-in ID token for a SkillMeter license JWT. Point at `https://api.dev.skillbench.com/activate` to run against dev. |
+| `SKILLMETER_BROKER_URL`        | `https://id.skillbench.ai`                                                    | Identity service the device flow runs against. The device-code and token endpoints are derived from it, so this one value moves a whole environment. `SKILLMETER_ENV=dev` already selects `https://id.dev.skillbench.com`. |
+| `SKILLMETER_OAUTH_CLIENT_ID`   | `skillmeter-plugin`                                                           | Public OAuth client the plugin identifies as. The same id is registered in every environment, so this only needs setting against a one-off local broker. |
 | `SKILLMETER_TIMEOUT`           | `10`                                                                          | Upload timeout (seconds)                                                                                                                     |
 | `SKILLMETER_RETRY_DAEMON_INTERVAL_MS` | `120000`                                                               | Retry monitor sweep interval (ms). Also the cadence of the background license refresh check and the base of its failure backoff.          |
 
@@ -412,18 +415,19 @@ In production the telemetry hostname is per-tenant and looks like `https://<slug
 
 ### Pointing at a non-default environment
 
-`SKILLMETER_ACTIVATE_URL` and `SKILLMETER_GITHUB_CLIENT_ID` both also accept persistent per-project values via `.claude/settings.local.json`:
+Setting `SKILLMETER_ENV=dev` already selects the whole dev bundle — activation host, identity service, and a separate state directory — so it is the usual way in. The individual values also accept persistent per-project overrides via `.claude/settings.local.json`:
 
 ```json
 {
   "skillmeter": {
     "activate_url": "https://api.dev.skillbench.com/activate",
-    "github_client_id": "<dev OAuth App client_id>"
+    "broker_url": "https://id.dev.skillbench.com",
+    "oauth_client_id": "skillmeter-plugin"
   }
 }
 ```
 
-Resolution order is env var → settings file → built-in default. Typically you set the env vars together when running activation against dev; once the JWT is cached, telemetry routing is read straight from its `aud` claim and doesn't need `SKILLMETER_BACKEND_URL`.
+Resolution order is env var → settings file → dev bundle (when `SKILLMETER_ENV=dev`) → prod default. Once the JWT is cached, telemetry routing is read straight from its `aud` claim and doesn't need `SKILLMETER_BACKEND_URL`.
 
 ## Repo-Scoped Filtering
 

@@ -50,8 +50,7 @@ const BACKOFF_CAP_MS = 30 * 60_000;
 // this session and the user has to act (or a new session has to start).
 const TERMINAL_REASONS = Object.freeze({
   REVOKED: "revoked", // 402 from /refresh or /activate
-  GH_UNAUTHENTICATED: "gh_unauthenticated", // gh CLI missing or not logged in
-  IDENTITY_MISMATCH: "identity_mismatch", // A4: gh identity != prior sign-in
+  REACTIVATION_REQUIRED: "reactivation_required", // 410/401: only a new sign-in helps
   BACKOFF_EXHAUSTED: "backoff_exhausted", // failures kept coming past the cap
 });
 
@@ -234,7 +233,7 @@ function recordRefreshFailure({
   const failures = (prev.consecutive_failures || 0) + 1;
   // A terminal state is sticky: a late transient-failure write from another
   // process (SessionStart bypasses the refresh lock) must not turn a revoked
-  // or gh_unauthenticated record back into a retrying one. Only a success,
+  // or reactivation-required record back into a retrying one. Only a success,
   // SessionStart's clearTerminal, or /skillmeter:signin lifts it.
   if (prev.terminal) {
     return {
