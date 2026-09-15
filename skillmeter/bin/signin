@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Run the SkillMeter sign-in (GitHub device flow) directly from a shell.
+ * Run the SkillMeter sign-in (OAuth 2.0 device flow) directly from a shell.
  */
 
 const path = require("path");

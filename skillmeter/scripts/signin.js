@@ -286,13 +286,8 @@ async function main() {
     process.exit(1);
   }
 
-  // There used to be a "try `gh auth token` first" shortcut here. It is gone
-  // with the rest of the GitHub path — but note it was never reached anyway:
-  // it called `licenseActivation.trySilentGhActivate` against a name this file
-  // never required, so every sign-in from an unlicensed state died on
-  // "licenseActivation is not defined". That is true of v0.33.0, v0.34.0 and
-  // v0.34.1, so /skillmeter:signin has not worked in any released version.
-  // Removing the call is what fixes it.
+  // Straight to the device grant. The `gh auth token` shortcut that used to
+  // run first is gone from the whole plugin, not just from here.
   const device = await requestDeviceCode();
 
   const expiresMin = Math.round(device.expires_in / 60);

@@ -13,9 +13,6 @@ const path = require("path");
 const { makeTempDir, setTestEnv, makeJwt, writeJson } = require("../testing/helpers");
 
 const stateDir = makeTempDir("skm-license-activation-");
-const emptyBin = makeTempDir("skm-empty-bin-");
-const ghBin = makeTempDir("skm-gh-bin-");
-fs.writeFileSync(path.join(ghBin, "gh"), "#!/bin/sh\necho ghs_fake_token\n", { mode: 0o755 });
 
 setTestEnv("SKILLMETER_STATE_DIR", stateDir);
 setTestEnv("SKILLMETER_RETRY_DAEMON_INTERVAL_MS", "1000");
@@ -75,9 +72,6 @@ process.on("exit", () => {
 });
 
 const realPath = process.env.PATH;
-function withGh(present) {
-  process.env.PATH = present ? `${ghBin}:/usr/bin:/bin` : emptyBin;
-}
 
 beforeEach(() => {
   calls.length = 0;
@@ -129,8 +123,7 @@ test("routine expiry: /refresh rotates, stores, and records success", async () =
   assert.equal(s.updated_by, "daemon");
 });
 
-test("transient 500: keep the token, back off, do not touch gh", async () => {
-  withGh(true);
+test("transient 500: keep the token and back off", async () => {
   const before = credstore.getLicenseTokenUncached();
   responses = [respond(500, "boom")];
   assert.equal(await refreshLicense(DEVICE_ID, { source: "daemon" }), null);
@@ -156,8 +149,7 @@ test("network error is transient too, and failures accumulate", async () => {
   assert.equal(calls.length, 2);
 });
 
-test("402 on /refresh is terminal (revoked); no re-activation", async () => {
-  withGh(true);
+test("402 on /refresh is terminal (revoked)", async () => {
   responses = [respond(402, { error: "license cancelled" })];
   assert.equal(await refreshLicense(DEVICE_ID, { source: "daemon" }), null);
   assert.equal(calls.length, 1);
@@ -166,46 +158,39 @@ test("402 on /refresh is terminal (revoked); no re-activation", async () => {
   assert.equal(s.terminal.status, 402);
 });
 
-test("410 with gh unavailable is terminal (gh_unauthenticated)", async () => {
-  withGh(false);
+// 410 and 401 both mean "this token can never be rotated again". There used
+// to be a silent `gh auth token` → /activate recovery behind them; with the
+// GitHub path gone there is nothing the daemon can do, because the device
+// grant needs a browser it does not have. So both end the retry loop rather
+// than burning backoff on a call that cannot succeed.
+test("410 is terminal: no second call, and the reason names what the user must do", async () => {
   responses = [respond(410, { error: "token too old" })];
   assert.equal(await refreshLicense(DEVICE_ID, { source: "daemon" }), null);
-  assert.equal(calls.length, 1, "activation endpoint not called when gh has no token");
+  assert.equal(calls.length, 1, "nothing is attempted after the refresh is refused");
   const s = licenseStatus.readLicenseStatus();
-  assert.equal(s.terminal.reason, licenseStatus.TERMINAL_REASONS.GH_UNAUTHENTICATED);
+  assert.equal(s.terminal.reason, licenseStatus.TERMINAL_REASONS.REACTIVATION_REQUIRED);
+  assert.equal(s.terminal.status, 410);
+  assert.match(s.terminal.message, /skillmeter:signin/);
 });
 
-test("410 with gh available: silent /activate re-activates and commits", async () => {
-  withGh(true);
-  const next = FRESH();
-  responses = [respond(410, {}), respond(200, { token: next })];
-  const got = await refreshLicense(DEVICE_ID, { source: "session_start" });
-  assert.equal(got, next);
-  assert.equal(credstore.getLicenseTokenUncached(), next);
-  assert.equal(calls.length, 2);
-  assert.match(calls[1].url, /\/activate$/);
-  assert.equal(calls[1].opts.headers.Authorization, "Bearer ghs_fake_token");
-  const s = licenseStatus.readLicenseStatus();
-  assert.equal(s.last_outcome, "reactivated");
-  assert.equal(s.consecutive_failures, 0);
-});
-
-test("401 with gh available: re-activation is attempted; a 5xx there is a transient activate failure", async () => {
-  withGh(true);
-  responses = [respond(401, {}), respond(503, "down")];
+test("401 is terminal the same way — a rotated signing key is not retryable either", async () => {
+  responses = [respond(401, {})];
   assert.equal(await refreshLicense(DEVICE_ID, { source: "daemon" }), null);
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 1);
   const s = licenseStatus.readLicenseStatus();
-  assert.equal(s.last_outcome, "transient_failure");
-  assert.equal(s.last_error.kind, "activate");
-  assert.equal(s.consecutive_failures, 1);
+  assert.equal(s.terminal.reason, licenseStatus.TERMINAL_REASONS.REACTIVATION_REQUIRED);
+  assert.equal(s.terminal.status, 401);
 });
 
-test("402 from /activate after a 410 is terminal (revoked)", async () => {
-  withGh(true);
-  responses = [respond(410, {}), respond(402, { error: "cancelled" })];
+// The stored token is left alone. It is expired and unrotatable, but the
+// claims still carry the tenant and the meter endpoint, which the notices and
+// the status banner read to tell the person which workspace they have fallen
+// out of.
+test("a terminal refresh does not delete the licence it could not rotate", async () => {
+  const before = credstore.getLicenseTokenUncached();
+  responses = [respond(410, {})];
   await refreshLicense(DEVICE_ID, { source: "daemon" });
-  assert.equal(licenseStatus.readLicenseStatus().terminal.reason, "revoked");
+  assert.equal(credstore.getLicenseTokenUncached(), before);
 });
 
 test("ensureFreshLicense skips the network while the record says terminal or backoff", async () => {
