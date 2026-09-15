@@ -26,23 +26,34 @@ const IS_DEV = process.env.SKILLMETER_ENV === "dev";
 
 // --- Prod defaults (verbatim from their former homes) ---
 const PROD_ACTIVATE_URL = "https://api.skillbench.ai/activate"; // was license-activation.js:25
-const PROD_GITHUB_CLIENT_ID = "Ov23liHsxZ4tVUN5WePE"; // was signin.js:48
+const PROD_BROKER_URL = "https://id.skillbench.ai";
 
 // --- Dev bundle (SKILLMETER_ENV=dev) ---
-// Two values the maintainer must confirm/fill. They are intentionally chosen so
-// an unfilled dev run fails LOUDLY (bad client id / unreachable host) and never
-// silently falls back to prod. Individual env vars still override these.
-const DEV_ACTIVATE_URL = "https://api.dev.skillbench.com/activate"; // TODO: confirm exact dev host
-const DEV_GITHUB_CLIENT_ID = "__FILL_DEV_OAUTH_CLIENT_ID__"; // TODO: set the dev GitHub OAuth App id
+const DEV_ACTIVATE_URL = "https://api.dev.skillbench.com/activate";
+const DEV_BROKER_URL = "https://id.dev.skillbench.com";
 const DEV_STATE_DIRNAME = ".skillbench-dev";
 const PROD_STATE_DIRNAME = ".skillbench";
 
-// --- GitHub OAuth device-flow constants ---
-const GITHUB_DEVICE_CODE_URL = "https://github.com/login/device/code"; // signin.js:56
-const GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"; // signin.js:57
-// `read:org` is still requested so the activator can resolve the licensed org
-// from the gh token server-side (the client no longer reads GitHub orgs itself).
-const GITHUB_OAUTH_SCOPE = "read:user read:org";
+// --- Broker device-flow constants ---
+//
+// Sign-in used to be a GitHub OAuth device flow. It is now the same RFC 8628
+// flow against our own broker (Ory Hydra), which is where every other SkillBench
+// sign-in already goes. What changes is only where the two URLs point, which
+// client id is used, and which scope is asked for — the protocol is identical,
+// down to the grant type string.
+//
+// The client is PUBLIC: no secret, because a program installed on a laptop
+// cannot keep one. It is registered per environment by skillbench-infra's
+// hydra-plugin-client unit under the same id in each, so unlike the GitHub
+// OAuth Apps there is no second id to fill in. (The dev GitHub client id never
+// was filled in, which is why dev sign-in has never worked.)
+const OAUTH_CLIENT_ID = "skillmeter-plugin";
+
+// Must not exceed what the client is registered with. The mutator registers
+// exactly this string, so this is that string — not a guess at a subset.
+// `openid` is the one that matters: it is what makes the broker return an
+// id token, and the id token is what /activate verifies.
+const OAUTH_SCOPE = "openid offline email profile";
 
 /**
  * Generic string resolver implementing the precedence rule above.
@@ -73,13 +84,28 @@ function getRefreshUrl() {
   return url.replace(/\/?$/, "/refresh");
 }
 
-function getGitHubClientId() {
-  return resolveString(
-    "SKILLMETER_GITHUB_CLIENT_ID",
-    "github_client_id",
-    DEV_GITHUB_CLIENT_ID,
-    PROD_GITHUB_CLIENT_ID
-  );
+// The broker's base URL. The two OAuth endpoints are derived from it rather
+// than configured separately, for the same reason getRefreshUrl derives from
+// getActivateUrl: one host setting should move a whole environment, and two
+// half-configured URLs pointing at different brokers is not a state worth
+// being able to express.
+function getBrokerUrl() {
+  return resolveString("SKILLMETER_BROKER_URL", "broker_url", DEV_BROKER_URL, PROD_BROKER_URL).replace(/\/+$/, "");
+}
+
+function getDeviceCodeUrl() {
+  return getBrokerUrl() + "/oauth2/device/auth";
+}
+
+function getTokenUrl() {
+  return getBrokerUrl() + "/oauth2/token";
+}
+
+// Same id in every environment, so dev and prod share a default. It stays
+// overridable because a client id is the one thing likely to differ in a
+// one-off local broker.
+function getOAuthClientId() {
+  return resolveString("SKILLMETER_OAUTH_CLIENT_ID", "oauth_client_id", OAUTH_CLIENT_ID, OAUTH_CLIENT_ID);
 }
 
 // Hard bypass of the JWT's `aud` endpoint claim (see jwt.js). Explicit-only:
@@ -116,12 +142,13 @@ module.exports = {
   TELEMETRY_POLICY_FILE,
   getActivateUrl,
   getRefreshUrl,
-  getGitHubClientId,
+  getBrokerUrl,
+  getDeviceCodeUrl,
+  getTokenUrl,
+  getOAuthClientId,
   getBackendUrlOverride,
   getEventTimeoutMs,
   getRetryDaemonIntervalMs,
   getTranscriptChunkMaxBytes,
-  GITHUB_DEVICE_CODE_URL,
-  GITHUB_TOKEN_URL,
-  GITHUB_OAUTH_SCOPE,
+  OAUTH_SCOPE,
 };

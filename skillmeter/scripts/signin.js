@@ -2,19 +2,22 @@
 /**
  * Interactive sign-in flow for the SkillMeter plugin (`/skillmeter:signin`).
  *
- *   1. Try silent sign-in using `gh auth token` when the GitHub CLI is
- *      already logged in.
- *   2. Otherwise start the GitHub OAuth device flow: print the user code
- *      and verification URL to stdout, then hand off polling to a detached
- *      child process. The foreground exits immediately so the user sees
- *      the code right away — Claude Code's `!`-prefix runner displays
- *      captured output once the command returns, so we cannot block on
- *      polling in the foreground.
- *   3. The background child polls for the GitHub access token, POSTs it +
- *      device_id to the SkillMeter activation endpoint, fetches the user's
- *      GitHub identities, and stores the license JWT + orgs in credstore.
- *      The user re-runs `/skillmeter:signin` (or any telemetry-emitting
- *      flow) to observe the result.
+ *   1. Start an RFC 8628 device flow against the SkillBench broker: print
+ *      the user code and verification URL to stdout, then hand off polling
+ *      to a detached child process. The foreground exits immediately so the
+ *      user sees the code right away — Claude Code's `!`-prefix runner
+ *      displays captured output once the command returns, so we cannot
+ *      block on polling in the foreground.
+ *   2. The background child polls for the broker's ID TOKEN, POSTs it +
+ *      device_id to the SkillMeter activation endpoint, and stores the
+ *      license JWT in credstore. The user re-runs `/skillmeter:signin` (or
+ *      any telemetry-emitting flow) to observe the result.
+ *
+ * This used to authenticate against GitHub. It now uses the broker every
+ * other SkillBench sign-in already goes through, which is what lets somebody
+ * who has never touched GitHub activate a plugin at all: the server resolves
+ * their tenant through workspace membership rather than through a GitHub App
+ * installation they do not have.
  */
 
 const credstore = require("./credstore.js");
@@ -27,10 +30,10 @@ const { clearLicenseStatus } = require("./lib/license-status");
 const {
   STATE_DIR,
   getActivateUrl,
-  getGitHubClientId,
-  GITHUB_DEVICE_CODE_URL,
-  GITHUB_TOKEN_URL,
-  GITHUB_OAUTH_SCOPE,
+  getDeviceCodeUrl,
+  getTokenUrl,
+  getOAuthClientId,
+  OAUTH_SCOPE,
 } = require("./lib/config");
 const { spawnSync, spawn } = require("child_process");
 const fs = require("fs");
@@ -48,8 +51,8 @@ for (const stream of [process.stdout, process.stderr]) {
   } catch {}
 }
 
-// GitHub OAuth client id + device-flow URLs/scope resolve centrally in
-// lib/config (env > settings > dev-bundle > prod default).
+// Broker URL, client id and scope resolve centrally in lib/config
+// (env > settings > dev-bundle > prod default).
 
 const BACKGROUND_LOG = path.join(STATE_DIR, "activate-poll.log");
 
@@ -101,6 +104,14 @@ function copyToClipboard(text) {
 }
 
 async function postForm(url, params) {
+  const { res, payload, text } = await postFormRaw(url, params);
+  if (!res.ok) {
+    throw new Error(`${url} returned ${res.status}: ${text}`);
+  }
+  return payload;
+}
+
+async function postFormRaw(url, params) {
   const body = new URLSearchParams(params).toString();
   const res = await fetch(url, {
     method: "POST",
@@ -111,29 +122,58 @@ async function postForm(url, params) {
     body,
     signal: AbortSignal.timeout(10_000),
   });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`${url} returned ${res.status}: ${text}`);
-  }
-  return res.json();
+  const text = await res.text().catch(() => "");
+  let payload = null;
+  try {
+    payload = JSON.parse(text);
+  } catch {}
+  return { res, payload, text };
+}
+
+// The token endpoint reports "not yet approved" as an ERROR RESPONSE, and
+// OAuth error responses carry HTTP 400 (RFC 6749 §5.2). GitHub was unusual in
+// answering 200 with the error in the body, so the old polling loop could
+// treat every non-2xx as fatal. Against a spec-following broker that would
+// abort the first time round, before the person had any chance to approve.
+//
+// So: a body with an `error` field is data whatever the status says, and only
+// a response we cannot read at all is a transport failure.
+async function postFormExpectingOAuthErrors(url, params) {
+  const { res, payload, text } = await postFormRaw(url, params);
+  if (payload && typeof payload === "object") return payload;
+  throw new Error(`${url} returned ${res.status}: ${text}`);
 }
 
 async function requestDeviceCode() {
-  return postForm(GITHUB_DEVICE_CODE_URL, { client_id: getGitHubClientId(), scope: GITHUB_OAUTH_SCOPE });
+  return postForm(getDeviceCodeUrl(), { client_id: getOAuthClientId(), scope: OAUTH_SCOPE });
 }
 
+// Polls the broker's token endpoint until the person finishes approving in
+// their browser. RFC 8628 verbatim, which is why moving off GitHub changed
+// nothing here but the URL: the grant type, the pending/slow_down/expired
+// error names and the "back off five seconds" rule are all from the spec.
+//
+// Returns the ID TOKEN, not the access token. The broker's access tokens are
+// opaque — they carry no claims and can only be resolved through an admin
+// endpoint /activate has no route to — whereas the id token is a signed JWT
+// /activate verifies against the broker's public JWKS. Asking for `openid` is
+// what makes the broker issue one; without that scope this returns undefined
+// and sign-in fails with "no id_token", which is the honest error.
 async function pollForToken(deviceCode, initialInterval) {
   let interval = initialInterval;
   while (true) {
     await new Promise((r) => setTimeout(r, interval * 1000));
 
-    const payload = await postForm(GITHUB_TOKEN_URL, {
-      client_id: getGitHubClientId(),
+    const payload = await postFormExpectingOAuthErrors(getTokenUrl(), {
+      client_id: getOAuthClientId(),
       device_code: deviceCode,
       grant_type: "urn:ietf:params:oauth:grant-type:device_code",
     });
 
-    if (payload.access_token) return payload.access_token;
+    if (payload.id_token) return payload.id_token;
+    if (payload.access_token && !payload.id_token) {
+      throw new Error("Sign-in returned no id_token — the `openid` scope was not granted.");
+    }
 
     switch (payload.error) {
       case "authorization_pending":
@@ -142,25 +182,25 @@ async function pollForToken(deviceCode, initialInterval) {
         interval += 5;
         continue;
       case "expired_token":
-        throw new Error("The device code expired. Run /skillmeter:signin again.");
+        throw new Error("The code expired. Run /skillmeter:signin again.");
       case "access_denied":
-        throw new Error("Access was denied on GitHub. Aborting.");
+        throw new Error("Sign-in was denied. Aborting.");
       default:
-        throw new Error(`GitHub returned: ${payload.error || "unknown error"}`);
+        throw new Error(`Sign-in failed: ${payload.error || "unknown error"}`);
     }
   }
 }
 
-async function exchangeForLicense(githubToken, deviceId) {
+async function exchangeForLicense(idToken, deviceId) {
   const res = await postBearerJson(
     getActivateUrl(),
-    githubToken,
+    idToken,
     { device_id: deviceId },
     { timeoutMs: 10_000 }
   );
 
   if (res.status === 402) {
-    throw new Error("No active SkillMeter license found for your GitHub organizations.");
+    throw new Error("No active SkillMeter license found for your workspaces.");
   }
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -173,17 +213,18 @@ async function exchangeForLicense(githubToken, deviceId) {
 }
 
 // Background phase: invoked when the script is re-spawned with
-// `--background-poll`. Polls GitHub for the access token, exchanges it for a
-// license, and persists it. The validated org lives in the JWT, so there's no
-// GitHub org fetch. Output goes to BACKGROUND_LOG (redirected by the parent's
-// spawn() stdio) so it can be inspected if activation silently fails.
+// `--background-poll`. Polls the broker for the id token, exchanges it for a
+// license, and persists it. The validated tenant lives in the JWT, so there is
+// no second identity lookup here. Output goes to BACKGROUND_LOG (redirected by
+// the parent's spawn() stdio) so it can be inspected if activation silently
+// fails.
 async function runBackgroundPoll(deviceId, deviceCode, interval) {
   log(`[${new Date().toISOString()}] background poll started (device_id=${deviceId})`);
   try {
-    const githubToken = await pollForToken(deviceCode, interval);
-    log(`[${new Date().toISOString()}] github approval received`);
+    const idToken = await pollForToken(deviceCode, interval);
+    log(`[${new Date().toISOString()}] sign-in approved`);
 
-    const licenseJwt = await exchangeForLicense(githubToken, deviceId);
+    const licenseJwt = await exchangeForLicense(idToken, deviceId);
     log(`[${new Date().toISOString()}] license issued`);
 
     if (!credstore.commitSignin({ jwt: licenseJwt })) {
@@ -245,22 +286,27 @@ async function main() {
     process.exit(1);
   }
 
-  log("Trying gh CLI first...");
-  const silentJwt = await licenseActivation.trySilentGhActivate(deviceId);
-  if (silentJwt) {
-    showSigninStatus();
-    return;
-  }
-
-  log("gh activation did not succeed; starting GitHub device flow.");
+  // There used to be a "try `gh auth token` first" shortcut here. It is gone
+  // with the rest of the GitHub path — but note it was never reached anyway:
+  // it called `licenseActivation.trySilentGhActivate` against a name this file
+  // never required, so every sign-in from an unlicensed state died on
+  // "licenseActivation is not defined". That is true of v0.33.0, v0.34.0 and
+  // v0.34.1, so /skillmeter:signin has not worked in any released version.
+  // Removing the call is what fixes it.
   const device = await requestDeviceCode();
 
   const expiresMin = Math.round(device.expires_in / 60);
   const clipboardCopied = copyToClipboard(device.user_code);
 
+  // verification_uri_complete already carries the code, so the page can fill
+  // the box in and the person only has to confirm. It is optional in RFC 8628,
+  // hence the fallback to the bare URL and the copy that suits each.
+  const verifyUrl = device.verification_uri_complete || device.verification_uri;
+  const prefilled = Boolean(device.verification_uri_complete);
+
   say("");
   say("============================================================");
-  say(" GitHub device login required");
+  say(" SkillBench sign-in required");
   say("============================================================");
   say("");
   say(`  1. Copy this code:`);
@@ -269,15 +315,15 @@ async function main() {
     say("       (already copied to your clipboard)");
   }
   say("");
-  say(`  2. Open in your browser and paste it:`);
-  say(`       ${device.verification_uri}`);
+  say(prefilled ? `  2. Open in your browser and confirm:` : `  2. Open in your browser and paste it:`);
+  say(`       ${verifyUrl}`);
   say("");
   say(`  Code expires in ${expiresMin} minutes.`);
   say("============================================================");
   say("");
 
   // In a real terminal, poll inline with a live spinner so the user sees
-  // progress while they're approving on GitHub. In a non-TTY runner
+  // progress while they're approving in the browser. In a non-TTY runner
   // (Claude Code's `!`-prefix buffers output until exit), fall back to a
   // detached background poll and let the user re-invoke /skillmeter:signin
   // to confirm.
@@ -286,16 +332,16 @@ async function main() {
   } else {
     spawnBackgroundPoll(deviceId, device.device_code, device.interval || 5);
     say("Polling for approval in the background.");
-    say("After approving on GitHub, run /skillmeter:signin again to confirm.");
+    say("After approving in your browser, run /skillmeter:signin again to confirm.");
     say(`(background log: ${BACKGROUND_LOG})`);
   }
 }
 
 async function runForegroundPoll(deviceId, device) {
-  const stop = startSpinner("Waiting for GitHub approval");
+  const stop = startSpinner("Waiting for approval");
   try {
-    const githubToken = await pollForToken(device.device_code, device.interval || 5);
-    const licenseJwt = await exchangeForLicense(githubToken, deviceId);
+    const idToken = await pollForToken(device.device_code, device.interval || 5);
+    const licenseJwt = await exchangeForLicense(idToken, deviceId);
     stop();
     if (!credstore.commitSignin({ jwt: licenseJwt })) {
       say("Sign-in discarded: signed out during issuance.");
