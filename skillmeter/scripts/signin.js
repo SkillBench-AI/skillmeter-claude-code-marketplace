@@ -35,6 +35,7 @@ const {
   getOAuthClientId,
   OAUTH_SCOPE,
 } = require("./lib/config");
+const { brokerReason } = require("./lib/http");
 const { spawnSync, spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
@@ -181,12 +182,27 @@ async function pollForToken(deviceCode, initialInterval) {
       case "slow_down":
         interval += 5;
         continue;
+      // Keeps its own sentence. The broker does not write this one — Hydra
+      // does, and its description says less than the next action does.
       case "expired_token":
         throw new Error("The code expired. Run /skillmeter:signin again.");
+
+      // WHERE THE ONLY EXPLANATION LIVES. Every refusal the broker makes comes
+      // back as this one code, and what distinguishes them is the description
+      // beside it. Thrown from here it travels the whole way on both surfaces
+      // with no further plumbing: the foreground prints `err.message`, and the
+      // background writes it into signin-result.json, which the FileChanged
+      // hook turns into a systemMessage.
       case "access_denied":
-        throw new Error("Sign-in was denied. Aborting.");
+        throw new Error(brokerReason(payload) ?? "Sign-in was denied. Aborting.");
+
+      // Same courtesy for a code we do not know: if the server troubled itself
+      // to say why, that beats repeating the code back at the person.
       default:
-        throw new Error(`Sign-in failed: ${payload.error || "unknown error"}`);
+        throw new Error(
+          brokerReason(payload) ??
+            `Sign-in failed: ${payload.error || "unknown error"}`,
+        );
     }
   }
 }
