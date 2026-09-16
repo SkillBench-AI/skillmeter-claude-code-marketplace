@@ -20,8 +20,8 @@ function readSettingsFile(cwd) {
 
 /**
  * Read a string-valued field under `skillmeter.<key>` from the project's
- * settings file. Used by the activation-URL and GitHub-client-id resolvers
- * to support persistent per-user overrides without an env var.
+ * settings file. Used by the activation-URL, broker-URL and OAuth-client-id
+ * resolvers to support persistent per-user overrides without an env var.
  * @returns {string|null} Trimmed value when present and non-empty; null otherwise.
  */
 function getSkillmeterStringSetting(cwd, key) {

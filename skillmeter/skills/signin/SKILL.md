@@ -1,5 +1,5 @@
 ---
-description: Sign in to SkillMeter with GitHub
+description: Sign in to SkillMeter
 disable-model-invocation: true
 allowed-tools: AskUserQuestion Bash(node *)
 ---
@@ -197,10 +197,20 @@ also explain that the global kill-switch still blocks transmission until
 onboarding list remain off and will ask for an explicit choice when first
 entered; use `/skillmeter:telemetry list` for granular changes.
 
-## Interactive GitHub login required
+## Sign-in required
 
-If the hook says interactive GitHub login is required, reply with that status
-and include the `!`-prefixed command exactly as provided, on its own line in a
-fenced code block. Do not rephrase, shorten, or strip the leading `!`. Tell the
-user to complete GitHub authorization, then run `/skillmeter:signin` again to
-choose organization telemetry.
+This is the branch for any hook status that is not the sign-in state JSON
+above — today that is `Sign-in is required.`, and it is what a person without a
+current licence gets.
+
+Reply with the status the hook gave, and include the `!`-prefixed command
+exactly as provided, on its own line in a fenced code block. Do not rephrase,
+shorten, or strip the leading `!`: the prefix is what makes Claude Code run it
+in the user's own shell, which is the only place the flow has the terminal it
+needs.
+
+Then tell the user to open the URL the command prints, approve the code shown,
+and run `/skillmeter:signin` again to choose organization telemetry.
+
+Do not attempt the sign-in any other way. There is no silent path left — the
+device grant needs a browser, so relaying the command is the whole job here.

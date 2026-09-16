@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
  * Observe direct `/skillmeter:signin` invocation before it expands into a
- * Claude prompt. Only silent gh-based sign-in runs here; the interactive
- * GitHub device flow belongs in the `signin` shell command.
+ * Claude prompt. Nothing signs in here: the device grant needs a browser and a
+ * terminal, so it belongs in the `signin` shell command. What this hook does
+ * is report the current state — already licensed, or how to start.
  *
  * UserPromptExpansion can only block expansion or add context. Blocking makes
  * Claude Code render "operation blocked by hook", so this hook never blocks.
