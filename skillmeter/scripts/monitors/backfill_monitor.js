@@ -6,6 +6,16 @@
  * structured log and emits only meaningful lifecycle summaries to stdout,
  * where Claude Code delivers them as monitor notifications. The complete
  * event stream remains in logs/backfill.ndjson for detailed diagnostics.
+ *
+ * Output contract: every stdout line from a plugin monitor becomes one
+ * Claude-facing notification, so stdout is reserved for events that happen a
+ * bounded number of times per backfill — the lifecycle milestones, and the
+ * one-per-chunk notice that a chunk's retry budget is spent. Per-attempt
+ * failures go to stderr (which surfaces in Claude Code's own logs, not as
+ * notifications), because retries repeat: a line per attempt re-invokes the
+ * session, whose Stop hook spawns the next drain, which fails the same chunks
+ * again. That loop is what made six rejected chunks flood a session with
+ * ~24 notifications a minute; retry_daemon.js has kept to this rule all along.
  */
 
 const fs = require("fs");
@@ -80,11 +90,16 @@ function formatNotification(record) {
         `SkillMeter backfill upload pass complete: ${record.uploaded} sent, ` +
         `${record.failed} failed, ${record.deferred} deferred.`
       );
-    case "upload_failed":
+    // Terminal, and therefore safe to announce: a chunk reports this once, when
+    // its retry budget runs out and it is set aside. `upload_failed` is the
+    // per-attempt event and belongs on stderr (see formatDiagnostic).
+    case "upload_abandoned":
       return (
-        `SkillMeter backfill upload failed: ${record.repository || "repository"} ` +
-        `${record.transcriptId || "transcript"} seq ${record.seq || 0}, ` +
-        `${record.error || `HTTP ${record.httpStatus || "error"}`}.`
+        `SkillMeter backfill gave up on 1 upload chunk after ` +
+        `${record.attempts || 0} attempts ` +
+        `(${record.repository || "repository"} seq ${record.seq || 0}, ` +
+        `${record.error || `HTTP ${record.httpStatus || "error"}`}); ` +
+        `it is set aside, not lost.`
       );
     case "worker_failed":
       return `SkillMeter backfill worker failed: ${record.error || "unknown error"}.`;
@@ -93,8 +108,36 @@ function formatNotification(record) {
   }
 }
 
+/**
+ * The stderr counterpart: repeating, per-attempt detail that is useful when
+ * diagnosing a stuck queue but must never reach the session as a notification.
+ */
+function formatDiagnostic(record) {
+  if (!record || typeof record !== "object") return "";
+  switch (record.event) {
+    case "upload_failed":
+      return (
+        `upload failed: ${record.repository || "repository"} ` +
+        `${record.transcriptId || "transcript"} seq ${record.seq || 0}` +
+        (record.attempts ? ` attempt ${record.attempts}` : "") +
+        `, ${record.error || `HTTP ${record.httpStatus || "error"}`}`
+      );
+    case "upload_deferred":
+      return (
+        `upload deferred: ${record.repository || "repository"} ` +
+        `seq ${record.seq || 0}, ${record.reason || "unknown reason"}`
+      );
+    default:
+      return "";
+  }
+}
+
 function emit(message) {
   if (message) process.stdout.write(message + "\n");
+}
+
+function emitDiagnostic(message) {
+  if (message) process.stderr.write(`[skillmeter-backfill-monitor] ${message}\n`);
 }
 
 function fileSize() {
@@ -157,6 +200,7 @@ async function main() {
     offset = next.offset;
     for (const record of next.records) {
       emit(formatNotification(record));
+      emitDiagnostic(formatDiagnostic(record));
     }
   }
 }
@@ -175,6 +219,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  formatDiagnostic,
   formatNotification,
   pendingBackfillChunks,
 };

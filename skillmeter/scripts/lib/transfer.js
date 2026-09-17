@@ -22,6 +22,14 @@ const { ensureFreshLicense } = require("./license-activation");
 const { getEventTimeoutMs, getTranscriptChunkMaxBytes } = require("./config");
 const { atomicWriteJson, safeReadJson } = require("./io");
 const { appendBackfillLog } = require("./backfill-log");
+const {
+  MAX_UPLOAD_ATTEMPTS,
+  QUARANTINE_SUFFIX,
+  isChunkEligible,
+  isChunkExhausted,
+  quarantinePathFor,
+  recordUploadFailure,
+} = require("./chunk-retry");
 const { parseJsonl, buildChunkPlan } = require("./transcript-delta");
 const {
   PLUGIN_ROOT,
@@ -62,9 +70,11 @@ const gzipAsync = promisify(zlib.gzip);
 const EVENT_TIMEOUT = getEventTimeoutMs();
 const TRANSCRIPT_TIMEOUT = 30_000;
 
-// Delivered `.sent` event logs are retained briefly for diagnostics. Unsent
-// chunks are never age-deleted; policy OFF or a successful acknowledgement is
-// required to remove them.
+// Delivered `.sent` event logs are retained briefly for diagnostics. A chunk
+// still awaiting delivery is never age-deleted; policy OFF or a successful
+// acknowledgement is required to remove it. The one exception is a chunk that
+// spent its retry budget and was quarantined — it is no longer awaiting
+// anything, and at a whole transcript slice each it cannot be kept forever.
 const CLEANUP_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const DRAIN_ONCE_LOCK_FILE = path.join(LOG_DIR, ".drain-once.lock");
 const DRAIN_ONCE_LOCK_STALE_MS = 30_000;
@@ -507,6 +517,50 @@ function chunkTransmissionAllowed(meta, context) {
   return credstore.isTelemetryTransmissionAllowed(context.repoKey);
 }
 
+/**
+ * Account for one failed upload attempt against a chunk's retry budget.
+ *
+ * Writes the attempt count and the next eligible time back to the meta sidecar
+ * so every drain path — the retry daemon, the Stop hook's detached drain, the
+ * SessionStart pass — shares one budget per chunk rather than each retrying at
+ * its own cadence. When the budget is spent the pair is renamed aside: no drain
+ * lists it again, and nothing is deleted, so a chunk the backend has since
+ * learned to accept can be restored by dropping the suffix.
+ *
+ * Best-effort, like every other queue write here: a sidecar we cannot update
+ * just means the chunk is retried as before rather than blocking the upload.
+ */
+function noteChunkUploadFailure(bodyPath, metaPath, meta, error) {
+  const updated = recordUploadFailure(meta, { now: Date.now(), error });
+  try {
+    atomicWriteJson(metaPath, updated);
+  } catch {
+    return { abandoned: false, attempts: updated.uploadAttempts };
+  }
+  if (!isChunkExhausted(updated)) {
+    return { abandoned: false, attempts: updated.uploadAttempts };
+  }
+  try {
+    fs.renameSync(metaPath, quarantinePathFor(metaPath));
+    fs.renameSync(bodyPath, quarantinePathFor(bodyPath));
+  } catch (err) {
+    console.error(
+      `[skillmeter] Transcript chunk quarantine failed: ${err.message}`
+    );
+    return { abandoned: false, attempts: updated.uploadAttempts };
+  }
+  console.error(
+    `[skillmeter] Transcript chunk given up on after ${updated.uploadAttempts} ` +
+      `attempts (${error}) — set aside, not deleted`
+  );
+  logBackfillChunk(meta, "upload_abandoned", {
+    attempts: updated.uploadAttempts,
+    maxAttempts: MAX_UPLOAD_ATTEMPTS,
+    error: String(error),
+  });
+  return { abandoned: true, attempts: updated.uploadAttempts };
+}
+
 // Upload one delta chunk. On 2xx, deletes the body then the meta; otherwise
 // leaves both for retry. Result shape matches drainFailedLogs entries.
 async function uploadDeltaChunk(bodyPath, deviceId, timeoutMs = TRANSCRIPT_TIMEOUT) {
@@ -569,8 +623,12 @@ async function uploadDeltaChunk(bodyPath, deviceId, timeoutMs = TRANSCRIPT_TIMEO
     compressed = await gzipAsync(raw);
   } catch (err) {
     console.error(`[skillmeter] Transcript chunk gzip failed: ${err.message}`);
-    logBackfillChunk(meta, "upload_failed", { error: "gzip_failed" });
-    return { ok: false, error: err.message };
+    const budget = noteChunkUploadFailure(bodyPath, metaPath, meta, "gzip_failed");
+    logBackfillChunk(meta, "upload_failed", {
+      error: "gzip_failed",
+      attempts: budget.attempts,
+    });
+    return { ok: false, error: err.message, abandoned: budget.abandoned };
   }
 
   const removeChunk = () => {
@@ -614,20 +672,48 @@ async function uploadDeltaChunk(bodyPath, deviceId, timeoutMs = TRANSCRIPT_TIMEO
       removeChunk();
       return { ok: true };
     }
-    console.error(`[skillmeter] Transcript chunk transfer failed: HTTP ${res.status} — kept for retry`);
+    const budget = noteChunkUploadFailure(
+      bodyPath,
+      metaPath,
+      meta,
+      `HTTP ${res.status}`
+    );
+    console.error(
+      `[skillmeter] Transcript chunk transfer failed: HTTP ${res.status} — ` +
+        (budget.abandoned
+          ? "retry budget spent, set aside"
+          : `kept for retry (attempt ${budget.attempts}/${MAX_UPLOAD_ATTEMPTS})`)
+    );
     logBackfillChunk(meta, "upload_failed", {
       httpStatus: res.status,
       durationMs: Date.now() - startedAt,
       error: `HTTP ${res.status}`,
+      attempts: budget.attempts,
     });
-    return { ok: false, error: `HTTP ${res.status}` };
+    return {
+      ok: false,
+      error: `HTTP ${res.status}`,
+      abandoned: budget.abandoned,
+    };
   } catch (err) {
-    console.error(`[skillmeter] Transcript chunk transfer error: ${err.message} — kept for retry`);
+    const budget = noteChunkUploadFailure(
+      bodyPath,
+      metaPath,
+      meta,
+      String(err?.message || err)
+    );
+    console.error(
+      `[skillmeter] Transcript chunk transfer error: ${err.message} — ` +
+        (budget.abandoned
+          ? "retry budget spent, set aside"
+          : `kept for retry (attempt ${budget.attempts}/${MAX_UPLOAD_ATTEMPTS})`)
+    );
     logBackfillChunk(meta, "upload_failed", {
       durationMs: Date.now() - startedAt,
       error: String(err?.message || err),
+      attempts: budget.attempts,
     });
-    return { ok: false, error: err.message };
+    return { ok: false, error: err.message, abandoned: budget.abandoned };
   }
 }
 
@@ -637,7 +723,22 @@ async function drainDeltaChunks(timeoutMs) {
   if (!lock) return { ok: 0, errors: [] };
   try {
     purgeDisallowedQueues();
-    const files = listDeltaChunks();
+    const queued = listDeltaChunks();
+    if (queued.length === 0) return { ok: 0, errors: [] };
+    // Chunks that failed recently are waiting out their per-chunk backoff.
+    // Skipping them here is what bounds the retry rate: drains are spawned by
+    // the Stop hook as well as by the retry daemon, so without this a chunk the
+    // backend always rejects is re-sent at whatever rate turns end — and, via
+    // the monitor's notifications, those two feed each other.
+    const now = Date.now();
+    const files = queued.filter((file) =>
+      isChunkEligible(
+        safeReadJson(file.replace(/\.jsonl$/, ".meta.json"), null),
+        now
+      )
+    );
+    // Nothing eligible: return before the batch log, so a backed-off queue
+    // stays quiet instead of announcing an empty pass on every drain.
     if (files.length === 0) return { ok: 0, errors: [] };
     const backfillEntries = files.flatMap((file) => {
       const meta = safeReadJson(file.replace(/\.jsonl$/, ".meta.json"), null);
@@ -680,6 +781,7 @@ async function drainDeltaChunks(timeoutMs) {
       let uploaded = 0;
       let failed = 0;
       let deferred = 0;
+      let abandoned = 0;
       files.forEach((file, index) => {
         if (!backfillFiles.has(file)) return;
         const result = results[index];
@@ -689,6 +791,7 @@ async function drainDeltaChunks(timeoutMs) {
           uploaded++;
         } else if (result.value?.error) {
           failed++;
+          if (result.value.abandoned) abandoned++;
         } else {
           deferred++;
         }
@@ -699,6 +802,7 @@ async function drainDeltaChunks(timeoutMs) {
         uploaded,
         failed,
         deferred,
+        abandoned,
       });
     }
     return tally(results);
@@ -1030,8 +1134,9 @@ function retryFailedTranscripts() {
 }
 
 /**
- * Delete event logs already delivered (the `.sent` markers). Unsent
- * repository-bound chunks and cursors are intentionally retained.
+ * Delete event logs already delivered (the `.sent` markers) and chunks that
+ * spent their retry budget long ago. Unsent repository-bound chunks and cursors
+ * are intentionally retained.
  */
 function cleanupStaleFiles() {
   const now = Date.now();
@@ -1042,6 +1147,17 @@ function cleanupStaleFiles() {
       for (const f of fs.readdirSync(context.root)) {
         if (/^events\.jsonl\.\d+\.sent$/.test(f)) {
           candidates.push(path.join(context.root, f));
+        }
+      }
+    } catch {}
+    // Quarantined chunks are kept so a rejection the backend later learns to
+    // accept can be restored by hand, but they are whole transcript slices —
+    // tens of megabytes each — so they age out on the same clock as everything
+    // else here rather than sitting on disk forever.
+    try {
+      for (const f of fs.readdirSync(context.chunks)) {
+        if (f.endsWith(QUARANTINE_SUFFIX)) {
+          candidates.push(path.join(context.chunks, f));
         }
       }
     } catch {}
