@@ -20,6 +20,7 @@ const {
   appendBackfillLog,
 } = require("../scripts/lib/backfill-log");
 const {
+  formatDiagnostic,
   formatNotification,
   pendingBackfillChunks,
 } = require("../scripts/monitors/backfill_monitor");
@@ -119,4 +120,58 @@ test("monitor counts only backfill upload chunks", () => {
     promptId: "live",
   });
   assert.equal(pendingBackfillChunks(), 1);
+});
+
+// ---- output contract -------------------------------------------------------
+// Every stdout line from a plugin monitor becomes one Claude-facing
+// notification, so a per-failure line is a flood: the notification re-invokes
+// the session, the session's Stop hook spawns another drain, and that drain
+// fails the same chunks again. Retry noise goes to stderr instead.
+
+test("per-attempt upload failures never become Claude notifications", () => {
+  assert.equal(
+    formatNotification({
+      event: "upload_failed",
+      repository: "github.com/skillbench-ai/example",
+      transcriptId: "e982c12e-621b-49c6-9a82-564ab0fb7f9c",
+      seq: 3,
+      httpStatus: 500,
+      error: "HTTP 500",
+    }),
+    ""
+  );
+  assert.equal(
+    formatNotification({ event: "upload_deferred", reason: "license_unavailable" }),
+    ""
+  );
+});
+
+test("retry noise is still visible as monitor diagnostics on stderr", () => {
+  assert.match(
+    formatDiagnostic({
+      event: "upload_failed",
+      repository: "github.com/skillbench-ai/example",
+      transcriptId: "e982c12e-621b-49c6-9a82-564ab0fb7f9c",
+      seq: 3,
+      attempts: 4,
+      error: "HTTP 500",
+    }),
+    /seq 3.*HTTP 500/
+  );
+  assert.equal(formatDiagnostic({ event: "snapshot_completed" }), "");
+});
+
+test("giving up on a chunk is announced once, because it is actionable", () => {
+  assert.equal(
+    formatNotification({
+      event: "upload_abandoned",
+      repository: "github.com/skillbench-ai/example",
+      transcriptId: "e982c12e-621b-49c6-9a82-564ab0fb7f9c",
+      seq: 3,
+      attempts: 8,
+      error: "HTTP 500",
+    }),
+    "SkillMeter backfill gave up on 1 upload chunk after 8 attempts " +
+      "(github.com/skillbench-ai/example seq 3, HTTP 500); it is set aside, not lost."
+  );
 });
