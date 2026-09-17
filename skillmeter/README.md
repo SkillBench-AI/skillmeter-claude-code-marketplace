@@ -351,6 +351,8 @@ Logs are sent to the backend from durable filesystem queues:
 
 All uploads use gzip compression. Queues are partitioned by canonical GitHub repository identity, and the current global, organization, and repository policy is checked again immediately before each request. Successfully uploaded event batches are renamed with `.sent`; successfully uploaded transcript delta chunks are deleted. Failed uploads remain queued for retry.
 
+Each transcript delta chunk carries its own retry budget, recorded in its `.meta.json` sidecar so every drain path shares one budget rather than each retrying at its own pace. A failed attempt buys a doubling wait before the next one (1 minute, up to a 30-minute cap), and drains skip a chunk until its wait has passed. After 8 attempts — roughly 1.5 hours — the chunk is set aside: both files are renamed with a `.quarantined` suffix, which no drain lists. Nothing is deleted, so a chunk the backend later accepts can be requeued by removing that suffix; quarantined chunks are whole transcript slices, so they are eventually swept by the same 30-day cleanup as delivered event logs.
+
 ### License refresh
 
 Uploads authenticate with a short-lived license. While a session is open the

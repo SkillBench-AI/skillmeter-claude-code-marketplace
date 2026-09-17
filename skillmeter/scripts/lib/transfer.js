@@ -70,9 +70,11 @@ const gzipAsync = promisify(zlib.gzip);
 const EVENT_TIMEOUT = getEventTimeoutMs();
 const TRANSCRIPT_TIMEOUT = 30_000;
 
-// Delivered `.sent` event logs are retained briefly for diagnostics. Unsent
-// chunks are never age-deleted; policy OFF or a successful acknowledgement is
-// required to remove them.
+// Delivered `.sent` event logs are retained briefly for diagnostics. A chunk
+// still awaiting delivery is never age-deleted; policy OFF or a successful
+// acknowledgement is required to remove it. The one exception is a chunk that
+// spent its retry budget and was quarantined — it is no longer awaiting
+// anything, and at a whole transcript slice each it cannot be kept forever.
 const CLEANUP_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const DRAIN_ONCE_LOCK_FILE = path.join(LOG_DIR, ".drain-once.lock");
 const DRAIN_ONCE_LOCK_STALE_MS = 30_000;
