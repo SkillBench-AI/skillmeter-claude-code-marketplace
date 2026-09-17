@@ -661,4 +661,8 @@ test("telemetry skill routes list through the repository toggle UI", () => {
     /repository_telemetry\.js toggle REVISION ID\.\.\./
   );
   assert.match(TELEMETRY_SKILL, /passing only the validated/);
+  assert.match(
+    TELEMETRY_SKILL,
+    /Judge each page only on what it returns:/
+  );
 });
