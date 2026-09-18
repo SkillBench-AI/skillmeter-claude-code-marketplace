@@ -109,10 +109,10 @@ in it carries `reason: "stale_policy"`, in which case the ids before it were
 applied and the rest were not. Either way, keep whatever was applied, report it,
 do not retry the selection automatically, and re-run `list` — its `revision` is
 the one the next `toggle` uses.
-Re-paginate the repositories from the page that went stale together with those
-on pages not yet shown — by the same four-at-a-time rule, or as the
-single-repository question if only one is left, since a question needs at least
-two options. Numbering restarts with that pagination: the `Repos X/N` header,
+Re-paginate the repositories from the page that went stale, less any the command
+did apply, together with those on pages not yet shown — by the same
+four-at-a-time rule, or as the single-repository question if only one is left,
+since a question needs at least two options. Numbering restarts with that pagination: the `Repos X/N` header,
 the `Page X/N` question text and `Reviewed X/N pages` all follow it, so say that
 the page count changed.
 
