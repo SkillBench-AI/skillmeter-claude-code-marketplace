@@ -665,4 +665,13 @@ test("telemetry skill routes list through the repository toggle UI", () => {
     TELEMETRY_SKILL,
     /Judge each page only on what it returns:/
   );
+  assert.match(TELEMETRY_SKILL, /continue\s+to the next one/);
+  assert.match(
+    TELEMETRY_SKILL,
+    /`revision` returned by the previous\s+`toggle`/
+  );
+  assert.match(
+    TELEMETRY_SKILL,
+    /every changed repository and every\s+unchanged one with its reason/
+  );
 });

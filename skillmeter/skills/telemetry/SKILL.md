@@ -34,8 +34,8 @@ Report the global state and the enabled and disabled counts. Repositories whose
 their `optionLabel` and `description`, but do not offer them as toggle choices.
 
 Before opening the first page, mention in one line that
-`/skillmeter:telemetry enable`, run inside a repository, turns that repository
-on without the picker at all.
+`/skillmeter:telemetry enable`, run inside a repository, opts that repository in
+without the picker at all — the global and organization gates still apply.
 
 For repositories with a non-null `action`, use `AskUserQuestion`. Claude Code's
 native question UI supports only 2-4 options per question; it does not expose a
