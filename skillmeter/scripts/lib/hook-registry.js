@@ -1,21 +1,7 @@
 /**
- * Hook field-mapper registry.
- *
- * Most hooks are pure "pick a few fields off the input" mappers with no side
- * effects — historically one ~8-line file each. They're consolidated here as a
- * single table keyed by hook event name; scripts/hook.js is the generic
- * entrypoint that looks up the mapper and hands it to logger.runHook. Adding a
- * new observation-only hook is now a one-line entry here plus a hooks.json line.
- *
- * Each mapper is `(input, ctx) => data`, exactly the `buildData` contract
- * runHook expects (ctx provides { cwd, getTranscriptId }). Payloads
- * are returned raw; runHook's central sanitizeEventData boundary HMAC-hashes
- * path-bearing keys (file_path / path / notebook_path / cwd) and redacts
- * secrets/PII. Field names track the current Claude Code hook input schema.
- *
- * Hooks that need runHook options (afterLog/afterSkip/onGate) or non-trivial
- * logic keep their own dedicated entrypoint and are intentionally absent here:
- * session_start, session_end, stop, on_signin_result, user_prompt_expansion_signin.
+ * Observation-hook field mappers: (input, ctx) => data.
+ * runHook sanitizes returned fields before queueing. Hooks with lifecycle
+ * callbacks or custom logic keep dedicated entrypoints.
  */
 
 module.exports = {

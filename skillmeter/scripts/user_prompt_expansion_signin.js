@@ -98,8 +98,7 @@ async function main() {
   // Existing and new users receive the same one-time backfill lifecycle.
   initializeBackfillLifecycle();
 
-  // Re-running signin re-arms the gh fallback and clears any signed-out
-  // sentinel left by /skillmeter:signout — one atomic write.
+  // Explicit sign-in clears the signed-out sentinel and resets refresh status.
   credstore.markEngaged();
   clearLicenseStatus({ source: "signin" });
 
@@ -118,11 +117,7 @@ async function main() {
     return;
   }
 
-  // There is nothing to try silently any more. Signing in means the device
-  // grant, and the device grant means a browser — so the only useful thing
-  // this hook can do for somebody without a licence is tell them how to start
-  // it. The `gh auth token` shortcut that used to run here went with the rest
-  // of the GitHub path.
+  // Without a current license, direct the user to the browser-based device flow.
   addContext(`Sign-in is required.\n${RUN_INSTRUCTION}`);
 }
 

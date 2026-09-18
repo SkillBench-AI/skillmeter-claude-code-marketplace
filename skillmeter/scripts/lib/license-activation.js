@@ -1,36 +1,9 @@
 /**
- * License activation orchestrator.
- *
- * Owns the one way a device gets a license JWT without an interactive
- * sign-in: rotating an existing token through the Lambda's /refresh. The
- * validated tenant is minted into the JWT by the activator (no client lookup).
- *
- * There used to be a second way — reading `gh auth token` and exchanging it at
- * /activate. It went with the rest of the GitHub path. Nothing replaces it
- * yet, so a token that can no longer be rotated now ends in a terminal state
- * and the person runs /skillmeter:signin. See the refresh policy below.
- *
- * Refresh policy (ADR 001, decision 2):
- *   - /refresh is the only call made on a routine expiry.
- *   - A token that can no longer be rotated — /refresh answered 410 (sliding
- *     window exceeded) or 401 (signature no longer valid) — is terminal. There
- *     is no silent recovery: the device grant needs a browser, so only
- *     /skillmeter:signin can mint a new licence. Every other refresh failure
- *     is transient: keep the token, back off, retry /refresh later.
- *
- *     This is the one place the GitHub removal costs something. A `gh`-
- *     authenticated user used to cross the seven-day window without noticing.
- *     Wiring up the broker's own refresh_token — already issued, since the
- *     device flow asks for `offline` — would restore that and is the obvious
- *     next step.
- *   - Consecutive failures back off exponentially (see license-status.js) and
- *     end in a terminal state that stops retrying until SessionStart or
- *     /skillmeter:signin clears it. 402 (license revoked), a token that can no
- *     longer be rotated, and an exhausted backoff are terminal.
- *   - Every outcome is written to the license status record so the daemon,
- *     hooks, and skills can read it without a network call.
- *
- * The exported surface is limited to activation and refresh orchestration.
+ * License refresh and retry orchestration, following ADR001.
+ * Refresh 401/410 requires interactive sign-in; 402 marks the license revoked.
+ * Other failures retain the token and use the shared status record for backoff.
+ * SessionStart or explicit sign-in can reset terminal retry state.
+ * No background path starts a new broker device grant.
  */
 
 const fs = require("fs");
@@ -113,15 +86,8 @@ async function refreshExpiredJwt(jwt, deviceId) {
   return { outcome: "rotated", token: newJwt };
 }
 
-// ---------------------------------------------------------------------------
-// Refresh orchestration with cross-process single-flight.
-//
-// Callers: SessionStart (once per session), the queue drains (right before an
-// upload), and the retry-daemon monitor (every sweep, so a long session never
-// runs on an expired token). A file lock collapses concurrent callers into a
-// single /refresh round-trip; the license status record supplies backoff and
-// terminal decisions across processes.
-// ---------------------------------------------------------------------------
+// SessionStart, queue drains and the retry monitor share refresh coordination.
+// The status record supplies backoff and terminal state across processes.
 
 const LICENSE_REFRESH_LOCK_FILE = path.join(LOG_DIR, ".license-refresh.lock");
 // Don't retry a refresh within this window of the last attempt. Also serves as
@@ -162,20 +128,9 @@ function shouldRefresh(
 }
 
 /**
- * Take the refresh lock. Returns true only for the single process that ends up
- * owning it.
- *
- * Fast path: exclusive create (`wx`). When a lock exists and the caller judged
- * it stale, the takeover is a two-step atomic claim: re-check that the file is
- * still older than the cooldown, then `rename` it to a per-process claim name.
- * Only one process can rename a given file, so a second taker gets ENOENT and
- * backs off, and a live lock created by a faster process in the meantime fails
- * the re-check and is left alone. After a successful claim the new lock is
- * created with `wx` again; EEXIST there means a third process created one
- * between our claim and our create, and we back off too.
- *
- * Best-effort: I/O errors other than the expected EEXIST/ENOENT let the refresh
- * proceed, matching the plugin's never-block policy.
+ * Try exclusive lock creation, then reclaim a lock older than the cooldown.
+ * Recheck age before renaming and create the replacement exclusively. This is
+ * best-effort coordination: some I/O errors allow refresh to proceed unlocked.
  */
 function acquireRefreshLock(staleLockPresent, cooldownMs = LICENSE_REFRESH_COOLDOWN_MS, now = Date.now()) {
   const stamp = `${process.pid} ${now}\n`;
@@ -232,10 +187,8 @@ function acquireRefreshLock(staleLockPresent, cooldownMs = LICENSE_REFRESH_COOLD
 async function refreshLicense(deviceId, { source = "unknown", aheadMs = 0 } = {}) {
   const current = credstore.getLicenseTokenUncached();
   if (current && !credstore.isLicenseTokenExpired(current, renewSkewSeconds(aheadMs))) return current;
-  // SessionStart and queue drainers may refresh an existing sign-in, but must
-  // never create a brand-new sign-in before the user invokes /skillmeter:signin.
-  // (ADR 001 decision 4 relaxes this for devices with a prior-sign-in marker;
-  // that lands with A4.)
+  // Refresh requires an existing sign-in. A missing license requires
+  // the user to invoke /skillmeter:signin.
   if (!current || !deviceId) return null;
   if (credstore.getSignedOut()) return null;
 
@@ -256,16 +209,13 @@ async function refreshLicense(deviceId, { source = "unknown", aheadMs = 0 } = {}
       });
       return null;
     case "rejected":
-      break; // fall through to re-activation
+      break; // record that interactive sign-in is required
     default:
       return null;
   }
 
-  // The stored token can no longer be rotated (410/401), and nothing here can
-  // mint a new one: the device grant needs a browser the daemon does not have.
-  // Record it as terminal so the retry loop stops and the status record can
-  // tell the person what to do, rather than burning the backoff on a call that
-  // cannot succeed.
+  // Refresh 401/410 requires a new browser-approved sign-in. Record a terminal
+  // state so background callers do not keep retrying this token.
   licenseStatus.recordTerminal({
     source,
     reason: TERMINAL_REASONS.REACTIVATION_REQUIRED,

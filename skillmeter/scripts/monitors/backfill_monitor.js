@@ -1,21 +1,9 @@
 #!/usr/bin/env node
 /**
- * Claude Code plugin monitor for the detached historical-backfill pipeline.
- *
- * The worker and HTTP drain remain detached. This process tails their shared
- * structured log and emits only meaningful lifecycle summaries to stdout,
- * where Claude Code delivers them as monitor notifications. The complete
- * event stream remains in logs/backfill.ndjson for detailed diagnostics.
- *
- * Output contract: every stdout line from a plugin monitor becomes one
- * Claude-facing notification, so stdout is reserved for events that happen a
- * bounded number of times per backfill — the lifecycle milestones, and the
- * one-per-chunk notice that a chunk's retry budget is spent. Per-attempt
- * failures go to stderr (which surfaces in Claude Code's own logs, not as
- * notifications), because retries repeat: a line per attempt re-invokes the
- * session, whose Stop hook spawns the next drain, which fails the same chunks
- * again. That loop is what made six rejected chunks flood a session with
- * ~24 notifications a minute; retry_daemon.js has kept to this rule all along.
+ * Tail detached backfill diagnostics. Emit bounded lifecycle and quarantine
+ * notices on stdout; each line becomes a Claude notification. Send per-attempt
+ * errors to stderr to avoid notification-driven Stop/upload retry loops.
+ * The full local event stream remains in logs/backfill.ndjson.
  */
 
 const fs = require("fs");

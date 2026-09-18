@@ -1,18 +1,7 @@
 /**
- * Pure delta-computation core for uuid-cursor transcript upload.
- *
- * The plugin used to re-upload the ENTIRE transcript on every Stop hook, which
- * blew past the backend's 6 MB request limit on long sessions (HTTP 413). This
- * module computes the *delta* — only the transcript lines added since the last
- * successfully-staged line — anchored on each content line's stable `uuid`.
- *
- * Anchoring on `uuid` (a content identity) rather than a byte/line offset makes
- * transcript rewrites/compaction *detectable*: if the last-sent uuid is no
- * longer present, we fall back to a full "reset" send instead of silently
- * mis-slicing a rewritten file.
- *
- * Leaf module: imports only ./sanitize so the whole file is unit-testable with
- * plain objects (no fs, network, or credstore).
+ * Plan transcript chunks from the last staged content UUID. A missing anchor
+ * indicates a rewrite/compaction and starts a full reset. Persist the new cursor
+ * only after chunks are durable. No filesystem, network or credential access.
  */
 
 const { sanitizeLine } = require("./sanitize");

@@ -1,17 +1,9 @@
 "use strict";
 
 /**
- * Test bootstrap — MUST be loaded before any `scripts/` module.
- *
- * CLAUDE_PLUGIN_DATA is mandatory at runtime (lib/paths.js throws without it),
- * so every test process needs one. It is forced to a fresh temp dir rather than
- * merely defaulted: a developer or CI runner with the variable already exported
- * for a real plugin would otherwise have the suite read and write that real
- * plugin data directory. Individual tests may still point it at their own dir
- * via setTestEnv after this module has loaded.
- *
- * Requiring `testing/helpers` pulls this in, so only test files that use no
- * helpers need to require it directly.
+ * Load before scripts/ modules; testing/helpers imports this automatically.
+ * Force CLAUDE_PLUGIN_DATA to a fresh temporary directory so inherited settings
+ * cannot point tests at real queues. Tests may then select their own temp root.
  */
 
 const { after } = require("node:test");

@@ -340,13 +340,8 @@ function spawnDetachedDrain() {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Delta transcript upload (uuid-cursor)
-//
-// Instead of re-staging the whole transcript every Stop, seal only the lines
-// added since the last-sent uuid as durable chunks the drain uploads
-// independently. See scripts/lib/transcript-delta.js for the pure planning.
-// ---------------------------------------------------------------------------
+// Stage lines after the last durable cursor UUID into independent chunks.
+// Pure planning lives in lib/transcript-delta.js.
 
 function cursorPath(transcriptId, repository) {
   if (!repository?.repoKey) return "";
@@ -518,17 +513,9 @@ function chunkTransmissionAllowed(meta, context) {
 }
 
 /**
- * Account for one failed upload attempt against a chunk's retry budget.
- *
- * Writes the attempt count and the next eligible time back to the meta sidecar
- * so every drain path — the retry daemon, the Stop hook's detached drain, the
- * SessionStart pass — shares one budget per chunk rather than each retrying at
- * its own cadence. When the budget is spent the pair is renamed aside: no drain
- * lists it again, and nothing is deleted, so a chunk the backend has since
- * learned to accept can be restored by dropping the suffix.
- *
- * Best-effort, like every other queue write here: a sidecar we cannot update
- * just means the chunk is retried as before rather than blocking the upload.
+ * Persist failure count and next-attempt time in the chunk sidecar so all drains
+ * share one budget. Exhausted body/metadata pairs get a .quarantined suffix and
+ * remain subject to cleanup. A sidecar write failure leaves the prior retry state.
  */
 function noteChunkUploadFailure(bodyPath, metaPath, meta, error) {
   const updated = recordUploadFailure(meta, { now: Date.now(), error });

@@ -1,11 +1,7 @@
 #!/usr/bin/env node
 /**
- * One-shot durable queue drain, spawned detached by final-session hooks.
- *
- * This process exists to reduce upload latency without making Claude Code wait
- * on network I/O. Queue files remain the source of truth: failed uploads leave
- * sealed event logs and transcript delta chunks on disk for SessionStart /
- * monitor retry.
+ * Drain durable queues in a detached process so hooks do not wait on uploads.
+ * Failed uploads remain available for SessionStart or monitor retries.
  */
 
 const {

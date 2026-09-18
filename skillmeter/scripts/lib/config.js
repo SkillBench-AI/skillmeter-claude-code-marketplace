@@ -1,20 +1,7 @@
 /**
- * Central configuration resolver for the plugin.
- *
- * Every tunable URL / id / knob is resolved here through ONE precedence rule so
- * the "how do I point this at a dev environment" story lives in a single file
- * instead of being re-implemented in five modules.
- *
- * Precedence (per value):
- *   individual env var  >  settings.local.json string  >  dev-bundle default
- *   (only when SKILLMETER_ENV=dev)  >  prod default
- *
- * With no env set and SKILLMETER_ENV unset this collapses to the historical
- * chain (env > setting > prod default), so prod behavior is byte-identical.
- *
- * Layering: this is a LEAF module — it requires only os/path and ./settings
- * (itself an fs/path-only leaf). It must never require paths/credstore/jwt, so
- * paths.js can source STATE_DIR/CRED_FILE from here without a cycle.
+ * Resolve configuration in order: environment, project string setting, dev
+ * bundle when SKILLMETER_ENV=dev, then production default.
+ * Keep this module independent of paths, credstore and jwt to avoid import cycles.
  */
 
 const os = require("os");
@@ -24,8 +11,8 @@ const { getSkillmeterStringSetting } = require("./settings");
 // Single master switch. Eager: the environment for a process is fixed at launch.
 const IS_DEV = process.env.SKILLMETER_ENV === "dev";
 
-// --- Prod defaults (verbatim from their former homes) ---
-const PROD_ACTIVATE_URL = "https://api.skillbench.ai/activate"; // was license-activation.js:25
+// Production defaults
+const PROD_ACTIVATE_URL = "https://api.skillbench.ai/activate";
 const PROD_BROKER_URL = "https://id.skillbench.ai";
 
 // --- Dev bundle (SKILLMETER_ENV=dev) ---
@@ -34,25 +21,12 @@ const DEV_BROKER_URL = "https://id.dev.skillbench.com";
 const DEV_STATE_DIRNAME = ".skillbench-dev";
 const PROD_STATE_DIRNAME = ".skillbench";
 
-// --- Broker device-flow constants ---
-//
-// Sign-in used to be a GitHub OAuth device flow. It is now the same RFC 8628
-// flow against our own broker (Ory Hydra), which is where every other SkillBench
-// sign-in already goes. What changes is only where the two URLs point, which
-// client id is used, and which scope is asked for — the protocol is identical,
-// down to the grant type string.
-//
-// The client is PUBLIC: no secret, because a program installed on a laptop
-// cannot keep one. It is registered per environment by skillbench-infra's
-// hydra-plugin-client unit under the same id in each, so unlike the GitHub
-// OAuth Apps there is no second id to fill in. (The dev GitHub client id never
-// was filled in, which is why dev sign-in has never worked.)
+// Broker device flow uses a public client with no embedded secret.
+// The same client ID is registered in each environment.
 const OAUTH_CLIENT_ID = "skillmeter-plugin";
 
-// Must not exceed what the client is registered with. The mutator registers
-// exactly this string, so this is that string — not a guess at a subset.
-// `openid` is the one that matters: it is what makes the broker return an
-// id token, and the id token is what /activate verifies.
+// Keep scopes aligned with broker client registration. openid is required
+// for the ID token used by /activate.
 const OAUTH_SCOPE = "openid offline email profile";
 
 /**

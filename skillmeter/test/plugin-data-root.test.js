@@ -125,15 +125,8 @@ test("skill commands stay shaped for the Bash(node *) grant", () => {
   assert.ok(checked > 0, "expected skill commands to check");
 });
 
-// Regression for v0.32.0 and v0.32.1. Monitors (monitors.json) and the
-// `node ...` commands inside SKILL.md run with NEITHER CLAUDE_PLUGIN_DATA nor
-// CLAUDE_PLUGIN_ROOT in their environment — the host only substitutes the root
-// into the command text. v0.32.0 threw because the data dir was mandatory;
-// v0.32.1 still threw because the derivation read the root from the env.
-//
-// This drives the real entrypoint the way the host launches it (bare `node
-// <absolute path>`, cleared plugin env) rather than requiring a module in
-// process, which is what let both regressions ship.
+// Run the real entrypoint without plugin environment variables, as skill
+// commands may be launched. Verify data-root derivation from the install layout.
 test("a monitor launched with no plugin env at all resolves its queue", () => {
   const { pluginRoot, expected } = makeHostLayout();
   const source = path.resolve(__dirname, "..", "scripts");

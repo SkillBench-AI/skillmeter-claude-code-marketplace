@@ -1,14 +1,8 @@
 #!/usr/bin/env node
 /**
- * CLI wrapper around lib/backfill-scan.js. Prints a summary of historical
- * Claude Code sessions partitioned by org-scope eligibility. Used for local
- * verification today; will become the input feed for the detached backfill
- * uploader.
- *
- * Usage:
- *   node backfill_scan.js            # summary only
- *   node backfill_scan.js --verbose  # also list included session files
- *   node backfill_scan.js --json     # machine-readable full output
+ * Inspect historical session eligibility with lib/backfill-scan.js.
+ * Usage: node backfill_scan.js [--verbose|--json].
+ * Verbose and JSON output include local paths; keep them out of public reports.
  */
 
 const { scanHistoricalSessions } = require("./lib/backfill-scan");

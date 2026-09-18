@@ -25,13 +25,8 @@ function writeStore(data) {
   atomicWriteJson(CRED_FILE, data);
 }
 
-// ---------------------------------------------------------------------------
-// Sign-in result sentinel — records the outcome of an interactive sign-in
-// attempt so a FileChanged hook can notify success/failure without the user
-// re-running /skillmeter:signin. Kept in its own file (not credentials.json,
-// which license refresh rewrites often) so a watcher fires only on real
-// sign-in attempts, not on every token refresh.
-// ---------------------------------------------------------------------------
+// Sign-in result sentinel: FileChanged reports completion of detached sign-in.
+// Keep it separate from credentials so routine refreshes do not trigger notices.
 
 const SIGNIN_RESULT_FILE = path.join(path.dirname(CRED_FILE), "signin-result.json");
 
@@ -57,13 +52,8 @@ function ensureSigninResultFile() {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Upload result sentinel — records the outcome of a successful telemetry drain
-// (which runs in a detached process that can't print to the session). The next
-// SessionStart reads it and shows a one-line "telemetry sent" notice, then
-// marks it notified so it isn't repeated. Written only when a drain uploaded
-// something.
-// ---------------------------------------------------------------------------
+// Upload result sentinel: detached drains record successful uploads here.
+// SessionStart shows the notice once and marks it notified.
 
 const UPLOAD_RESULT_FILE = path.join(path.dirname(CRED_FILE), "upload-result.json");
 
@@ -157,13 +147,8 @@ function hasValidLicense() {
   return !!t && !isLicenseTokenExpired(t);
 }
 
-// `signed_out` is set by /skillmeter:signout. It blocks the silent gh
-// fallback so a still-authenticated gh CLI doesn't auto-resignin on the
-// next SessionStart. `markEngaged()` (called from /skillmeter:signin) clears it.
-//
-// Reads bypass the cache so a setter run by another process is reflected
-// immediately — relevant when signin runs as a long-lived background poll
-// while the user might invoke signout from a fresh hook process.
+// Sign-out blocks background refresh and in-flight sign-in commits.
+// Read from disk so other processes observe it. Explicit sign-in clears it.
 function getSignedOut() {
   return readStore().signed_out === true;
 }
@@ -206,8 +191,7 @@ function signOut() {
   writeStore(store);
 }
 
-// Called when the user explicitly invokes /skillmeter:signin — clears the
-// signed-out sentinel so the next gh attempt is unblocked.
+// Explicit sign-in clears the signed-out sentinel.
 function markEngaged() {
   const store = readStore();
   delete store.signed_out;

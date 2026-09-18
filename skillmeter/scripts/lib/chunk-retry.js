@@ -1,20 +1,8 @@
 /**
- * Per-chunk upload retry budget for the durable transcript queue.
- *
- * A failed upload leaves its body and meta on disk for the next drain. That is
- * the right default — a backend blip must not lose telemetry — but without a
- * budget it also means a chunk the backend rejects *deterministically* is
- * re-uploaded by every drain pass for the rest of the session. Drains are
- * spawned by the Stop hook as well as by the retry daemon, so the daemon's own
- * adaptive backoff does not bound that: the observed rate was ~24 requests per
- * minute against six chunks that had already failed 55+ times each.
- *
- * So each failure is recorded in the chunk's meta sidecar and buys a doubling
- * wait before the next attempt. Once MAX_UPLOAD_ATTEMPTS is spent the chunk is
- * quarantined — renamed so no drain lists it again, never deleted. Nothing is
- * lost; a quarantined pair can be renamed back once the server side is fixed.
- *
- * Pure: no fs, no network, no clock. Callers pass `now` and do the renaming.
+ * Per-chunk retry budget shared by all drain paths through the metadata sidecar.
+ * Failures schedule exponential backoff; exhausted chunks are renamed out of the
+ * drain list. Quarantined files remain subject to transport cleanup.
+ * This module computes state only; callers read/write files and supply the time.
  */
 
 const MAX_UPLOAD_ATTEMPTS = 8;
@@ -23,14 +11,12 @@ const RETRY_CAP_MS = 30 * 60_000;
 const QUARANTINE_SUFFIX = ".quarantined";
 
 /**
- * Wait before attempt N+1, having just failed attempt N. Doubles from the base
- * and stops at the cap: 1, 2, 4, 8, 16, 30, 30, 30 minutes. Spending the whole
- * budget therefore takes ~1.5 hours, long enough that an outage of any ordinary
- * length is ridden out rather than quarantined.
+ * Delay after failure N: double from the base up to the cap.
+ * Defaults produce waits of 1, 2, 4, 8, 16 and then 30 minutes.
  */
 function retryDelayMs(attempts, base = RETRY_BASE_MS, cap = RETRY_CAP_MS) {
   const n = Number.isFinite(attempts) && attempts > 1 ? Math.floor(attempts) : 1;
-  // 2**52 overflows to Infinity long before this, so clamp the exponent first.
+  // Bound exponentiation for corrupt or unexpectedly large attempt counts.
   const doublings = Math.min(n - 1, 32);
   return Math.min(base * 2 ** doublings, cap);
 }

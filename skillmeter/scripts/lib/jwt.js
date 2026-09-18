@@ -46,26 +46,12 @@ function isJwtExpired(token, {
 }
 
 /**
- * Resolve the telemetry endpoint for the current license. The activation Lambda
- * mints the tenant's meter URL into the standard JWT `aud` (audience) claim —
- * the token's intended recipient IS the tenant's meter host — so each tenant's
- * traffic routes to its own hostname without per-tenant plugin builds.
- * `SKILLMETER_BACKEND_URL` bypasses the JWT entirely for local development /
- * integration tests.
+ * Resolve the telemetry base URL from a development override or the first
+ * HTTP(S) audience in the license. An override changes routing only.
+ * This helper ignores expiry; upload callers separately require a valid bearer.
  *
- * `aud` may be a string or an array of strings (RFC 7519); we take the first
- * `http(s)` URL. No other claim is consulted — the token must carry the endpoint
- * in `aud`.
- *
- * No expiry gate: the endpoint is routing info (the per-tenant meter hostname),
- * still readable from an aged-out token. It is never an auth decision — callers
- * enforce a valid bearer separately (the backend rejects unauthenticated
- * telemetry); this only recovers the destination URL.
- *
- * @param {string} token - License JWT (raw, as stored in the credstore)
- * @returns {string|null} Base URL with no trailing slash, or null when no
- *   endpoint can be resolved. Callers must skip the upload on null and leave
- *   the on-disk file for retry once a fresh JWT is available.
+ * @param {string} token
+ * @returns {string|null}
  */
 function getEndpointFromTokenAllowExpired(token) {
   const override = getBackendUrlOverride();

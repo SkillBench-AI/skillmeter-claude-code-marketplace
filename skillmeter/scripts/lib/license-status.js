@@ -1,15 +1,7 @@
 /**
- * License refresh status record.
- *
- * One small JSON file next to credentials.json that says how the last refresh
- * attempts went, so the retry daemon can back off, and hooks and skills can
- * tell the user why collection stopped without making a network call.
- *
- * The record is a device-level fact (the token it describes lives in the same
- * directory), so it sits in STATE_DIR and is shared by every session on the
- * machine. Writers: the refresh orchestrator (scripts/lib/license-activation.js)
- * and the sign-in commands (which clear it). Readers: the retry daemon, the
- * SessionStart hook, and later the B1 notice and /skillmeter:status.
+ * Device-wide refresh status in STATE_DIR, shared across sessions. Refresh and
+ * sign-in update it; hooks and the retry daemon read it for notices and backoff
+ * without a network request.
  *
  * Shape (schema_version 1):
  *   last_attempt_at       ms epoch of the last refresh or re-activation attempt
@@ -24,14 +16,9 @@
  *   revision              monotonically increasing write counter used for
  *                         compare-and-update (see updateLicenseStatus)
  *
- * Concurrency: several processes (daemon, drains, SessionStart, sign-in) mutate
- * this file. Every transition goes through updateLicenseStatus, which re-reads
- * the record, applies the mutation, and commits only if the on-disk revision is
- * still the one it read; otherwise it retries on the newer record. A stale
- * writer therefore re-applies its change on top of the newer state instead of
- * overwriting it.
- *
- * Leaf module: requires only fs, path, ./config and ./io.
+ * updateLicenseStatus retries when the revision changes before rename, then
+ * falls back to last-writer-wins after five attempts. This narrows concurrent
+ * write races; it does not make the revision check and rename atomic.
  */
 
 const fs = require("fs");
@@ -80,10 +67,8 @@ function readLicenseStatus() {
 let persistenceFailureReported = false;
 
 function reportPersistenceFailure(err) {
-  // Best-effort, like every other store in the plugin: a status record that
-  // cannot be written degrades backoff (extra attempts, still bounded by the
-  // refresh lock cooldown) and notices, never correctness — a revoked license
-  // is re-detected on the next attempt. Say so once in the debug log.
+  // Failed persistence can restart backoff and leave notices stale. Report it
+  // once; revocation is checked again on the next refresh attempt.
   if (persistenceFailureReported) return;
   persistenceFailureReported = true;
   console.error(

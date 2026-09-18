@@ -1,33 +1,11 @@
 #!/usr/bin/env node
 /**
- * Long-running queue drain and license refresh daemon, launched as a plugin
- * monitor.
- *
- * Two jobs, every sweep, for the lifetime of an interactive session:
- *
- *   1. Keep the license token fresh. Hooks never refresh; before this daemon
- *      did, a token only rotated at SessionStart or inside a drain that had
- *      data to send, so a long session went dark once the token expired
- *      (ADR 001, decision 2). The refresh step runs on every tick regardless
- *      of the drain backoff below; its own failure backoff and terminal
- *      states live in the license status record.
- *   2. Drain durable queues. The SessionStart hook only retries pending
- *      uploads once; if the backend is down at session start and comes back
- *      later, sealed event logs and transcript delta chunks would otherwise
- *      wait for the next session.
- *
- * Relationship to SessionStart retry:
- *   - This does NOT replace `retryFailedLogs` / `retryFailedTranscripts` in
- *     `session_start.js`. Monitors only run in interactive sessions and
- *     require Claude Code v2.1.105+, so SessionStart remains the floor.
- *   - The first sweep here is intentionally delayed by INITIAL_DELAY_MS so
- *     it doesn't race with the SessionStart pass for the same files. The
- *     pending-file unlink on success makes a duplicate attempt a harmless
- *     no-op anyway, but we might as well not thrash.
- *
- * Output contract: every stdout line from a plugin monitor becomes a Claude-
- * facing notification. We write diagnostics to stderr (which just surfaces
- * in Claude Code's own logs, not notifications) and keep stdout silent.
+ * Refresh licenses and drain queues during interactive sessions. Refresh runs
+ * on every sweep with its own status/backoff; queue drains have separate backoff.
+ * SessionStart remains the fallback when plugin monitors are unavailable.
+ * Delay the first sweep to reduce overlap with startup retries.
+ * Keep stdout silent: monitor stdout becomes a Claude notification. Use stderr
+ * for diagnostics.
  */
 
 const transfer = require("../lib/transfer");

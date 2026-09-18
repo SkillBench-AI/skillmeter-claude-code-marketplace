@@ -1,12 +1,6 @@
 /**
- * Tiny TTY spinner. Returns a stop() function. No-op when stdout isn't a
- * TTY (e.g. piped through Claude Code's `!`-prefix runner, where output is
- * buffered until exit and animation frames would just pile up).
- *
- * Usage:
- *   const stop = startSpinner("Waiting for GitHub approval");
- *   // ...long work...
- *   stop({ done: true });   // erases the spinner line
+ * Show a TTY spinner and return stop(), which clears the line.
+ * Do nothing when stdout is not a TTY.
  */
 
 const FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
