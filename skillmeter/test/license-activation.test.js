@@ -1,9 +1,7 @@
 "use strict";
 
-// Refresh orchestration (ADR 001, decision 2): /refresh on routine expiry,
-// silent gh re-activation only on 410/401, transient failures back off, 402 and
-// a missing gh are terminal, and ensureFreshLicense honours the status record.
-// Run: node --test skillmeter/test/license-activation.test.js
+// ADR001 refresh behavior: routine renewal, transient backoff, terminal
+// 401/410/402 and shared status coordination. No silent GitHub activation.
 
 const { test, beforeEach } = require("node:test");
 const assert = require("node:assert/strict");

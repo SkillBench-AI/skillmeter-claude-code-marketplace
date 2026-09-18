@@ -1,23 +1,9 @@
 #!/usr/bin/env node
 /**
- * Interactive sign-in flow for the SkillMeter plugin (`/skillmeter:signin`).
- *
- *   1. Start an RFC 8628 device flow against the SkillBench broker: print
- *      the user code and verification URL to stdout, then hand off polling
- *      to a detached child process. The foreground exits immediately so the
- *      user sees the code right away — Claude Code's `!`-prefix runner
- *      displays captured output once the command returns, so we cannot
- *      block on polling in the foreground.
- *   2. The background child polls for the broker's ID TOKEN, POSTs it +
- *      device_id to the SkillMeter activation endpoint, and stores the
- *      license JWT in credstore. The user re-runs `/skillmeter:signin` (or
- *      any telemetry-emitting flow) to observe the result.
- *
- * This used to authenticate against GitHub. It now uses the broker every
- * other SkillBench sign-in already goes through, which is what lets somebody
- * who has never touched GitHub activate a plugin at all: the server resolves
- * their tenant through workspace membership rather than through a GitHub App
- * installation they do not have.
+ * Start broker device authorization and print the user code and URL. Poll in a
+ * detached child so the shell runner can return and display the code immediately.
+ * Exchange the broker ID token for a license, then persist the result for the
+ * FileChanged notifier and the next /skillmeter:signin invocation.
  */
 
 const credstore = require("./credstore.js");
@@ -131,14 +117,8 @@ async function postFormRaw(url, params) {
   return { res, payload, text };
 }
 
-// The token endpoint reports "not yet approved" as an ERROR RESPONSE, and
-// OAuth error responses carry HTTP 400 (RFC 6749 §5.2). GitHub was unusual in
-// answering 200 with the error in the body, so the old polling loop could
-// treat every non-2xx as fatal. Against a spec-following broker that would
-// abort the first time round, before the person had any chance to approve.
-//
-// So: a body with an `error` field is data whatever the status says, and only
-// a response we cannot read at all is a transport failure.
+// OAuth pending/slow_down responses can use HTTP 400. Parse their error body
+// before treating a non-2xx response as a transport failure.
 async function postFormExpectingOAuthErrors(url, params) {
   const { res, payload, text } = await postFormRaw(url, params);
   if (payload && typeof payload === "object") return payload;
@@ -149,17 +129,9 @@ async function requestDeviceCode() {
   return postForm(getDeviceCodeUrl(), { client_id: getOAuthClientId(), scope: OAUTH_SCOPE });
 }
 
-// Polls the broker's token endpoint until the person finishes approving in
-// their browser. RFC 8628 verbatim, which is why moving off GitHub changed
-// nothing here but the URL: the grant type, the pending/slow_down/expired
-// error names and the "back off five seconds" rule are all from the spec.
-//
-// Returns the ID TOKEN, not the access token. The broker's access tokens are
-// opaque — they carry no claims and can only be resolved through an admin
-// endpoint /activate has no route to — whereas the id token is a signed JWT
-// /activate verifies against the broker's public JWKS. Asking for `openid` is
-// what makes the broker issue one; without that scope this returns undefined
-// and sign-in fails with "no id_token", which is the honest error.
+// Poll using the device grant and respect pending, slow_down and expiry.
+// Return the ID token: /activate verifies its signature through the broker
+// JWKS. Opaque access tokens cannot be used for this exchange.
 async function pollForToken(deviceCode, initialInterval) {
   let interval = initialInterval;
   while (true) {
@@ -279,10 +251,7 @@ function spawnBackgroundPoll(deviceId, deviceCode, interval) {
 }
 
 async function main() {
-  // An explicit /skillmeter:signin re-arms everything in one atomic
-  // write: clears the signed-out sentinel and the gh-fallback cooldown
-  // so a user who just fixed their `gh auth` scopes or who signed out
-  // earlier isn't bounced.
+  // Explicit sign-in clears the signed-out sentinel before starting the flow.
   credstore.markEngaged();
   clearLicenseStatus({ source: "signin" });
 

@@ -1,32 +1,11 @@
 /**
- * Sanitisation primitives for logs and transcripts.
+ * Apply the on-device policy in ADR002: typed secret/PII redaction and HMAC paths.
+ * File-path fields keep structure, extensions and technical vocabulary; directory
+ * fields and generic path keys are hashed whole. Free text hashes the home prefix.
  *
- * Two orthogonal protections, applied together by the scrub helpers:
- *   1. Content redaction — secrets (credentials) and the stage-1 PII categories
- *      (email, VCS author names, phone, IP, national id, payment card) are
- *      matched by the unified rule table in ./rules.js and replaced with typed
- *      placeholders: the category survives, the value does not.
- *   2. Path hashing — the user's home-directory prefix (which carries the OS
- *      username) is HMAC-hashed everywhere it appears; file-path tool fields
- *      (`file_path`, `filePath`, `notebook_path`) are hashed per segment with
- *      structure, extension and common technical vocabulary kept (ADR 002
- *      amendment, decision 6); `cwd`-type fields and the generic `path` key
- *      are hashed wholesale.
- *
- * Design rules (ADR 002):
- *   - Fail-closed: when a value looks like a secret we redact it. Over-redacting
- *     is acceptable; leaking is not.
- *   - We never store or log an original secret value — only its detector id,
- *     category, and the action taken.
- *   - Detection is deterministic regex + Shannon-entropy gating + format
- *     validators, with a small stopword allow-list to limit false positives
- *     without weakening recall.
- *   - Idempotent for content: a placeholder is never re-matched, so sanitizing
- *     already sanitized text changes nothing and adds no redaction counts.
- *     Path values are hashed on every pass (a hash of a hash discloses
- *     nothing); a value's shape is never taken as proof of prior hashing.
- *   - Key-name forced redaction applies to identifier-like keys only; free-text
- *     keys (questions, labels) are scrubbed by content rules alone.
+ * Placeholders are not redacted again. Path values are hashed on every pass;
+ * their shape does not prove prior sanitization. Forced key-name redaction applies
+ * only to identifier-like keys. Metadata records counts/types, not matched values.
  */
 
 const crypto = require("crypto");
@@ -476,11 +455,9 @@ function sanitizeEventData(data, hashSalt) {
 // ---------------------------------------------------------------------------
 
 /**
- * Sanitize a single parsed transcript line by scrubbing the whole object:
- * secret/PII redaction + home-path hashing on content, and wholesale HMAC of
- * path-bearing keys (incl. `cwd`) via scrubDeep's PATH_KEYS branch. The line
- * is stamped with `_sanitization` like every other record. Returns a scrubbed
- * copy; the input is not mutated.
+ * Sanitize a parsed transcript record without mutating the input.
+ * Apply content redaction and field-specific path hashing, then attach
+ * _sanitization metadata as for hook events.
  */
 function sanitizeLine(obj, hashSalt) {
   return sanitizeRecord(obj, hashSalt).value;

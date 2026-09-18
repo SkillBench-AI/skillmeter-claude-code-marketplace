@@ -1,15 +1,6 @@
 /**
- * SkillMeter status banners (shown via the SessionStart hook `systemMessage`
- * and the /skillmeter:signin flow).
- *
- * One content-sized card for every state. The title lives in the border while
- * the body gives the state, scope, privacy posture, and one next action. The
- * card auto-sizes to its longest line.
- *
- * NO ANSI color: the SessionStart `systemMessage` renderer does not interpret
- * SGR escape codes — it prints them literally as garbage. Box-drawing glyphs
- * and ✓/✗/· are plain Unicode and render fine, so structure comes from the box
- * and markers, not color.
+ * Status cards for SessionStart and sign-in, sized to their longest line.
+ * Use plain Unicode: systemMessage displays ANSI escape codes literally.
  */
 
 const { PLUGIN_VERSION } = require("./paths");

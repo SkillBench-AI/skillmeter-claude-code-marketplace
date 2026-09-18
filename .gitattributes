@@ -1,0 +1,2 @@
+# Keep JavaScript with literal control-character fixtures reviewable as text.
+*.js diff

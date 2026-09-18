@@ -11,12 +11,8 @@ function clearSessionContext(input) {
   clearSessionCwdContext(input?.session_id, credstore.getHashSalt());
 }
 
-// Non-blocking: seal + stage, then spawn a DETACHED drain that outlives this
-// exiting hook (same as the Stop hook). At session exit the hook must return
-// well within its `timeout`; an inline awaited network drain risked exceeding
-// the budget and getting cancelled ("Hook cancelled"), and could keep the
-// process alive on a pending fetch. The detached child + SessionStart/monitor
-// retry still deliver the queued artifacts.
+// Seal and stage locally, then start a detached drain so network waits do not
+// consume the SessionEnd hook timeout. Startup and monitor retries remain available.
 runHook("SessionEnd", (input) => ({
   reason: input.reason,
 }), {

@@ -1,22 +1,8 @@
 /**
- * Historical session scanner.
- *
- * Walks `~/.claude/projects/<encoded-cwd>/<session-uuid>.jsonl` — Claude Code's
- * on-disk transcript archive — and decides which past sessions are in scope
- * for backfill upload. Scope follows the same rules as live hooks
- * (lib/repo-scope.js): a session is included only when its `cwd` resolves to a
- * git repo whose GitHub remote belongs to one of the user's allowed orgs.
- *
- * Why we recover `cwd` from transcript content rather than the directory name:
- * Claude Code encodes the cwd by replacing `/` with `-`, which is lossy for
- * paths containing literal dashes (e.g. `vscode/skillmeter-claude-code-…`).
- * Every transcript record embeds the canonical `cwd` field, so we read that
- * instead and only fall back to dir-name decoding for empty transcripts.
- *
- * Caveat: org-scoping for a historical session requires the repo to still
- * exist on disk — the transcript stores cwd but not the git remote, so a
- * deleted/moved repo gets classified `no_repository` and skipped. These are
- * surfaced in the summary so callers can report them.
+ * Scan historical sessions and check repository ownership using lib/repo-scope.
+ * Read cwd from transcript records: encoded directory names lose literal dashes.
+ * Directory-name decoding is only a fallback when no record supplies cwd.
+ * Repositories must still exist locally to verify their remotes; otherwise skip.
  */
 
 const fs = require("fs");

@@ -14,16 +14,9 @@ const { resolvePluginDataRoot } = require("./plugin-data-root");
 
 const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, "..", "..");
 
-// The telemetry queue + lock files must survive plugin updates, so they live
-// exclusively in the host's persistent data dir. PLUGIN_ROOT is deliberately
-// NOT a fallback: it is the install/cache dir, it changes on every update, and
-// the old copy is reclaimed after about 14 days, stranding any queue there.
-//
-// Claude Code injects CLAUDE_PLUGIN_DATA into hooks but NOT into monitors or
-// the `node ...` commands inside SKILL.md, so resolvePluginDataRoot derives the
-// same directory for those. PLUGIN_ROOT is passed in rather than read from the
-// environment because those processes have no CLAUDE_PLUGIN_ROOT either — only
-// the __dirname fallback above is reliable there. See lib/plugin-data-root.js.
+// Queues and locks must survive updates in the persistent plugin data directory.
+// Pass the resolved root to the data-directory resolver for skill/monitor calls
+// without plugin environment variables. Never fall back to the install cache.
 const DATA_ROOT = resolvePluginDataRoot(PLUGIN_ROOT);
 if (!DATA_ROOT) {
   throw new Error(
@@ -33,9 +26,8 @@ if (!DATA_ROOT) {
   );
 }
 const LOG_DIR = path.join(DATA_ROOT, "logs");
-// Every queue is repository-scoped: telemetry is only ever staged under a
-// canonical GitHub identity, so a queued artifact can never be transmitted
-// under the wrong organization.
+// Partition full telemetry by canonical repository identity; transfer rechecks
+// current scope and consent before sending. Organization audits use a separate queue.
 const REPOSITORIES_LOG_DIR = path.join(LOG_DIR, "repositories");
 const ORGANIZATION_AUDIT_LOG_DIR = path.join(LOG_DIR, "organization-audit");
 const SESSIONS_DIR = path.join(DATA_ROOT, "sessions");

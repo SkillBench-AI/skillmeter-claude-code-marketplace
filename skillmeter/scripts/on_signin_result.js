@@ -1,15 +1,8 @@
 #!/usr/bin/env node
 /**
- * FileChanged handler for the sign-in sentinel (STATE_DIR/signin-result.json).
- *
- * When the detached background sign-in poller finishes, it records the outcome
- * in the sentinel. SessionStart registers that file via `watchPaths`, so this
- * hook fires here and surfaces the result — a welcome banner + desktop
- * notification on success, an error nudge on failure — WITHOUT the user having
- * to re-run /skillmeter:signin.
- *
- * Output: `systemMessage` (in-UI notice) + `terminalSequence` (OSC 777 desktop
- * notification). No color in systemMessage (the renderer prints ANSI literally).
+ * Report detached sign-in results from the sentinel watched by SessionStart.
+ * Emit systemMessage and an OSC 777 desktop notification; keep ANSI color out
+ * of systemMessage.
  */
 
 const fs = require("fs");

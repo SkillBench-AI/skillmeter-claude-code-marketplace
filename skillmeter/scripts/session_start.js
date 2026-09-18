@@ -22,11 +22,8 @@ const {
 const credstore = require("./credstore.js");
 const telemetryStore = require("./lib/telemetry-store");
 
-// Pre-hook work: refresh the license (silent gh) so the banner decision below
-// reflects the freshest state, and ensure the sign-in sentinel file exists so
-// SessionStart's `watchPaths` can register it before the first sign-in. No
-// stdout here — all SessionStart stdout is emitted once, from onGate, so
-// watchPaths and the optional banner stay a single JSON object.
+// Refresh the stored license and create the sign-in result sentinel before
+// reporting startup state. Keep stdout for the single onGate JSON response.
 async function prepareSession() {
   // Materialize the one-time historical-backfill offer before sign-in state is
   // evaluated. Existing and new users receive the same lifecycle.
@@ -45,9 +42,8 @@ async function prepareSession() {
 
 function runSessionStartHook() {
   return runHook("SessionStart", (input, ctx) => {
-    // Harness metadata (SBEE-163, Phase 1): presence/shape of the developer's
-    // harness (instruction files, skills, hooks, plugin/agent info), detected
-    // once at session start. Metadata only — no raw harness file contents.
+    // Collect configuration names/counts, permission rules and bounded custom
+    // skill bodies. runHook sanitizes the block before queueing.
     const harness = detectHarness(ctx.cwd, {
       pluginRoot: PLUGIN_ROOT,
       pluginVersion: PLUGIN_VERSION,

@@ -9,11 +9,9 @@ const fs = require("fs");
 const path = require("path");
 
 /**
- * Read and JSON-parse a file, returning `fallback` on any error (missing file,
- * malformed JSON, permission denied). Consolidates the many
- * `try { JSON.parse(readFileSync(p)) } catch { return null/{} }` copies.
+ * Read JSON, returning fallback for missing, malformed or unreadable files.
  * @param {string} file
- * @param {*} [fallback=null] value returned on any read/parse failure
+ * @param {*} [fallback=null]
  */
 function safeReadJson(file, fallback = null) {
   try {
@@ -24,11 +22,9 @@ function safeReadJson(file, fallback = null) {
 }
 
 /**
- * Atomic JSON write: write to a sibling tempfile, fsync, then rename into place.
- * POSIX rename within the same filesystem is atomic — readers see either the old
- * file or the new file, never a partial write. Concurrent writers can still lose
- * updates; eliminating that requires a file lock (separate follow-up). The
- * directory is created 0o700 and the file written 0o600.
+ * Write and fsync a sibling file, then rename it over the destination.
+ * Readers see a complete file; concurrent writers can still lose updates without
+ * a shared lock. Create directories with mode 0o700 and files with mode 0o600.
  */
 function atomicWriteJson(file, data) {
   const dir = path.dirname(file);

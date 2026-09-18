@@ -1,18 +1,7 @@
 #!/usr/bin/env node
 /**
- * Hook orchestrator + narrow entrypoint façade.
- *
- * The bulk of the plugin runtime is split into focused modules under
- * `lib/`: sanitisation, JWT handling, project settings, repo-scope
- * decisions, and the upload/retry/cleanup transport layer. This file
- * keeps only:
- *
- *   - the `runHook` lifecycle that every hook script drives,
- *   - the structured-log sink.
- *
- * If you're adding new transfer / sanitisation / JWT logic, put it in
- * the relevant `lib/` module — don't grow this file back into a junk
- * drawer.
+ * Run hook lifecycles and write structured events. Shared sanitization, routing,
+ * settings and transport belong in lib/ rather than this entrypoint.
  */
 
 const fs = require("fs");
