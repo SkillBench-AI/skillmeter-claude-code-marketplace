@@ -1,6 +1,6 @@
 /**
  * Show a TTY spinner and return stop(), which clears the line.
- * Do nothing when stdout is not a TTY.
+ * Outside a TTY, write one static status line and return a no-op stop callback.
  */
 
 const FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -12,8 +12,6 @@ const ESC_CLEAR_LINE = "\r\x1b[2K";
 function startSpinner(message) {
   const out = process.stdout;
   if (!out.isTTY) {
-    // No-op: a single static line so the user knows something is happening
-    // even in a buffered runner. Animation frames would be useless.
     out.write(`${message}...\n`);
     return () => {};
   }
