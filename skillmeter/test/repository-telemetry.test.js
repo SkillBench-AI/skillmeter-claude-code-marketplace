@@ -23,6 +23,7 @@ const {
   getClaudeStateFile,
   repositoryNameFromRemote,
   safeDisplayComponent,
+  applyRepositoryToggles,
 } = require("../scripts/lib/repository-telemetry");
 
 const REPOSITORY_TELEMETRY_SCRIPT = path.resolve(
@@ -637,6 +638,51 @@ test("global kill-switch lists repositories as blocked and prevents toggles", ()
   ]);
 });
 
+test("a toggle that goes stale partway keeps the ids it already applied", () => {
+  // `saveProjectSetting` writes one repository at a time, so a policy write that
+  // lands between two of them leaves the earlier ids applied and the rest not.
+  // The picker's recovery rule depends on that shape: it keeps what was applied
+  // and re-pages only the remainder. An all-or-nothing result would make the
+  // instruction dead text without failing anything.
+  const state = {
+    revision: 4,
+    repositories: [
+      { id: "aaaaaaaaaaaa", repoKey: "org/one", displayName: "@org/one", action: "enable" },
+      { id: "bbbbbbbbbbbb", repoKey: "org/two", displayName: "@org/two", action: "enable" },
+    ],
+  };
+
+  const written = [];
+  const result = applyRepositoryToggles(
+    ["aaaaaaaaaaaa", "bbbbbbbbbbbb"],
+    state,
+    {
+      saveProjectSetting: (repoKey, enabled, revision) => {
+        if (repoKey === "org/two") {
+          const err = new Error("policy moved");
+          err.code = "STALE_POLICY";
+          throw err;
+        }
+        written.push({ repoKey, enabled, revision });
+      },
+      purgeProjectQueue: () => {},
+    }
+  );
+
+  assert.deepEqual(written, [
+    { repoKey: "org/one", enabled: true, revision: 4 },
+  ]);
+  assert.equal(result.changed, 1);
+  assert.equal(result.stale, undefined, "partial failure sets no top-level stale");
+  assert.deepEqual(
+    result.results.map((entry) => [entry.id, entry.changed, entry.reason]),
+    [
+      ["aaaaaaaaaaaa", true, undefined],
+      ["bbbbbbbbbbbb", false, "stale_policy"],
+    ]
+  );
+});
+
 test("telemetry skill routes list through the repository toggle UI", () => {
   assert.match(TELEMETRY_SKILL, /allowed-tools: AskUserQuestion Bash\(node \*\)/);
   assert.match(TELEMETRY_SKILL, /argument-hint: <list>/);
@@ -661,4 +707,17 @@ test("telemetry skill routes list through the repository toggle UI", () => {
     /repository_telemetry\.js toggle REVISION ID\.\.\./
   );
   assert.match(TELEMETRY_SKILL, /passing only the validated/);
+  assert.match(
+    TELEMETRY_SKILL,
+    /Judge each page only on what it returns:/
+  );
+  assert.match(TELEMETRY_SKILL, /continue\s+to the next one/);
+  assert.match(
+    TELEMETRY_SKILL,
+    /`revision` returned by the previous\s+`toggle`/
+  );
+  assert.match(
+    TELEMETRY_SKILL,
+    /every changed repository and every\s+unchanged one with its reason/
+  );
 });
