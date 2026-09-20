@@ -120,7 +120,7 @@ test("counts.path tallies segment hashes, whole-value hashes and home-prefix rep
   assert.equal(meta.secrets, 0);
   assert.equal(meta.pii, 0);
   assert.deepEqual(meta.ids, [], "path hashing is not a detector id");
-  assert.equal(meta.policyVersion, "3.1.0");
+  assert.equal(meta.policyVersion, "3.1.1");
 });
 
 test("second pass over a stamped record hashes path values again and never restores them", HOME_DEPENDENT, () => {
