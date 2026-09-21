@@ -47,7 +47,22 @@ concise English for readers who do not know the team's internal history.
 
 ## Release notes
 
-Read the latest published example. Use `SkillMeter X.Y.Z` as the title, then
-`### What changed`, `### After updating`, `### Known limitations`, and
-`Details: #PR`. Keep changes user-facing and update steps numbered, with command
-blocks. Obtain approval before publishing unless already authorized.
+Release notes are public. They say what changed for the user; the PR holds the
+rest. Read the latest published release before writing one.
+
+- Title `SkillMeter X.Y.Z`, then `### What changed`, `### After updating`,
+  `### Known limitations`, and a final `Details: #PR, #PR` line.
+- **What changed**: the user-visible outcome, one sentence per bullet, at most
+  three bullets. No retry counts, line counts, algorithms or internal names.
+- **After updating**: always `1. claude plugin update skillmeter@skillbench`
+  and `2. Quit and reopen Claude Code` (hooks and monitors load per session).
+  Add a sign-in step only when the release requires one. Do not add sentences
+  about what is not needed.
+- **Known limitations**: only what this release adds or changes. Otherwise
+  `Unchanged from X.Y.Z.`, naming the release that lists them.
+- **Details**: PR numbers only. ADRs and privacy documents are reachable from
+  the PRs.
+- Cut the release on the commit that bumps `skillmeter/.claude-plugin/plugin.json`,
+  in the same PR cycle. The marketplace installs `main`, so a bumped version
+  without a release is what users see.
+- Obtain approval before publishing unless already authorized.
