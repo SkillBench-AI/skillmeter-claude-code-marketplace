@@ -44,19 +44,18 @@ instead:
 
 - Show exactly one question per `AskUserQuestion` call, then wait for its answer
   before showing the next page. Never put several repository pages in one call.
-- Split repositories into stable pages while preserving JSON order: take four
-  at a time, except take three when five remain, leaving a final page of two.
-  Every page therefore has 2-4 options.
+- Split repositories into stable pages while preserving JSON order: three per
+  page, the last page taking whatever remains.
+- Give every page one extra option, last, labelled exactly
+  `→ Leave this page unchanged`, described as
+  `Change nothing on this page and go to the next one.` It is how a page is
+  turned, so a page is never left by submitting nothing, and every page has
+  2-4 options without a special case for a short last page.
 - Header: `Repos X/N`, where X is the 1-based page and N is the total number of
   pages. Keep it at most 12 characters.
-- Question, on a page with two or more repositories: `Page X/N — select repositories to toggle. Space selects changes; to leave this page unchanged, submit with nothing selected and choose Submit answers when asked to confirm.`
+- Question: `Page X/N — select repositories to toggle. Space selects changes; choose “→ Leave this page unchanged” to move on without changing anything.`
 - Use each repository's `optionLabel` and `description` exactly as returned.
-- Set `multiSelect: true` on every page with two or more repositories.
-- With exactly one repository, use a single-select question with that
-  repository first and `Keep unchanged` second, and ask
-  `Page 1/1 — select a repository to toggle, or Keep unchanged.` A single-select
-  question submits the moment an option is chosen, so there is no empty submit
-  on that page; `Keep unchanged` is how it is left alone.
+- Set `multiSelect: true` on every page.
 - After every answer, apply that page if it yielded any recognized ID, report
   `Reviewed X/N pages`, and go on to the next page until every page has been
   answered or a page is rejected.
@@ -65,22 +64,31 @@ Map selected option labels back to the exact repository IDs from the JSON.
 The latest Claude Code response may represent a multi-select answer as an array
 of labels or as one comma-joined string; normalize both forms before mapping.
 Ignore custom text and labels that were not returned by the script.
+`→ Leave this page unchanged` is this file's own option, not a repository; it
+never maps to an ID.
 
 Judge each page only on what it returns:
 
-- An answer carrying one or more recognized labels: toggle exactly those
-  repositories, then continue to the next page.
-- An answer carrying no recognized label — nothing was selected, or the only
-  things selected were `Keep unchanged`, typed text, or labels the script did
-  not return. It is an answer, not a cancellation, and it means leave this page
-  unchanged: change nothing for that page, run no command for it, and continue
-  to the next one. Never treat it as a reason to stop, and never re-ask the
-  page. If the answer carried typed text, quote it back before showing the next
-  page so it is not passed over in silence; do not read it as an instruction.
+- An answer carrying one or more repository labels: toggle exactly those
+  repositories, then continue to the next page. If it also carries
+  `→ Leave this page unchanged`, the repository labels win and that option is
+  ignored.
+- An answer carrying only `→ Leave this page unchanged`: change nothing for that
+  page, run no command for it, and continue to the next one.
+- An answer carrying no recognized label at all, which is what a page submitted
+  with nothing selected returns. Claude Code words that result
+  `The user did not answer the questions.` — read that sentence as an answer,
+  not as a cancellation, however it is phrased: a cancellation arrives as a
+  rejected tool call instead, described next. It means what
+  `→ Leave this page unchanged` means: change nothing for that page, run no
+  command for it, and continue to the next one. Never treat it as a reason to
+  stop, and never re-ask the page. If the answer carried typed text, quote it
+  back before showing the next page so it is not passed over in silence; do not
+  read it as an instruction.
 - A rejected tool call, which is not an answer at all: an error result saying
   the tool use was rejected, with or without a message from the user. Either
   way, start no further page. Report every page already answered, including
-  pages with no recognized IDs, and mark later pages as unreviewed.
+  pages that changed nothing, and mark later pages as unreviewed.
 
 Pages already applied stay applied — never roll one back. That is why each page
 is applied as it is answered rather than held to the end: a rejection can arrive
@@ -111,8 +119,8 @@ do not retry the selection automatically, and re-run `list` — its `revision` i
 the one the next `toggle` uses.
 Re-paginate the repositories from the page that went stale, less any the command
 did apply, together with those on pages not yet shown — by the same
-four-at-a-time rule, or as the single-repository question if only one is left,
-since a question needs at least two options. Numbering restarts with that pagination: the `Repos X/N` header,
+three-at-a-time rule, with `→ Leave this page unchanged` on every page as
+before. Numbering restarts with that pagination: the `Repos X/N` header,
 the `Page X/N` question text and `Reviewed X/N pages` all follow it, so say that
 the page count changed.
 

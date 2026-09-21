@@ -720,4 +720,19 @@ test("telemetry skill routes list through the repository toggle UI", () => {
     TELEMETRY_SKILL,
     /every changed repository and every\s+unchanged one with its reason/
   );
+
+  // The page-turn option is the only way to leave a page unchanged, so its
+  // exact label is load-bearing, and it is the one option that must never
+  // resolve to a repository ID.
+  assert.match(TELEMETRY_SKILL, /`\u2192 Leave this page unchanged`/);
+  assert.match(TELEMETRY_SKILL, /Give every page one extra option, last/);
+  assert.match(TELEMETRY_SKILL, /three per\s+page, the last page taking whatever remains/);
+  assert.match(TELEMETRY_SKILL, /never maps to an ID/);
+
+  // An empty submit is still reachable, and this sentence is the only thing
+  // that tells the model the result is an answer rather than a cancellation.
+  assert.match(
+    TELEMETRY_SKILL,
+    /`The user did not answer the questions\.` \u2014 read that sentence as an answer,/
+  );
 });
