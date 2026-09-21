@@ -103,6 +103,9 @@ function getEventTimeoutMs() {
 function getRetryDaemonIntervalMs() {
   return parseInt(process.env.SKILLMETER_RETRY_DAEMON_INTERVAL_MS || "", 10) || 120_000; // retry_daemon.js:28
 }
+function getBackfillOfferGraceMs() {
+  return parseInt(process.env.SKILLMETER_BACKFILL_OFFER_GRACE_MS || "", 10) || 15 * 60_000; // backfill_monitor.js:34
+}
 // Per-chunk UNCOMPRESSED byte budget for delta transcript upload. Conservative
 // default so the gzipped body stays well under the backend's 6 MB request limit
 // (JSONL gzips ~4x+).
@@ -121,6 +124,7 @@ module.exports = {
   getTokenUrl,
   getOAuthClientId,
   getBackendUrlOverride,
+  getBackfillOfferGraceMs,
   getEventTimeoutMs,
   getRetryDaemonIntervalMs,
   getTranscriptChunkMaxBytes,

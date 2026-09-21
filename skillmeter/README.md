@@ -145,6 +145,7 @@ state through `testing/bootstrap.js` and `testing/helpers.js`. See
 | `SKILLMETER_BACKEND_URL` | Telemetry base URL override; authentication is still required |
 | `SKILLMETER_TIMEOUT` | Event upload timeout in seconds; default 10 |
 | `SKILLMETER_RETRY_DAEMON_INTERVAL_MS` | Monitor sweep interval in milliseconds; default 120000 |
+| `SKILLMETER_BACKFILL_OFFER_GRACE_MS` | How long a backfill monitor armed by a skill waits for an offer in milliseconds; default 900000 |
 
 Configuration precedence is environment, project string setting, development
 bundle, then production default. Project keys include `activate_url`,

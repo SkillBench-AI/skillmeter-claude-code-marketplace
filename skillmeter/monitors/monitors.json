@@ -7,6 +7,19 @@
   {
     "name": "skillmeter-backfill-monitor",
     "command": "CLAUDE_PLUGIN_DATA=\"${CLAUDE_PLUGIN_DATA}\" node \"${CLAUDE_PLUGIN_ROOT}/scripts/monitors/backfill_monitor.js\"",
-    "description": "SkillMeter history backfill"
+    "description": "SkillMeter history backfill",
+    "when": "always"
+  },
+  {
+    "name": "skillmeter-backfill-monitor-signin",
+    "command": "CLAUDE_PLUGIN_DATA=\"${CLAUDE_PLUGIN_DATA}\" node \"${CLAUDE_PLUGIN_ROOT}/scripts/monitors/backfill_monitor.js\" --await-offer",
+    "description": "SkillMeter history backfill",
+    "when": "on-skill-invoke:skillmeter:signin"
+  },
+  {
+    "name": "skillmeter-backfill-monitor-backfill",
+    "command": "CLAUDE_PLUGIN_DATA=\"${CLAUDE_PLUGIN_DATA}\" node \"${CLAUDE_PLUGIN_ROOT}/scripts/monitors/backfill_monitor.js\" --await-offer",
+    "description": "SkillMeter history backfill",
+    "when": "on-skill-invoke:skillmeter:backfill"
   }
 ]
