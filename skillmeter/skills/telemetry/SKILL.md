@@ -48,9 +48,9 @@ instead:
   page, the last page taking whatever remains.
 - Give every page one extra option, last, labelled exactly
   `→ Done with this page`, described as
-  `Go to the next page. Anything you selected above is still applied.` It is how
-  a page is turned, so a page is never left by submitting nothing, and every
-  page has 2-4 options without a special case for a short last page.
+  `Finish this page. Anything you selected above is still applied.` It is how a
+  page is turned, so a page is never left by submitting nothing, and every page
+  has 2-4 options without a special case for a short last page.
 - Header: `Repos X/N`, where X is the 1-based page and N is the total number of
   pages. Keep it at most 12 characters.
 - Question: `Page X/N — select repositories to toggle. Space selects changes; choose “→ Done with this page” when you are finished with it.`
@@ -87,8 +87,10 @@ Judge each page only on what it returns:
   read it as an instruction.
 - A rejected tool call, which is not an answer at all: an error result saying
   the tool use was rejected, with or without a message from the user. Either
-  way, start no further page. Report every page already answered, including
-  pages that changed nothing, and mark later pages as unreviewed.
+  way, start no further page. Claude Code's rejection result itself directs the
+  model to stop and wait, so this report may not be reachable until the user
+  speaks again; when it is, cover every page already answered, including pages
+  that changed nothing, and mark later pages as unreviewed.
 
 Pages already applied stay applied — never roll one back. That is why each page
 is applied as it is answered rather than held to the end: a rejection can arrive

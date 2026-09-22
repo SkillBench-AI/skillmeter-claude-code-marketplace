@@ -721,10 +721,16 @@ test("telemetry skill routes list through the repository toggle UI", () => {
     /every changed repository and every\s+unchanged one with its reason/
   );
 
-  // The page-turn option is the only way to leave a page unchanged, so its
-  // exact label is load-bearing, and it is the one option that must never
-  // resolve to a repository ID.
+  // The page-turn option is how a page is meant to be left unchanged — an empty
+  // submit does the same, but only as a fallback — so its exact label is
+  // load-bearing, and it is the one option that must never resolve to an ID.
   assert.match(TELEMETRY_SKILL, /`\u2192 Done with this page`/);
+  // Its description sits on screen right under the label, and it is the half
+  // that used to promise a next page on pages that had none. Pin it too.
+  assert.match(
+    TELEMETRY_SKILL,
+    /`Finish this page\.\s+Anything you selected above is still applied\.`/
+  );
   assert.match(TELEMETRY_SKILL, /Give every page one extra option, last/);
   assert.match(TELEMETRY_SKILL, /three per\s+page, the last page taking whatever remains/);
   assert.match(TELEMETRY_SKILL, /never maps to an ID/);
