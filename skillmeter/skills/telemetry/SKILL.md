@@ -47,13 +47,13 @@ instead:
 - Split repositories into stable pages while preserving JSON order: three per
   page, the last page taking whatever remains.
 - Give every page one extra option, last, labelled exactly
-  `→ Leave this page unchanged`, described as
-  `Change nothing on this page and go to the next one.` It is how a page is
-  turned, so a page is never left by submitting nothing, and every page has
-  2-4 options without a special case for a short last page.
+  `→ Done with this page`, described as
+  `Go to the next page. Anything you selected above is still applied.` It is how
+  a page is turned, so a page is never left by submitting nothing, and every
+  page has 2-4 options without a special case for a short last page.
 - Header: `Repos X/N`, where X is the 1-based page and N is the total number of
   pages. Keep it at most 12 characters.
-- Question: `Page X/N — select repositories to toggle. Space selects changes; choose “→ Leave this page unchanged” to move on without changing anything.`
+- Question: `Page X/N — select repositories to toggle. Space selects changes; choose “→ Done with this page” when you are finished with it.`
 - Use each repository's `optionLabel` and `description` exactly as returned.
 - Set `multiSelect: true` on every page.
 - After every answer, apply that page if it yielded any recognized ID, report
@@ -64,23 +64,23 @@ Map selected option labels back to the exact repository IDs from the JSON.
 The latest Claude Code response may represent a multi-select answer as an array
 of labels or as one comma-joined string; normalize both forms before mapping.
 Ignore custom text and labels that were not returned by the script.
-`→ Leave this page unchanged` is this file's own option, not a repository; it
+`→ Done with this page` is this file's own option, not a repository; it
 never maps to an ID.
 
 Judge each page only on what it returns:
 
 - An answer carrying one or more repository labels: toggle exactly those
   repositories, then continue to the next page. If it also carries
-  `→ Leave this page unchanged`, the repository labels win and that option is
+  `→ Done with this page`, the repository labels win and that option is
   ignored.
-- An answer carrying only `→ Leave this page unchanged`: change nothing for that
+- An answer carrying only `→ Done with this page`: change nothing for that
   page, run no command for it, and continue to the next one.
 - An answer carrying no recognized label at all, which is what a page submitted
   with nothing selected returns. Claude Code words that result
   `The user did not answer the questions.` — read that sentence as an answer,
   not as a cancellation, however it is phrased: a cancellation arrives as a
   rejected tool call instead, described next. It means what
-  `→ Leave this page unchanged` means: change nothing for that page, run no
+  `→ Done with this page` means: change nothing for that page, run no
   command for it, and continue to the next one. Never treat it as a reason to
   stop, and never re-ask the page. If the answer carried typed text, quote it
   back before showing the next page so it is not passed over in silence; do not
@@ -119,7 +119,7 @@ do not retry the selection automatically, and re-run `list` — its `revision` i
 the one the next `toggle` uses.
 Re-paginate the repositories from the page that went stale, less any the command
 did apply, together with those on pages not yet shown — by the same
-three-at-a-time rule, with `→ Leave this page unchanged` on every page as
+three-at-a-time rule, with `→ Done with this page` on every page as
 before. Numbering restarts with that pagination: the `Repos X/N` header,
 the `Page X/N` question text and `Reviewed X/N pages` all follow it, so say that
 the page count changed.
