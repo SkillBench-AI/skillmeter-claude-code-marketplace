@@ -123,28 +123,6 @@ test("counts.path tallies segment hashes, whole-value hashes and home-prefix rep
   assert.equal(meta.policyVersion, "3.1.1");
 });
 
-test("second pass over a stamped record hashes path values again and never restores them", HOME_DEPENDENT, () => {
-  const first = s.sanitizeEventData(
-    { tool_input: { file_path: `${HOME}/work/acme/src/x.ts`, edits: [{ file_path: "/opt/acme/y.py" }] }, cwd: `${HOME}/w` },
-    SALT
-  );
-  const second = s.sanitizeEventData(first.value, SALT);
-  assert.notEqual(second.value.tool_input.file_path, first.value.tool_input.file_path);
-  assert.notEqual(second.value.cwd, first.value.cwd);
-  assert.ok(second.meta.counts.path > 0);
-  assert.deepEqual(second.value._sanitization, first.value._sanitization, "first-pass stamp kept");
-  assert.equal(JSON.stringify(second.value).includes("acme"), false);
-});
-
-test("a raw file path added to a stamped record is segment-hashed and leaks nothing", HOME_DEPENDENT, () => {
-  const first = s.sanitizeEventData({ file_path: `${HOME}/work/a.ts` }, SALT);
-  const tampered = { ...first.value, file_path: `${HOME}/work/new-secret-project/b.ts` };
-  const { value, meta } = s.sanitizeEventData(tampered, SALT);
-  assert.match(value.file_path, new RegExp(`^${homeHash}/work/${HEX}/${HEX}\\.ts$`));
-  assert.equal(JSON.stringify(value).includes("new-secret-project"), false);
-  assert.equal(meta.counts.path, 3);
-});
-
 test("KINDS includes path and counts always carries it", () => {
   assert.ok(rules.KINDS.includes("path"));
   const { meta } = s.sanitizeEventData({ plain: "nothing" }, SALT);

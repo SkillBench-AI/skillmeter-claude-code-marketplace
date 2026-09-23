@@ -73,6 +73,8 @@ test("second pass: content is a fixed point, path keys are hashed again, no reda
     },
   };
   const one = s.sanitizeEventData(input, SALT);
+  assert.equal(s.hasSanitizationMarker(one.value), true);
+  assert.deepEqual(one.value._sanitization, one.meta, "the stamp is the pass's meta");
   const two = s.sanitizeEventData(one.value, SALT);
   const content = (v) => ({ msg: v.msg, token: v.token, mcp: v.mcp });
   assert.deepEqual(content(two.value), content(one.value), "redacted content is a fixed point");
@@ -82,6 +84,9 @@ test("second pass: content is a fixed point, path keys are hashed again, no reda
   for (const k of rules.KINDS.filter((k) => k !== "path")) assert.equal(two.meta.counts[k], 0, `count ${k} on second pass`);
   assert.ok(two.meta.counts.path > 0, "path values are hashed again on a second pass, never trusted by shape");
   assert.notEqual(two.value.tool_input.file_path, one.value.tool_input.file_path);
+  assert.notEqual(two.value.tool_input.cwd, one.value.tool_input.cwd);
+  assert.match(two.value.tool_input.cwd, /^[0-9a-f]{12}$/);
+  assert.equal(JSON.stringify(two.value.tool_input).includes("proj"), false, "hashes never restore a name");
   assert.deepEqual(two.value._sanitization, one.value._sanitization, "the first-pass stamp is kept");
   assert.ok(one.meta.secrets >= 2 && one.meta.pii >= 4, "first pass did redact");
 });
@@ -134,7 +139,7 @@ test("identifier-like secret keys still force redaction, including arrays", () =
       authorization: "Bearer abc",
       auth: "zzz",
       "auth.token": "qqq",
-      API_KEY: "someRealLookingValue123",
+      mcp: { env: { API_KEY: "someRealLookingValue123" } },
       tokens: ["a1B2c3D4", "e5F6g7H8"],
     },
     SALT
@@ -142,7 +147,7 @@ test("identifier-like secret keys still force redaction, including arrays", () =
   assert.equal(value.authorization, "[REDACTED_SECRET]");
   assert.equal(value.auth, "[REDACTED_SECRET]");
   assert.equal(value["auth.token"], "[REDACTED_SECRET]");
-  assert.equal(value.API_KEY, "[REDACTED_SECRET]");
+  assert.equal(value.mcp.env.API_KEY, "[REDACTED_SECRET]", "nested object keys too");
   assert.deepEqual(value.tokens, ["[REDACTED_SECRET]", "[REDACTED_SECRET]"]);
 });
 
@@ -164,15 +169,17 @@ test("file-path keys are segment-hashed, cwd keys whole-hashed, and no sibling f
         notebook_path: "/Users/me/nb/.hidden",
         cwd: "/Users/me/proj",
         old_cwd: "/Users/me",
+        edits: [{ file_path: "/Users/me/proj/b.js" }],
       },
     },
     SALT
   );
   const ti = value.tool_input;
+  assert.match(ti.edits[0].file_path, /^\/Users\/[0-9a-f]{12}\/[0-9a-f]{12}\/[0-9a-f]{12}\.js$/, "nested entries");
   assert.match(ti.file_path, /^\/Users\/[0-9a-f]{12}\/[0-9a-f]{12}\/src\/[0-9a-f]{12}\.test\.tsx$/);
   assert.match(ti.notebook_path, /^\/Users\/[0-9a-f]{12}\/[0-9a-f]{12}\/[0-9a-f]{12}$/);
   for (const k of ["cwd", "old_cwd"]) assert.match(ti[k], /^[0-9a-f]{12}$/, k);
-  assert.deepEqual(Object.keys(ti).sort(), ["cwd", "file_path", "notebook_path", "old_cwd"]);
+  assert.deepEqual(Object.keys(ti).sort(), ["cwd", "edits", "file_path", "notebook_path", "old_cwd"]);
 });
 
 test("a twelve-hex relative path without provenance is hashed like any other path", () => {
@@ -181,23 +188,12 @@ test("a twelve-hex relative path without provenance is hashed like any other pat
   assert.match(value.path, /^[0-9a-f]{12}$/);
 });
 
-test("a stamped record keeps its stamp; its path values are hashed again rather than trusted by shape", () => {
-  const first = s.sanitizeEventData({ file_path: "/Users/me/a.js", cwd: "/Users/me" }, SALT);
-  assert.equal(s.hasSanitizationMarker(first.value), true);
-  assert.deepEqual(first.value._sanitization, first.meta);
-  const second = s.sanitizeEventData(first.value, SALT);
-  assert.notEqual(second.value.file_path, first.value.file_path);
-  assert.notEqual(second.value.cwd, first.value.cwd);
-  assert.match(second.value.cwd, /^[0-9a-f]{12}$/);
-  assert.equal(second.meta.pii + second.meta.secrets, 0);
-  assert.deepEqual(second.value._sanitization, first.meta, "stamp from the first pass is kept");
-});
-
 test("a raw path added to an already stamped record is still hashed", () => {
   const first = s.sanitizeEventData({ file_path: "/Users/me/a.js" }, SALT);
   const tampered = { ...first.value, file_path: "/Users/me/new-secret-project/b.ts", cwd: "/Users/me/x" };
-  const { value } = s.sanitizeEventData(tampered, SALT);
+  const { value, meta } = s.sanitizeEventData(tampered, SALT);
   assert.match(value.file_path, /^\/Users\/[0-9a-f]{12}\/[0-9a-f]{12}\/[0-9a-f]{12}\.ts$/);
+  assert.equal(meta.counts.path, 4, "three file_path segments and the whole cwd");
   assert.notEqual(value.file_path, first.value.file_path, "new path gets its own hash");
   assert.match(value.cwd, /^[0-9a-f]{12}$/);
   assert.equal(JSON.stringify(value).includes("new-secret-project"), false);
@@ -278,6 +274,8 @@ test("meta counts per kind and keeps the secret/pii totals and detector ids", ()
 
 test("containsSecret stays false for PII-only content", () => {
   assert.equal(s.containsSecret("call 010-1234-5678 at 10.0.0.1, card 4111 1111 1111 1111"), false);
+  assert.equal(s.containsSecret("me@example.com"), false);
+  assert.equal(s.containsSecret("just a normal skill name"), false);
   assert.equal(s.containsSecret("AKIAIOSFODNN7EXAMPLE"), true);
 });
 
