@@ -11,6 +11,7 @@ const {
   loadRepositoryTelemetryState,
 } = require("./lib/repository-telemetry");
 const { appendBackfillLog } = require("./lib/backfill-log");
+const { settleBackfillDelivery } = require("./lib/backfill-delivery");
 const {
   spawnDetachedDrain,
   stageTranscriptSnapshot,
@@ -137,6 +138,10 @@ async function main() {
       error: errors[0],
     }
   );
+  // The drain was spawned before the snapshot was marked finished, so it can
+  // empty the queue while the state still says running and settle nothing.
+  // Settling here too covers that ordering.
+  try { settleBackfillDelivery(); } catch {}
 }
 
 const offerId = process.argv[2] || "";

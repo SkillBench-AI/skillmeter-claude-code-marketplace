@@ -1,99 +1,28 @@
 #!/usr/bin/env node
 /**
- * Tail detached backfill diagnostics. Emit bounded lifecycle and quarantine
- * notices on stdout; each line becomes a Claude notification. Send per-attempt
- * errors to stderr to avoid notification-driven Stop/upload retry loops.
- * The full local event stream remains in logs/backfill.ndjson.
+ * Tail detached backfill diagnostics. Each stdout line becomes a Claude
+ * notification, so stdout carries only a worker failure; progress stays quiet
+ * and the finished import is announced once through the backfill-result.json
+ * FileChanged hook. Upload detail goes to stderr, which also avoids
+ * notification-driven Stop/upload retry loops. The full local event stream
+ * remains in logs/backfill.ndjson.
  */
 
 const fs = require("fs");
-const path = require("path");
 
 const {
   BACKFILL_LOG_FILE,
 } = require("../lib/backfill-log");
-const { readBackfillState } = require("../lib/backfill-state");
 
 const POLL_INTERVAL_MS = 500;
 
-function pendingBackfillChunks() {
-  const logRoot = path.join(require("../lib/paths").LOG_DIR, "repositories");
-  let count = 0;
-  let repositoryDirs = [];
-  try {
-    repositoryDirs = fs.readdirSync(logRoot);
-  } catch {
-    return 0;
-  }
-  for (const repositoryDir of repositoryDirs) {
-    const chunksDir = path.join(
-      logRoot,
-      repositoryDir,
-      "transcripts",
-      "chunks"
-    );
-    let files = [];
-    try {
-      files = fs.readdirSync(chunksDir)
-        .filter((file) => file.endsWith(".meta.json"));
-    } catch {
-      continue;
-    }
-    for (const file of files) {
-      try {
-        const meta = JSON.parse(
-          fs.readFileSync(path.join(chunksDir, file), "utf8")
-        );
-        if (meta.promptId === "backfill") count++;
-      } catch {}
-    }
-  }
-  return count;
-}
-
 function formatNotification(record) {
   if (!record || typeof record !== "object") return "";
-  switch (record.event) {
-    case "worker_spawned":
-      return (
-        `SkillMeter backfill worker started: pid ${record.workerPid}, ` +
-        `${record.repositoryCount} repositories.`
-      );
-    case "scan_completed":
-      return (
-        `SkillMeter backfill scan: ${record.sessionsIncluded} sessions selected, ` +
-        `${record.sessionsSkipped} skipped.`
-      );
-    case "snapshot_completed":
-      return (
-        `SkillMeter backfill snapshot complete: ${record.processedTranscripts} ` +
-        `sessions, ${record.queuedChunks} upload chunks queued, ` +
-        `${record.skippedTranscripts} skipped.`
-      );
-    case "upload_batch_completed":
-      if ((record.uploaded || 0) === 0 && (record.failed || 0) === 0) {
-        return "";
-      }
-      return (
-        `SkillMeter backfill upload pass complete: ${record.uploaded} sent, ` +
-        `${record.failed} failed, ${record.deferred} deferred.`
-      );
-    // Terminal, and therefore safe to announce: a chunk reports this once, when
-    // its retry budget runs out and it is set aside. `upload_failed` is the
-    // per-attempt event and belongs on stderr (see formatDiagnostic).
-    case "upload_abandoned":
-      return (
-        `SkillMeter backfill gave up on 1 upload chunk after ` +
-        `${record.attempts || 0} attempts ` +
-        `(${record.repository || "repository"} seq ${record.seq || 0}, ` +
-        `${record.error || `HTTP ${record.httpStatus || "error"}`}); ` +
-        `it is set aside, not lost.`
-      );
-    case "worker_failed":
-      return `SkillMeter backfill worker failed: ${record.error || "unknown error"}.`;
-    default:
-      return "";
+  if (record.event === "worker_failed") {
+    const error = String(record.error || "unknown error").replace(/\.$/, "");
+    return `SkillMeter history import failed: ${error}.`;
   }
+  return "";
 }
 
 /**
@@ -114,6 +43,12 @@ function formatDiagnostic(record) {
       return (
         `upload deferred: ${record.repository || "repository"} ` +
         `seq ${record.seq || 0}, ${record.reason || "unknown reason"}`
+      );
+    case "upload_abandoned":
+      return (
+        `upload set aside: ${record.repository || "repository"} ` +
+        `seq ${record.seq || 0} after ${record.attempts || 0} attempts, ` +
+        `${record.error || `HTTP ${record.httpStatus || "error"}`}`
       );
     default:
       return "";
@@ -172,15 +107,6 @@ function sleep(ms) {
 
 async function main() {
   let offset = fileSize();
-  const state = readBackfillState();
-  const pending = pendingBackfillChunks();
-  if (state?.status === "running") {
-    emit(
-      `SkillMeter backfill monitor attached: snapshot running, ${pending} upload chunks pending.`
-    );
-  } else if (pending > 0) {
-    emit(`SkillMeter backfill monitor attached: ${pending} upload chunks pending.`);
-  }
 
   while (true) {
     await sleep(POLL_INTERVAL_MS);
@@ -209,5 +135,4 @@ if (require.main === module) {
 module.exports = {
   formatDiagnostic,
   formatNotification,
-  pendingBackfillChunks,
 };

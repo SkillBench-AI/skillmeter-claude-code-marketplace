@@ -12,6 +12,13 @@ const { detectHarness } = require("./harness.js");
 const { PLUGIN_ROOT, PLUGIN_VERSION } = require("./lib/paths");
 const { initializeBackfillLifecycle } = require("./lib/backfill-state");
 const {
+  BACKFILL_RESULT_FILE,
+  ensureBackfillResultFile,
+  settleBackfillDelivery,
+  takeBackfillNotice,
+} = require("./lib/backfill-delivery");
+const { getLicenseAudiences } = require("./lib/jwt");
+const {
   signInRequiredBanner,
   telemetryConsentRequiredBanner,
   telemetryRepositoryRequiredBanner,
@@ -30,6 +37,10 @@ async function prepareSession() {
   initializeBackfillLifecycle();
   const deviceId = credstore.getDeviceId();
   credstore.ensureSigninResultFile();
+  ensureBackfillResultFile();
+  // Catches an import whose last drain finished before the snapshot was
+  // marked done, or whose settle was interrupted.
+  try { settleBackfillDelivery(); } catch {}
   if (!deviceId) return;
   // A new session gets one fresh attempt even if the daemon gave up last time
   // (ADR 001, decision 2: SessionStart clears the terminal state). Done before
@@ -81,7 +92,7 @@ function runSessionStartHook() {
       const out = {
         hookSpecificOutput: {
           hookEventName: "SessionStart",
-          watchPaths: [credstore.SIGNIN_RESULT_FILE],
+          watchPaths: [credstore.SIGNIN_RESULT_FILE, BACKFILL_RESULT_FILE],
         },
       };
       // One banner (not-signed-in vs telemetry-active are mutually exclusive),
@@ -89,6 +100,13 @@ function runSessionStartHook() {
       // detached and couldn't print itself): success with counts, or failure
       // with the error. Shown once, then marked notified so it doesn't repeat.
       const lines = [];
+      // An import that finished while no session was open is announced here.
+      try {
+        const backfillNotice = takeBackfillNotice({
+          audiences: getLicenseAudiences(credstore.getLicenseToken()),
+        });
+        if (backfillNotice) lines.push(backfillNotice.message);
+      } catch {}
       const up = credstore.readUploadResult();
       if (up && !up.notified) {
         if (up.events > 0 || up.transcripts > 0) {

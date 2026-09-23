@@ -60,6 +60,11 @@ telemetry. An accepted historical offer can upload while live telemetry is OFF;
 the global switch still pauses both. Queue cleanup preserves only historical
 chunks belonging to the accepted offer and its scope.
 
+The upload runs in the background. When every historical chunk has been
+acknowledged by the backend or has exhausted its retries, SkillMeter announces
+the import once, with a desktop notification where the terminal supports it. If
+no session is open at that moment, the notice appears at the next session start.
+
 `/skillmeter:backfill status` distinguishes queued chunks from chunks acknowledged
 by the backend. A queued snapshot alone does not prove delivery.
 

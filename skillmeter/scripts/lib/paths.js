@@ -32,6 +32,8 @@ const REPOSITORIES_LOG_DIR = path.join(LOG_DIR, "repositories");
 const ORGANIZATION_AUDIT_LOG_DIR = path.join(LOG_DIR, "organization-audit");
 const SESSIONS_DIR = path.join(DATA_ROOT, "sessions");
 const BACKFILL_STATE_FILE = path.join(DATA_ROOT, "backfill-state.json");
+// Watched by FileChanged; written once when every historical chunk is settled.
+const BACKFILL_RESULT_FILE = path.join(DATA_ROOT, "backfill-result.json");
 
 function repositoryStorageId(repoKey, hashSalt) {
   return crypto.createHmac("sha256", hashSalt).update(repoKey).digest("hex").slice(0, 12);
@@ -71,6 +73,7 @@ module.exports = {
   ORGANIZATION_AUDIT_LOG_DIR,
   SESSIONS_DIR,
   BACKFILL_STATE_FILE,
+  BACKFILL_RESULT_FILE,
   repositoryQueuePaths,
   organizationAuditQueuePaths,
   PLUGIN_VERSION,

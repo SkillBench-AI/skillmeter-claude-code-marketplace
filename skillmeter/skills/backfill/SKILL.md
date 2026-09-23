@@ -22,8 +22,10 @@ node ${CLAUDE_PLUGIN_ROOT}/scripts/backfill.js status LIFECYCLE_ID
 
 Use the exact `backfill.lifecycleId`. Report the lifecycle status and every
 transcript entry grouped by repository. `sentChunks` records backend-confirmed
-2xx uploads; never infer sent status from queued chunks. Do not show or request
-local paths.
+2xx uploads; never infer sent status from queued chunks. Report `delivery`:
+`deliveredAt` set means the import finished; otherwise `pendingChunks` are
+still waiting to upload. `setAsideChunks` exhausted their retries and are kept
+on disk, not sent. Do not show or request local paths.
 
 ## Trigger
 
@@ -89,7 +91,10 @@ Never pass paths, labels, custom input, inferred IDs, or repositories from
 another organization. If `stale: true`, refresh the inventory and reconfirm the
 changed scope; do not reuse the old selection.
 
-Report the detached worker PID and explain that `/skillmeter:backfill status`
-shows transcript UUIDs, queued chunks, and backend-confirmed sent chunks.
-Ongoing telemetry remains unchanged. The global telemetry kill-switch still
-pauses historical transmission.
+Report how much history is importing, from `history`: the session count, the
+size in MB (`bytes` / 1,000,000, one decimal) and the repository count; omit
+the counts when `history` is null. Say that the import runs in the background,
+that SkillMeter notifies the user once when it finishes, and that
+`/skillmeter:backfill status` shows progress meanwhile. Do not report the
+worker PID. Ongoing telemetry remains unchanged. The global telemetry
+kill-switch still pauses historical transmission.

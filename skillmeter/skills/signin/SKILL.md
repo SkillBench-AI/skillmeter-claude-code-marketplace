@@ -184,6 +184,13 @@ If `accept` reports `stale: true`, refresh the list and reconfirm the changed
 historical repository scope without changing the already-applied telemetry
 choice. Never include stale repositories or repositories from another org.
 
+When `accept` reports `started: true`, tell the user in one sentence how much
+history is importing, from `history`: the session count, the size in MB
+(`bytes` / 1,000,000, one decimal) and the repository count. Say that the
+import runs in the background, that they can keep working, and that SkillMeter
+notifies them once when it finishes. Omit the counts when `history` is null. Do
+not report the worker PID.
+
 The global telemetry kill-switch still pauses historical transmission. An
 organization or repository telemetry OFF choice does not block a separately
 accepted historical upload. Report the telemetry result and historical result

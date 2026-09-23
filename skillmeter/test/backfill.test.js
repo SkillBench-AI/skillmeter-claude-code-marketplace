@@ -331,7 +331,14 @@ test("accept queues historical data without changing telemetry policy", async ()
     { cwd: repo, env }
   );
   assert.equal(accepted.status, 0, accepted.stderr);
-  assert.equal(JSON.parse(accepted.stdout).started, true);
+  const acceptResult = JSON.parse(accepted.stdout);
+  assert.equal(acceptResult.started, true);
+  // The skill reports what will be sent before the upload runs in the background.
+  assert.deepEqual(acceptResult.history, {
+    sessions: 1,
+    bytes: fs.statSync(transcript).size,
+    repositories: 1,
+  });
   const unchangedPolicy = readJson(
     path.join(STATE_DIR, "telemetry-policy.json")
   );
@@ -391,6 +398,21 @@ test("accept queues historical data without changing telemetry policy", async ()
     assert.ok(events.has(event), `missing backfill log event: ${event}`);
   }
   assert.ok(logRecords.every((record) => !("transcriptContent" in record)));
+  // No endpoint is configured here, so the chunk is deferred, not delivered:
+  // the import must not be announced as finished.
+  assert.equal(events.has("delivery_completed"), false);
+  assert.equal(readJson(backfillState.BACKFILL_STATE_FILE).delivered_at, undefined);
+  const status = runNode(
+    path.resolve(__dirname, "../scripts/backfill.js"),
+    ["status", "44444444-4444-4444-8444-444444444444"],
+    { cwd: repo, env }
+  );
+  assert.equal(status.status, 0, status.stderr);
+  assert.deepEqual(JSON.parse(status.stdout).delivery, {
+    deliveredAt: null,
+    pendingChunks: 1,
+    setAsideChunks: 0,
+  });
 
   const snapshotMeta = transfer.listDeltaChunks()
     .map((bodyPath) => readJson(

@@ -22,7 +22,6 @@ const {
 const {
   formatDiagnostic,
   formatNotification,
-  pendingBackfillChunks,
 } = require("../scripts/monitors/backfill_monitor");
 
 test("backfill monitor is registered as an always-on plugin monitor", () => {
@@ -67,59 +66,29 @@ test("structured backfill log is private, append-only NDJSON", () => {
   assert.equal(appendBackfillLog("../invalid", {}), null);
 });
 
-test("monitor reports lifecycle summaries without transcript content", () => {
-  assert.equal(
-    formatNotification({
+test("progress stays quiet; the finished import is announced by its own hook", () => {
+  for (const record of [
+    { event: "worker_spawned", workerPid: 123, repositoryCount: 2 },
+    { event: "scan_completed", sessionsIncluded: 21, sessionsSkipped: 15 },
+    {
       event: "snapshot_completed",
       processedTranscripts: 21,
       queuedChunks: 21,
       skippedTranscripts: 15,
-    }),
-    "SkillMeter backfill snapshot complete: 21 sessions, 21 upload chunks queued, 15 skipped."
-  );
-  assert.equal(
-    formatNotification({
-      event: "upload_batch_completed",
-      uploaded: 20,
-      failed: 1,
-      deferred: 0,
-    }),
-    "SkillMeter backfill upload pass complete: 20 sent, 1 failed, 0 deferred."
-  );
-  assert.equal(
-    formatNotification({
-      event: "upload_attempt",
-      transcriptContent: "must not be shown",
-    }),
-    ""
-  );
-  assert.equal(
-    formatNotification({
-      event: "upload_batch_completed",
-      uploaded: 0,
-      failed: 0,
-      deferred: 21,
-    }),
-    ""
-  );
+    },
+    { event: "upload_batch_completed", uploaded: 20, failed: 1, deferred: 0 },
+    { event: "delivery_completed", sessions: 21, setAsideChunks: 0 },
+    { event: "upload_attempt", transcriptContent: "must not be shown" },
+  ]) {
+    assert.equal(formatNotification(record), "", record.event);
+  }
 });
 
-test("monitor counts only backfill upload chunks", () => {
-  const chunks = path.join(
-    DATA_DIR,
-    "logs",
-    "repositories",
-    "aaaaaaaaaaaa",
-    "transcripts",
-    "chunks"
+test("a failed worker is announced because the import will not finish", () => {
+  assert.equal(
+    formatNotification({ event: "worker_failed", error: "Backfill worker failed." }),
+    "SkillMeter history import failed: Backfill worker failed."
   );
-  writeJson(path.join(chunks, "backfill.meta.json"), {
-    promptId: "backfill",
-  });
-  writeJson(path.join(chunks, "live.meta.json"), {
-    promptId: "live",
-  });
-  assert.equal(pendingBackfillChunks(), 1);
 });
 
 // ---- output contract -------------------------------------------------------
@@ -161,17 +130,18 @@ test("retry noise is still visible as monitor diagnostics on stderr", () => {
   assert.equal(formatDiagnostic({ event: "snapshot_completed" }), "");
 });
 
-test("giving up on a chunk is announced once, because it is actionable", () => {
+test("a set-aside chunk is a diagnostic; the completion notice counts it", () => {
+  const record = {
+    event: "upload_abandoned",
+    repository: "github.com/skillbench-ai/example",
+    transcriptId: "e982c12e-621b-49c6-9a82-564ab0fb7f9c",
+    seq: 3,
+    attempts: 8,
+    error: "HTTP 500",
+  };
+  assert.equal(formatNotification(record), "");
   assert.equal(
-    formatNotification({
-      event: "upload_abandoned",
-      repository: "github.com/skillbench-ai/example",
-      transcriptId: "e982c12e-621b-49c6-9a82-564ab0fb7f9c",
-      seq: 3,
-      attempts: 8,
-      error: "HTTP 500",
-    }),
-    "SkillMeter backfill gave up on 1 upload chunk after 8 attempts " +
-      "(github.com/skillbench-ai/example seq 3, HTTP 500); it is set aside, not lost."
+    formatDiagnostic(record),
+    "upload set aside: github.com/skillbench-ai/example seq 3 after 8 attempts, HTTP 500"
   );
 });
