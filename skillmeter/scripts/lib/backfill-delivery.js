@@ -117,6 +117,27 @@ function settleBackfillDelivery() {
   return result;
 }
 
+/**
+ * Announce a failed import, but only one that queued nothing. When chunks were
+ * queued they still upload, and the delivery notice reports the result; a
+ * failure notice first would contradict it.
+ */
+function announceBackfillFailure(offerId) {
+  const state = readBackfillState();
+  if (
+    !state ||
+    state.status !== "failed" ||
+    state.offer_id !== offerId ||
+    state.queued_chunks > 0 ||
+    safeReadJson(BACKFILL_RESULT_FILE, null)?.offerId === offerId
+  ) {
+    return null;
+  }
+  const result = { status: "failed", offerId, ts: Date.now() };
+  atomicWriteJson(BACKFILL_RESULT_FILE, result);
+  return result;
+}
+
 // SessionStart registers the sentinel in watchPaths, which needs it to exist.
 function ensureBackfillResultFile() {
   if (fs.existsSync(BACKFILL_RESULT_FILE)) return;
@@ -151,6 +172,15 @@ function plural(count, word) {
 }
 
 function formatBackfillNotice(result, dashboardUrl) {
+  // The stored error text can carry local paths, so it is never shown here.
+  if (result?.status === "failed") {
+    return {
+      message:
+        "SkillMeter: history import failed before anything was sent. " +
+        "Run /skillmeter:backfill to try again.",
+      desktop: "History import failed",
+    };
+  }
   if (!result || result.status !== "delivered") return null;
   const sessions = result.sessions || 0;
   const setAside = result.setAsideChunks || 0;
@@ -194,6 +224,7 @@ function takeBackfillNotice({ audiences = [] } = {}) {
 
 module.exports = {
   BACKFILL_RESULT_FILE,
+  announceBackfillFailure,
   countBackfillChunks,
   dashboardUrlFromAudiences,
   ensureBackfillResultFile,
