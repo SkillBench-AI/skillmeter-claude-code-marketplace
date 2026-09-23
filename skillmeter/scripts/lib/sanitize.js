@@ -19,7 +19,8 @@ const VOCABULARY = require("./path-vocabulary.json");
 // stage 1: typed PII placeholders, idempotency, identifier-only key heuristic,
 // per-record reporting. 3.1.0 = segment-wise hashing of file-path fields with
 // the shared vocabulary, and `counts.path` (ADR 002 amendment, decision 6).
-const POLICY_VERSION = "3.1.0";
+// 3.1.1 preserves distinct entries whose object keys redact to the same string.
+const POLICY_VERSION = "3.1.1";
 
 // ---------------------------------------------------------------------------
 // Content redaction
@@ -386,13 +387,32 @@ function scrubDeep(value, hashSalt, redactions = [], parentKey = null) {
   }
   if (value && typeof value === "object") {
     const out = {};
-    for (const [key, val] of Object.entries(value)) {
-      // Keys can themselves be sensitive — some transcript entries use absolute
-      // file paths as map keys, which carry the home-dir/username. Scrub the key
-      // (redact + home-path hash, both tallied like any other string) but decide
-      // `isSecretKey` value-forcing from the ORIGINAL key name.
-      const scrubbedKey = scrubString(key, hashSalt, redactions);
-      out[scrubbedKey] = scrubDeep(val, hashSalt, redactions, key);
+    const entries = Object.entries(value).map(([key, val]) => ({
+      key, val, scrubbedKey: scrubString(key, hashSalt, redactions),
+    }));
+    // Reserve every scrubbed input key before allocating suffixes, including
+    // literal keys that already look like generated disambiguators.
+    const reserved = new Set(entries.map(entry => entry.scrubbedKey));
+    const nextOrdinal = new Map();
+    for (const { key, val, scrubbedKey } of entries) {
+      let outputKey = scrubbedKey;
+      if (Object.hasOwn(out, outputKey)) {
+        const basename = scrubbedKey.slice(Math.max(scrubbedKey.lastIndexOf("/"), scrubbedKey.lastIndexOf("\\")) + 1);
+        const { ext } = splitExtension(basename);
+        const stem = scrubbedKey.slice(0, scrubbedKey.length - ext.length);
+        let ordinal = nextOrdinal.get(scrubbedKey) || 2;
+        do {
+          outputKey = `${stem}[key-${ordinal++}]${ext}`;
+        } while (reserved.has(outputKey));
+        nextOrdinal.set(scrubbedKey, ordinal);
+        reserved.add(outputKey);
+      }
+      // Define data properties so a JSON key such as __proto__ cannot invoke a
+      // setter. Value-forcing still uses the original, unsanitized key name.
+      Object.defineProperty(out, outputKey, {
+        value: scrubDeep(val, hashSalt, redactions, key),
+        enumerable: true, configurable: true, writable: true,
+      });
     }
     return out;
   }

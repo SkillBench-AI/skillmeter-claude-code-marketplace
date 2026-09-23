@@ -1,7 +1,7 @@
 # Two-Stage Sanitization and Typed PII Placeholders
 
 **Date:** 2026-09-11
-**Status:** Accepted (PR #107, merged 2026-09-11). Amended 2026-09-11 for path
+**Status:** Accepted (PR #107, merged 2026-09-11). Amended 2026-09-23 for colliding object keys (policy 3.1.1, PR #121) and 2026-09-11 for path
 handling, repository identity and the file-name policy; see the
 [amendment](#amendment-2026-09-11-path-handling-repository-identity-and-file-name-policy)
 at the end.
@@ -496,3 +496,27 @@ default and audit trail.
   prefix.
 - Whether `cwd` should additionally carry `repo_name`-relative depth for the
   analysis; not needed by the five metrics named above.
+
+## Amendment 2026-09-23: preserve colliding object keys
+
+**Status:** Accepted (PR #121). Policy `3.1.1`.
+
+Policy `3.1.1` preserves entries when different object keys scrub to the same
+string. For example, two email-bearing file paths can both become
+`/src/[EMAIL]/cart.cjs`; overwriting either value loses an observed file change.
+
+The first entry keeps the scrubbed key. Later entries receive `[key-2]`,
+`[key-3]`, etc., before the final filename extension when present, including
+compound extensions from the existing vocabulary. All scrubbed input keys are
+reserved first, so a generated key cannot overwrite a literal suffix-shaped
+key. Nested objects use independent counters. JSON keys such as `__proto__`
+remain own data properties. Values still use the original key for secret-label
+and path-field rules.
+
+These suffixes are record-local disambiguators allocated in source entry order,
+not persistent file identities or additional hashes of sensitive text. They can
+change when the entries or their order change. Consumers must not infer identity
+across records from a suffix. Existing noncolliding keys, value redaction and
+path hashing stay unchanged. The fix cannot recover entries already discarded
+by earlier sanitization. Sibling sanitizers pin this policy by upstream commit;
+refresh the pin to the merged commit.
