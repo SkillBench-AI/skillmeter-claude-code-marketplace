@@ -64,6 +64,8 @@ The upload runs in the background. When every historical chunk has been
 acknowledged by the backend or has exhausted its retries, SkillMeter announces
 the import once, with a desktop notification where the terminal supports it. If
 no session is open at that moment, the notice appears at the next session start.
+An import that fails before queuing anything is announced the same way; one
+that queued chunks reports through the completion notice.
 
 `/skillmeter:backfill status` distinguishes queued chunks from chunks acknowledged
 by the backend. A queued snapshot alone does not prove delivery.

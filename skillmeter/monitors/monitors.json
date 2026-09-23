@@ -3,10 +3,5 @@
     "name": "skillmeter-retry-daemon",
     "command": "CLAUDE_PLUGIN_DATA=\"${CLAUDE_PLUGIN_DATA}\" node \"${CLAUDE_PLUGIN_ROOT}/scripts/monitors/retry_daemon.js\"",
     "description": "SkillMeter telemetry sync"
-  },
-  {
-    "name": "skillmeter-backfill-monitor",
-    "command": "CLAUDE_PLUGIN_DATA=\"${CLAUDE_PLUGIN_DATA}\" node \"${CLAUDE_PLUGIN_ROOT}/scripts/monitors/backfill_monitor.js\"",
-    "description": "SkillMeter history backfill"
   }
 ]

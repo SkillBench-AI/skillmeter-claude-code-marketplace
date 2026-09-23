@@ -21,6 +21,7 @@ setTestEnv("CLAUDE_PLUGIN_DATA", DATA_DIR);
 const backfillState = require("../scripts/lib/backfill-state");
 const {
   BACKFILL_RESULT_FILE,
+  announceBackfillFailure,
   countBackfillChunks,
   dashboardUrlFromAudiences,
   ensureBackfillResultFile,
@@ -142,6 +143,33 @@ test("an unset sentinel yields no notice", () => {
   ensureBackfillResultFile();
   assert.deepEqual(readJson(BACKFILL_RESULT_FILE), { status: "none" });
   assert.equal(takeBackfillNotice({ audiences: [] }), null);
+});
+
+test("a failure is announced only when nothing was queued, and only once", () => {
+  writeState({
+    status: "failed",
+    reason: "snapshot_failed",
+    queued_chunks: 0,
+    error: "/Users/someone/.claude/projects/x.jsonl: EACCES",
+  });
+  assert.equal(announceBackfillFailure("offer-other"), null);
+  assert.equal(announceBackfillFailure(OFFER).status, "failed");
+  assert.equal(announceBackfillFailure(OFFER), null, "already announced");
+
+  const notice = takeBackfillNotice({ audiences: [] });
+  assert.equal(
+    notice.message,
+    "SkillMeter: history import failed before anything was sent. " +
+      "Run /skillmeter:backfill to try again."
+  );
+  assert.doesNotMatch(notice.message, /Users|EACCES/, "stored error text is never shown");
+  assert.equal(notice.desktop, "History import failed");
+});
+
+test("a failure that still queued chunks is left to the delivery notice", () => {
+  writeState({ status: "failed", reason: "snapshot_failed", queued_chunks: 2 });
+  assert.equal(announceBackfillFailure(OFFER), null);
+  assert.equal(fs.existsSync(BACKFILL_RESULT_FILE), false);
 });
 
 test("notice wording covers full delivery, set-aside chunks and the dashboard link", () => {

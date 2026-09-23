@@ -11,7 +11,10 @@ const {
   loadRepositoryTelemetryState,
 } = require("./lib/repository-telemetry");
 const { appendBackfillLog } = require("./lib/backfill-log");
-const { settleBackfillDelivery } = require("./lib/backfill-delivery");
+const {
+  announceBackfillFailure,
+  settleBackfillDelivery,
+} = require("./lib/backfill-delivery");
 const {
   spawnDetachedDrain,
   stageTranscriptSnapshot,
@@ -142,6 +145,8 @@ async function main() {
   // empty the queue while the state still says running and settle nothing.
   // Settling here too covers that ordering.
   try { settleBackfillDelivery(); } catch {}
+  // A no-op unless the snapshot failed with nothing queued.
+  try { announceBackfillFailure(offerId); } catch {}
 }
 
 const offerId = process.argv[2] || "";
@@ -156,6 +161,7 @@ main().catch((err) => {
         error: "Backfill worker failed.",
       });
     } catch {}
+    try { announceBackfillFailure(offerId); } catch {}
   }
   process.exitCode = 1;
 });

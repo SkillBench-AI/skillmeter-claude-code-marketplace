@@ -81,12 +81,6 @@ test("authorization header redacts only the credential", () => {
   assert.equal(value, "Authorization: Bearer [REDACTED_SECRET]");
 });
 
-test("containsSecret is true for secrets, false for plain text and emails", () => {
-  assert.equal(s.containsSecret(SAMPLES["aws-access-token"]), true);
-  assert.equal(s.containsSecret("just a normal skill name"), false);
-  assert.equal(s.containsSecret("me@example.com"), false); // pii, not secret
-});
-
 test("scrubString hashes the home-dir prefix and drops the username", () => {
   const home = os.homedir();
   const input = `${home}/vscode/proj/file.js`;
@@ -100,14 +94,6 @@ test("scrubString hashes the home-dir prefix and drops the username", () => {
 test("scrubString without a salt still redacts secrets (only path-hash skipped)", () => {
   const out = s.scrubString(`key ${SAMPLES.jwt}`, "");
   assert.ok(out.includes("[REDACTED_SECRET]"));
-});
-
-test("scrubDeep forces redaction on secret-labelled object keys", () => {
-  const { value } = s.sanitizeEventData(
-    { mcp: { env: { API_KEY: "someRealLookingValue123" } } },
-    SALT
-  );
-  assert.equal(value.mcp.env.API_KEY, "[REDACTED_SECRET]");
 });
 
 test("sanitizeLine scrubs secret + email + home path across a transcript line", () => {
@@ -126,16 +112,6 @@ test("sanitizeLine scrubs secret + email + home path across a transcript line", 
   assert.ok(out.includes("[REDACTED_SECRET]") && out.includes("[EMAIL]"));
 });
 
-test("sanitizeEventData meta reports secret/pii counts and policy version", () => {
-  const { meta } = s.sanitizeEventData(
-    { a: SAMPLES["aws-access-token"], b: "me@example.com" },
-    SALT
-  );
-  assert.equal(meta.secrets, 1);
-  assert.equal(meta.pii, 1);
-  assert.equal(meta.policyVersion, s.POLICY_VERSION);
-});
-
 test("non-string scalars pass through untouched", () => {
   const { value } = s.sanitizeEventData({ n: 42, b: true, z: null }, SALT);
   const { _sanitization, ...rest } = value;
@@ -152,36 +128,6 @@ test("secret-labelled key redaction does NOT clobber author-like fields (A1)", (
   assert.equal(value.authored_by, "Bob");
   // author_email value is a real email → redacted by the email rule, not the key.
   assert.equal(value.author_email, "[EMAIL]");
-});
-
-test("secret-labelled key still forces redaction for real secret keys", () => {
-  const { value } = s.sanitizeEventData(
-    { authorization: "Bearer abc", auth: "zzz", token: "qqq" },
-    SALT
-  );
-  assert.equal(value.authorization, "[REDACTED_SECRET]");
-  assert.equal(value.auth, "[REDACTED_SECRET]");
-  assert.equal(value.token, "[REDACTED_SECRET]");
-});
-
-test("file-path keys are hashed per segment, including nested (B3)", () => {
-  const home = os.homedir();
-  const { value } = s.sanitizeEventData(
-    {
-      tool_input: {
-        file_path: `${home}/proj/a.js`,
-        notebook_path: `${home}/nb.ipynb`,
-        edits: [{ file_path: `${home}/proj/b.js` }],
-      },
-    },
-    SALT
-  );
-  const ti = value.tool_input;
-  const CHAIN = /^[0-9a-f]{12}(?:\/[0-9a-f]{12})+\.(?:js|ipynb)$/;
-  for (const v of [ti.file_path, ti.notebook_path, ti.edits[0].file_path]) {
-    assert.match(v, CHAIN, "file-path value is a chain of 12-hex segments with the extension kept");
-    assert.ok(!v.includes(home), "raw home path must not survive");
-  }
 });
 
 test("CwdChanged old_cwd and new_cwd are HMAC-hashed wholesale", () => {

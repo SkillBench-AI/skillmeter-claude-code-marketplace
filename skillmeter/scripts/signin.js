@@ -271,8 +271,7 @@ async function main() {
     process.exit(1);
   }
 
-  // Straight to the device grant. The `gh auth token` shortcut that used to
-  // run first is gone from the whole plugin, not just from here.
+  // Straight to the device grant.
   const device = await requestDeviceCode();
 
   const expiresMin = Math.round(device.expires_in / 60);
