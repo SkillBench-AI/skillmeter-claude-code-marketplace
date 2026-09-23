@@ -104,6 +104,10 @@ are eligible for cleanup after 30 days. Pending chunks are retained for retry
 unless an applicable policy change removes them.
 
 License refresh runs at session start, before uploads and during monitor sweeps.
+Stop also requests a detached refresh for an enabled repository near expiry,
+even when its queue is empty and no monitor is running. Hooks do not wait for
+the request. This restores capture on later hooks after recovery; events skipped
+while the license is stale are still lost.
 Transient failures back off; repeated failure or revocation stops background
 retries. A license that can no longer be refreshed requires `/skillmeter:signin`
 and browser approval. See [ADR001](../docs/adr/001-license-token-lifecycle.md).
