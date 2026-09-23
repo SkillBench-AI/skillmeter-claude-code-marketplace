@@ -22,6 +22,7 @@ const { ensureFreshLicense } = require("./license-activation");
 const { getEventTimeoutMs, getTranscriptChunkMaxBytes } = require("./config");
 const { atomicWriteJson, safeReadJson } = require("./io");
 const { appendBackfillLog } = require("./backfill-log");
+const { settleBackfillDelivery } = require("./backfill-delivery");
 const {
   MAX_UPLOAD_ATTEMPTS,
   QUARANTINE_SUFFIX,
@@ -791,6 +792,7 @@ async function drainDeltaChunks(timeoutMs) {
         deferred,
         abandoned,
       });
+      try { settleBackfillDelivery(); } catch {}
     }
     return tally(results);
   } finally {

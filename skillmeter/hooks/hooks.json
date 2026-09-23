@@ -23,6 +23,17 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "backfill-result.json",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/on_backfill_result.js"],
+            "timeout": 10
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
