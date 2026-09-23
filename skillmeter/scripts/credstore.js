@@ -5,9 +5,8 @@ const path = require("path");
 // Resolved centrally in lib/config.js so SKILLMETER_STATE_DIR can isolate a dev
 // environment's credentials/identity from prod.
 const { CRED_FILE } = require("./lib/config");
-// Canonical JWT helpers. The validated org(s) for telemetry are read straight
-// from the license JWT (the activator's decision) — the client no longer stores
-// or narrows a GitHub org list.
+// Canonical JWT helpers. The org(s) validated for telemetry come straight from
+// the license JWT (the activator's decision); the client keeps no list of its own.
 const { isJwtExpired, getLicenseOrgs } = require("./lib/jwt");
 // Shared low-level file I/O (safe read, atomic write) — leaf module, no cycle.
 const { safeReadJson, atomicWriteJson } = require("./lib/io");

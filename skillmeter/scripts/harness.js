@@ -55,9 +55,8 @@ const KNOWN_HOOK_EVENTS = new Set([
   "WorktreeRemove",
 ]);
 
-// Marketplaces recognised as public/known. As of schema v2.0 all plugin names
-// are emitted raw, so this set is no longer a raw-vs-hash gate; it is retained
-// so downstream can still tell public-catalog plugins from private ones.
+// Marketplaces recognised as public/known. Plugin names are emitted raw; this
+// set lets downstream tell public-catalog plugins from private ones.
 const PUBLIC_MARKETPLACES = new Set([
   "skillbench",
   "claude-plugins-official",

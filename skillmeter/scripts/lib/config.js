@@ -51,7 +51,7 @@ function getActivateUrl() {
 
 // The /refresh endpoint sits next to /activate on the same host. Derive it from
 // getActivateUrl so one host config covers both; tolerate non-standard override
-// paths by appending /refresh. (Logic preserved from license-activation.js:39-43.)
+// paths by appending /refresh.
 function getRefreshUrl() {
   const url = getActivateUrl();
   if (url.endsWith("/activate")) return url.slice(0, -"/activate".length) + "/refresh";
@@ -96,12 +96,12 @@ const STATE_DIR =
 const CRED_FILE = path.join(STATE_DIR, "credentials.json");
 const TELEMETRY_POLICY_FILE = path.join(STATE_DIR, "telemetry-policy.json");
 
-// --- Numeric / boolean knobs (same defaults as before) ---
+// --- Numeric / boolean knobs ---
 function getEventTimeoutMs() {
-  return parseInt(process.env.SKILLMETER_TIMEOUT || "10", 10) * 1000; // transfer.js:35
+  return parseInt(process.env.SKILLMETER_TIMEOUT || "10", 10) * 1000;
 }
 function getRetryDaemonIntervalMs() {
-  return parseInt(process.env.SKILLMETER_RETRY_DAEMON_INTERVAL_MS || "", 10) || 120_000; // retry_daemon.js:28
+  return parseInt(process.env.SKILLMETER_RETRY_DAEMON_INTERVAL_MS || "", 10) || 120_000;
 }
 // Per-chunk UNCOMPRESSED byte budget for delta transcript upload. Conservative
 // default so the gzipped body stays well under the backend's 6 MB request limit
@@ -116,7 +116,6 @@ module.exports = {
   TELEMETRY_POLICY_FILE,
   getActivateUrl,
   getRefreshUrl,
-  getBrokerUrl,
   getDeviceCodeUrl,
   getTokenUrl,
   getOAuthClientId,

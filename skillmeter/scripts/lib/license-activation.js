@@ -277,5 +277,4 @@ module.exports = {
   ensureFreshLicense,
   // exported for tests
   _acquireRefreshLock: acquireRefreshLock,
-  _LICENSE_REFRESH_LOCK_FILE: LICENSE_REFRESH_LOCK_FILE,
 };

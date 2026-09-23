@@ -491,11 +491,7 @@ module.exports = {
   scrubString,
   sanitizeEventData,
   sanitizeLine,
-  summarizeRedactions,
-  isPlaceholder,
   isSecretKey,
   hasSanitizationMarker,
   hashPathSegments,
-  splitExtension,
-  isClearSegment,
 };

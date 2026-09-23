@@ -293,7 +293,6 @@ function clearLicenseStatus({ source = "signin" } = {}) {
 
 module.exports = {
   LICENSE_STATUS_FILE,
-  BACKOFF_CAP_MS,
   TERMINAL_REASONS,
   readLicenseStatus,
   backoffDelayMs,

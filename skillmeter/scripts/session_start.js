@@ -178,7 +178,7 @@ function runSessionStartHook() {
       // Not signed in, out of scope, or globally paused.
       process.stderr.write(
         `SkillMeter v${PLUGIN_VERSION} (telemetry not configured for this project)\n` +
-        `  /skillmeter:signin                — sign in with GitHub\n` +
+        `  /skillmeter:signin                — sign in\n` +
         `  /skillmeter:telemetry list        — review repository targets\n`
       );
     },
