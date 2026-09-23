@@ -9,13 +9,14 @@ const { makeTempDir, writeJson, writeFile, writeTelemetryPolicy, makeJwt, runNod
 const scripts = path.resolve(__dirname, "../scripts");
 
 // Exercise real hook/refresh/queue code in separate processes. Only the clock,
-// process launch and network are substituted; no monitor or real token is used.
-function fixture() {
+// network are substituted; most cases also stub launch. No monitor or real token is used.
+function fixture({ realSpawn = false } = {}) {
   const root = makeTempDir("skm-expiry-");
   const state = path.join(root, "state");
   const data = path.join(root, "data");
   const repo = path.join(root, "repo");
   const calls = path.join(root, "calls.jsonl");
+  const release = path.join(root, "release-refresh");
   const start = Date.now();
   const claims = { sub: "test-tenant", broker_sub: "test-user", org: { login: "acme" }, aud: "https://acme.meter.skillbench.ai" };
   const token = makeJwt({ ...claims, exp: Math.floor(start / 1000) + 900 });
@@ -29,11 +30,23 @@ const fs = require("fs");
 const cp = require("child_process");
 Date.now = () => Number(process.env.TEST_NOW);
 function record(value) { fs.appendFileSync(process.env.TEST_CALLS, JSON.stringify(value) + "\\n"); }
-cp.spawn = (file, args) => { record({ spawn: args }); return { pid: 999999, unref() {} }; };
+if (process.env.TEST_REAL_SPAWN !== "1") {
+  cp.spawn = (file, args) => { record({ spawn: args }); return { pid: 999999, unref() {} }; };
+} else {
+  record({ started: require("path").basename(process.argv[1]), pid: process.pid });
+  process.on("exit", () => record({ exited: require("path").basename(process.argv[1]), pid: process.pid }));
+}
 cp.execSync = () => { throw new Error("Unexpected shell command"); };
 global.fetch = async (url, options) => {
   record({ url: String(url) });
   if (String(url).endsWith("/refresh")) {
+    if (process.env.TEST_REAL_SPAWN === "1") {
+      // Hold the response until the test has observed Stop exit.
+      for (let attempt = 0; !fs.existsSync(process.env.TEST_RELEASE); attempt++) {
+        if (attempt >= 500) throw new Error("Refresh was not released");
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+    }
     const status = Number(process.env.TEST_REFRESH_STATUS || 200);
     return { ok: status === 200, status, json: async () => ({ token: process.env.TEST_FRESH }), text: async () => "synthetic failure" };
   }
@@ -56,6 +69,7 @@ global.fetch = async (url, options) => {
         HOME: root, USERPROFILE: root, SKILLMETER_STATE_DIR: state,
         CLAUDE_PLUGIN_DATA: data, CLAUDE_PLUGIN_ROOT: path.resolve(scripts, ".."),
         NODE_OPTIONS: `--require=${preload}`, TEST_NOW: String(now), TEST_CALLS: calls,
+        TEST_REAL_SPAWN: realSpawn ? "1" : "0", TEST_RELEASE: release,
         TEST_FRESH: makeJwt({ ...claims, exp: Math.floor(now / 1000) + 900 }),
         SKILLMETER_ACTIVATE_URL: "https://activation.test/activate",
         SKILLMETER_BACKEND_URL: "", SKILLMETER_ENV: "", ...extra,
@@ -67,7 +81,7 @@ global.fetch = async (url, options) => {
   function records() {
     return fs.existsSync(calls) ? fs.readFileSync(calls, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse) : [];
   }
-  return { state, data, credentials, token, start, records, run,
+  return { state, data, credentials, token, start, records, run, release,
     hook: (minute, extra) => run(path.join(scripts, "stop.js"), minute, extra),
     drain: (minute, extra) => run(path.join(scripts, "drain_once.js"), minute, extra),
   };
@@ -81,6 +95,28 @@ test("an expired empty session requests recovery without a monitor, then records
   f.drain(16);
   assert.deepEqual(f.records().filter(r => r.url).map(r => r.url), ["https://activation.test/refresh"]);
   assert.match(f.hook(17).stderr, /logged/);
+});
+
+test("Stop launches a real detached worker that recovers after the hook exits", async () => {
+  const f = fixture({ realSpawn: true });
+  f.hook(16);
+  assert.ok(f.records().some(r => r.exited === "stop.js"));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.state, "credentials.json"))).license_jwt, f.token);
+  fs.writeFileSync(f.release, "continue");
+  const deadline = Date.now() + 5000;
+  while (!f.records().some(r => r.exited === "drain_once.js") && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  const records = f.records();
+  const stop = records.find(r => r.started === "stop.js");
+  const worker = records.find(r => r.started === "drain_once.js");
+  assert.ok(worker, "Stop must launch the actual recovery entry point");
+  assert.notEqual(worker.pid, stop.pid);
+  assert.ok(records.some(r => r.exited === "drain_once.js"), "worker must finish within the deadline");
+  assert.deepEqual(records.filter(r => r.url).map(r => r.url), ["https://activation.test/refresh"]);
+  const renewed = JSON.parse(fs.readFileSync(path.join(f.state, "credentials.json"))).license_jwt;
+  assert.notEqual(renewed, f.token, "child must persist the refreshed token to the isolated state root");
+  assert.match(f.hook(17, { TEST_REAL_SPAWN: "0" }).stderr, /logged/);
 });
 
 test("detached recovery refreshes even with no queued files", () => {
