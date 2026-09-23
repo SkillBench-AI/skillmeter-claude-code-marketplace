@@ -8,9 +8,15 @@ const {
   clearDrainOnceLock,
   drainQueuesOnce,
 } = require("./lib/transfer");
+const { refreshForEnabledRepositories } = require("./lib/hook-license-recovery");
 
 async function main() {
   try {
+    try {
+      await refreshForEnabledRepositories();
+    } catch (err) {
+      process.stderr.write(`[skillmeter-drain-once] refresh failed (${err.message})\n`);
+    }
     await drainQueuesOnce();
   } finally {
     clearDrainOnceLock();

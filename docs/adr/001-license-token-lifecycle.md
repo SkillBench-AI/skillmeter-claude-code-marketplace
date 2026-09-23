@@ -16,7 +16,7 @@ the tenant's API Gateway JWT authorizer validates signature, issuer,
 audience, and expiry before the collector Lambda sees a request. There is no
 revocation list, so `exp` is the only revocation mechanism.
 
-### Current behaviour (as-is)
+### Behaviour at the original decision (2026-09-10)
 
 Server (`skillmeter-license-activation`):
 
@@ -311,3 +311,25 @@ is tracked as an open decision on INF-220, not settled here.
   track behind INF-200.
 - `/activate` still accepts GitHub tokens, deliberately, until deployed
   plugins stop sending them.
+
+
+## Amendment: Stop-triggered recovery without a monitor
+
+Stop requests the existing detached `drain_once.js` worker when its repository
+allows transmission and the token is expired or within the monitor's look-ahead
+window. This request does not depend on queued data. The hook performs no network
+I/O; the worker rechecks sign-out, token presence, consent, terminal state and
+backoff before refreshing, then drains the queues. The existing drain lock and
+refresh single-flight controls apply.
+
+This supplements decision 2 when the session has no running retry monitor.
+Recovery makes later hooks eligible to capture; it does not replay turns skipped
+while the token was expired. It does not create a sign-in, bypass disabled
+telemetry, change token lifetime, or rearm terminal 401/402/410 outcomes.
+
+Implementation: `scripts/lib/hook-license-recovery.js`, `scripts/stop.js` and
+`scripts/drain_once.js`. Run `node --test skillmeter/test/expiry-recovery.test.js`
+from the repository root. The suite covers empty-queue recovery, consent and
+terminal boundaries, and a real detached child that persists a synthetic refresh
+after Stop exits. Its clock and network are substituted; it does not use live
+authentication or production telemetry.
