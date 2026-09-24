@@ -393,7 +393,15 @@ ordinary enable/disable controls. Explicit validated repair is a separate action
 
 On first use with no shared policy, preserve each client's current explicit-consent
 behavior during migration. If a previously observed policy disappears, hold data
-and require a readable policy before resuming. Unknown organization/repository
+and require a readable policy before resuming. Persist prior observation in each
+client's durable plugin data, outside the policy file and credential store, before
+authorizing capture or delivery from shared permission. Preserve that marker
+through restart, refresh, sign-out and queue cleanup; ordinary controls cannot
+clear it. A marker that cannot be read/written blocks shared authorization. A
+new client with no marker follows migration decision A; this proposal does not
+claim that it can detect a policy deleted before its first observation. Explicit
+state reset/migration must address retained queues before resetting the marker.
+Unknown organization/repository
 choices block capture and delivery. A valid explicit OFF in either applicable
 record still revokes known queued data even if the other record is missing.
 Restoring permission does not authorize transcript growth from the blocked interval.
@@ -408,6 +416,11 @@ clients before rollout.
 unsent payloads while preserving privacy cursors and other repositories' data.
 Global OFF holds queues. Already transmitted data and requests in flight are
 outside local revocation.
+
+An applicable explicit organization/repository OFF takes precedence over global
+pause: purge that repository's known payloads even while global OFF holds others.
+Claude currently checks global pause first in `queueDisposition()`; implementing
+this recommendation therefore requires a Claude change as well as Codex tests.
 
 A changed positive decision timestamp cannot distinguish reaffirmation from an
 OFF/ON cycle missed by this client. Hold earlier payloads instead of deleting or
@@ -432,13 +445,14 @@ coverage; the current Codex adapter retains their previous behavior.
 | A4 | User confirms while another client writes OFF | Stale revision fails; OFF survives and the user sees the changed choice. |
 | A5 | Same canonical repo via clone/worktree; another repo B | Shared OFF blocks every A checkout; B remains unaffected. |
 | B1 | Malformed JSON, wrong schema, unreadable file or dangling path | Capture/delivery blocked; queues and original policy bytes preserved; truthful status. |
-| B2 | Policy removed after observation, then restored | Hold while absent; exclude blocked-interval transcript growth on resume. |
+| B2 | Policy removed after observation, process restarted, then policy restored | Durable client marker survives; hold while absent; exclude blocked-interval transcript growth on resume. Marker I/O failure cannot authorize capture. |
 | B3 | Missing choice versus explicit OFF | Missing choice holds; applicable valid OFF revokes known payloads. |
 | C1 | A and B queued; shared A OFF, then ON | Delete A backlog; retain B bytes and privacy cursors; old A content cannot reappear on reset. |
 | C2 | Global OFF, then ON | Retain queues, transmit nothing during pause, exclude paused transcript growth. |
 | C3 | ON timestamp changes without observed OFF; old policy restored | Earlier payloads remain held; no inferred deletion or restored authorization. |
 | C4 | Consent changes between failed upload and retry | Retry rechecks consent; no newly revoked payload is sent. |
 | C5 | Reaffirmation/other-repository edit | Unrelated edit preserves authorization; reaffirmation follows C3 until a stronger contract exists. |
+| C6 | Global OFF and repository/org A OFF together | Revoke A payloads despite pause; retain B queues and all privacy cursors. |
 
 Source tests must cover concurrent writers, queue retention/removal and transcript
 intervals with isolated credentials and synthetic records. A native canary must
