@@ -9,5 +9,5 @@ supersede with a new ADR rather than rewriting history. Every ADR carries a
 
 | # | Title | Date | Status |
 |---|---|---|---|
-| [001](001-license-token-lifecycle.md) | License token lifecycle: lifetime, refresh, and recovery | 2026-09-10 | Accepted |
+| [001](001-license-token-lifecycle.md) | License token lifecycle: lifetime, refresh, and recovery | 2026-09-10 | Accepted; shared-consent amendment proposed 2026-09-24 |
 | [002](002-two-stage-sanitization.md) | Two-stage sanitization and typed PII placeholders | 2026-09-11 | Accepted, amended 2026-09-11 (paths, repository identity) |

@@ -5,6 +5,8 @@
 moved off GitHub, which retires decision 4; see the
 [amendment](#amendment-2026-09-16-sign-in-moves-to-the-broker-and-decision-4-is-retired)
 at the end.
+The [shared-consent amendment below](#proposed-amendment-2026-09-24-shared-consent-across-clients)
+is proposed, not part of the accepted decisions.
 **Tracker:** INF-167 (2026 Q3 Production Readiness / Telemetry pipeline)
 **Related:** `skillmeter-license-activation` (server-side counterpart for decision 1), `skillmeter-codex-marketplace`, `skillmeter-vscode-extension`
 
@@ -333,3 +335,114 @@ from the repository root. The suite covers empty-queue recovery, consent and
 terminal boundaries, and a real detached child that persists a synthetic refresh
 after Stop exits. Its clock and network are substituted; it does not use live
 authentication or production telemetry.
+
+## Proposed amendment 2026-09-24: shared consent across clients
+
+**Status: Proposed.** Review the three decisions below before implementing shared
+grant migration or treating the stricter reader as the cross-client contract.
+This amendment changes no runtime behavior, token lifetime or authentication.
+
+### Existing contract and implementation differences
+
+Decision 3 requires removing unsent repository data after organization/repository
+opt-out. Global pause instead retains queues. Repository identity comes from
+`repo-scope.js`: clones and worktrees share a canonical `github.com/org/repo` key.
+The current `telemetry-store.js` writes machine-wide choices under one lock,
+increments `revision`, and offers expected-revision checks for repository edits.
+Org eligibility alone is not consent: `telemetry-policy.js` requires explicit
+organization and repository ON.
+
+Claude uses shared positive choices directly. Codex's proposed restrictive adapter
+also requires its existing local opt-in, honors local OFF, and never writes or
+migrates shared grants. It holds missing/invalid policy and ambiguous queued-data
+authorization. Claude currently normalizes malformed or unsupported policy into
+schema 1 defaults on read; a later mutation may overwrite that input. Thus these
+clients do not yet implement the same invalid-policy or migration contract.
+Claude also deletes queues for an unset repository choice today
+(`telemetry-store.test.js`); the proposed hold for unknown choices below would
+change that behavior. Explicit OFF and unknown permission must remain distinct.
+
+### Decision A: scope of shared ON and migration
+
+**Recommendation:** an explicit choice in the shared controls authorizes the named
+repository across supported clients and clones/worktrees on this machine, within
+the independently verified account/tenant and repository scope. Explain that
+scope before accepting the choice. Keep local OFF as a restriction until the user
+explicitly resolves it in migration; never promote old local ON automatically.
+Until migration is acknowledged, Codex retains its local opt-in requirement.
+
+Reviewers must confirm whether existing shared ON is enough for a newly installed
+client or requires a one-time scope acknowledgement. The recommendation is the
+latter for legacy choices that did not explain cross-client scope. If accepted,
+define a versioned acknowledgement before implementing it; current schema 1 has
+no agreed client-scope acknowledgement. Do not infer it from `decided_at`.
+
+Migration must preview conflicts, preserve local OFF and descendant restrictions,
+and use the canonical store's lock and expected revision. A stale confirmation
+must reload the decision for the user, not silently overwrite a concurrent OFF.
+Account/tenant changes require separate identity validation; consent is not a
+credential and this proposal does not expand organization eligibility.
+
+### Decision B: missing, unreadable or unsupported policy
+
+**Recommendation:** distinguish first use from loss of previously observed policy.
+An unreadable, malformed, dangling-link or unsupported-schema policy blocks new
+capture and delivery, preserves existing queues subject to retention, and reports
+an actionable status. Never normalize it into permission or overwrite it through
+ordinary enable/disable controls. Explicit validated repair is a separate action.
+
+On first use with no shared policy, preserve each client's current explicit-consent
+behavior during migration. If a previously observed policy disappears, hold data
+and require a readable policy before resuming. Unknown organization/repository
+choices block capture and delivery. A valid explicit OFF in either applicable
+record still revokes known queued data even if the other record is missing.
+Restoring permission does not authorize transcript growth from the blocked interval.
+
+This is a proposed change to Claude's permissive reader, not a description of
+current Claude parity. Approval needs corresponding reader/writer tests in both
+clients before rollout.
+
+### Decision C: consent changes while data is queued
+
+**Recommendation:** observed repository/org OFF purges that repository's known
+unsent payloads while preserving privacy cursors and other repositories' data.
+Global OFF holds queues. Already transmitted data and requests in flight are
+outside local revocation.
+
+A changed positive decision timestamp cannot distinguish reaffirmation from an
+OFF/ON cycle missed by this client. Hold earlier payloads instead of deleting or
+sending them, and close the unobserved capture interval. Reverting to an old policy
+must not release those held payloads. Existing retention limits still apply.
+Changes for another repository must not invalidate this repository's queue.
+
+Reviewers should confirm that conservative hold is acceptable for the initial
+rollout. A durable revocation generation could later distinguish reaffirmation
+from revocation; its schema, writer compatibility and migration need a separate
+decision. No generation field is introduced by this proposal. Unattributed legacy
+queue entries require an explicit disposition before claiming complete revocation
+coverage; the current Codex adapter retains their previous behavior.
+
+### Acceptance cases
+
+| ID | Setup/action | Required observation if the recommendation is accepted |
+| --- | --- | --- |
+| A1 | Legacy local ON; shared choice absent | No automatic shared grant or policy migration. |
+| A2 | Shared ON; a clone/client has never opted in | Require the agreed migration acknowledgement before dropping the legacy local gate. |
+| A3 | Shared ON; local or descendant OFF | Capture remains blocked; migration surfaces the conflict. |
+| A4 | User confirms while another client writes OFF | Stale revision fails; OFF survives and the user sees the changed choice. |
+| A5 | Same canonical repo via clone/worktree; another repo B | Shared OFF blocks every A checkout; B remains unaffected. |
+| B1 | Malformed JSON, wrong schema, unreadable file or dangling path | Capture/delivery blocked; queues and original policy bytes preserved; truthful status. |
+| B2 | Policy removed after observation, then restored | Hold while absent; exclude blocked-interval transcript growth on resume. |
+| B3 | Missing choice versus explicit OFF | Missing choice holds; applicable valid OFF revokes known payloads. |
+| C1 | A and B queued; shared A OFF, then ON | Delete A backlog; retain B bytes and privacy cursors; old A content cannot reappear on reset. |
+| C2 | Global OFF, then ON | Retain queues, transmit nothing during pause, exclude paused transcript growth. |
+| C3 | ON timestamp changes without observed OFF; old policy restored | Earlier payloads remain held; no inferred deletion or restored authorization. |
+| C4 | Consent changes between failed upload and retry | Retry rechecks consent; no newly revoked payload is sent. |
+| C5 | Reaffirmation/other-repository edit | Unrelated edit preserves authorization; reaffirmation follows C3 until a stronger contract exists. |
+
+Source tests must cover concurrent writers, queue retention/removal and transcript
+intervals with isolated credentials and synthetic records. A native canary must
+exercise the real shared controls and hooks on pinned versions. Intercepted local
+delivery proves neither production receipt nor report generation; record those
+as separate acceptance gates. ChatGPT Work task consent and upload authorization
+are outside this amendment.
