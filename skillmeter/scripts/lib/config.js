@@ -1,20 +1,7 @@
 /**
- * Central configuration resolver for the plugin.
- *
- * Every tunable URL / id / knob is resolved here through ONE precedence rule so
- * the "how do I point this at a dev environment" story lives in a single file
- * instead of being re-implemented in five modules.
- *
- * Precedence (per value):
- *   individual env var  >  settings.local.json string  >  dev-bundle default
- *   (only when SKILLMETER_ENV=dev)  >  prod default
- *
- * With no env set and SKILLMETER_ENV unset this collapses to the historical
- * chain (env > setting > prod default), so prod behavior is byte-identical.
- *
- * Layering: this is a LEAF module — it requires only os/path and ./settings
- * (itself an fs/path-only leaf). It must never require paths/credstore/jwt, so
- * paths.js can source STATE_DIR/CRED_FILE from here without a cycle.
+ * Resolve configuration in order: environment, project string setting, dev
+ * bundle when SKILLMETER_ENV=dev, then production default.
+ * Keep this module independent of paths, credstore and jwt to avoid import cycles.
  */
 
 const os = require("os");
@@ -24,25 +11,23 @@ const { getSkillmeterStringSetting } = require("./settings");
 // Single master switch. Eager: the environment for a process is fixed at launch.
 const IS_DEV = process.env.SKILLMETER_ENV === "dev";
 
-// --- Prod defaults (verbatim from their former homes) ---
-const PROD_ACTIVATE_URL = "https://api.skillbench.ai/activate"; // was license-activation.js:25
-const PROD_GITHUB_CLIENT_ID = "Ov23liHsxZ4tVUN5WePE"; // was signin.js:48
+// Production defaults
+const PROD_ACTIVATE_URL = "https://api.skillbench.ai/activate";
+const PROD_BROKER_URL = "https://id.skillbench.ai";
 
 // --- Dev bundle (SKILLMETER_ENV=dev) ---
-// Two values the maintainer must confirm/fill. They are intentionally chosen so
-// an unfilled dev run fails LOUDLY (bad client id / unreachable host) and never
-// silently falls back to prod. Individual env vars still override these.
-const DEV_ACTIVATE_URL = "https://api.dev.skillbench.com/activate"; // TODO: confirm exact dev host
-const DEV_GITHUB_CLIENT_ID = "__FILL_DEV_OAUTH_CLIENT_ID__"; // TODO: set the dev GitHub OAuth App id
+const DEV_ACTIVATE_URL = "https://api.dev.skillbench.com/activate";
+const DEV_BROKER_URL = "https://id.dev.skillbench.com";
 const DEV_STATE_DIRNAME = ".skillbench-dev";
 const PROD_STATE_DIRNAME = ".skillbench";
 
-// --- GitHub OAuth device-flow constants ---
-const GITHUB_DEVICE_CODE_URL = "https://github.com/login/device/code"; // signin.js:56
-const GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"; // signin.js:57
-// `read:org` is still requested so the activator can resolve the licensed org
-// from the gh token server-side (the client no longer reads GitHub orgs itself).
-const GITHUB_OAUTH_SCOPE = "read:user read:org";
+// Broker device flow uses a public client with no embedded secret.
+// The same client ID is registered in each environment.
+const OAUTH_CLIENT_ID = "skillmeter-plugin";
+
+// Keep scopes aligned with broker client registration. openid is required
+// for the ID token used by /activate.
+const OAUTH_SCOPE = "openid offline email profile";
 
 /**
  * Generic string resolver implementing the precedence rule above.
@@ -66,20 +51,35 @@ function getActivateUrl() {
 
 // The /refresh endpoint sits next to /activate on the same host. Derive it from
 // getActivateUrl so one host config covers both; tolerate non-standard override
-// paths by appending /refresh. (Logic preserved from license-activation.js:39-43.)
+// paths by appending /refresh.
 function getRefreshUrl() {
   const url = getActivateUrl();
   if (url.endsWith("/activate")) return url.slice(0, -"/activate".length) + "/refresh";
   return url.replace(/\/?$/, "/refresh");
 }
 
-function getGitHubClientId() {
-  return resolveString(
-    "SKILLMETER_GITHUB_CLIENT_ID",
-    "github_client_id",
-    DEV_GITHUB_CLIENT_ID,
-    PROD_GITHUB_CLIENT_ID
-  );
+// The broker's base URL. The two OAuth endpoints are derived from it rather
+// than configured separately, for the same reason getRefreshUrl derives from
+// getActivateUrl: one host setting should move a whole environment, and two
+// half-configured URLs pointing at different brokers is not a state worth
+// being able to express.
+function getBrokerUrl() {
+  return resolveString("SKILLMETER_BROKER_URL", "broker_url", DEV_BROKER_URL, PROD_BROKER_URL).replace(/\/+$/, "");
+}
+
+function getDeviceCodeUrl() {
+  return getBrokerUrl() + "/oauth2/device/auth";
+}
+
+function getTokenUrl() {
+  return getBrokerUrl() + "/oauth2/token";
+}
+
+// Same id in every environment, so dev and prod share a default. It stays
+// overridable because a client id is the one thing likely to differ in a
+// one-off local broker.
+function getOAuthClientId() {
+  return resolveString("SKILLMETER_OAUTH_CLIENT_ID", "oauth_client_id", OAUTH_CLIENT_ID, OAUTH_CLIENT_ID);
 }
 
 // Hard bypass of the JWT's `aud` endpoint claim (see jwt.js). Explicit-only:
@@ -96,12 +96,12 @@ const STATE_DIR =
 const CRED_FILE = path.join(STATE_DIR, "credentials.json");
 const TELEMETRY_POLICY_FILE = path.join(STATE_DIR, "telemetry-policy.json");
 
-// --- Numeric / boolean knobs (same defaults as before) ---
+// --- Numeric / boolean knobs ---
 function getEventTimeoutMs() {
-  return parseInt(process.env.SKILLMETER_TIMEOUT || "10", 10) * 1000; // transfer.js:35
+  return parseInt(process.env.SKILLMETER_TIMEOUT || "10", 10) * 1000;
 }
 function getRetryDaemonIntervalMs() {
-  return parseInt(process.env.SKILLMETER_RETRY_DAEMON_INTERVAL_MS || "", 10) || 120_000; // retry_daemon.js:28
+  return parseInt(process.env.SKILLMETER_RETRY_DAEMON_INTERVAL_MS || "", 10) || 120_000;
 }
 // Per-chunk UNCOMPRESSED byte budget for delta transcript upload. Conservative
 // default so the gzipped body stays well under the backend's 6 MB request limit
@@ -116,12 +116,12 @@ module.exports = {
   TELEMETRY_POLICY_FILE,
   getActivateUrl,
   getRefreshUrl,
-  getGitHubClientId,
+  getDeviceCodeUrl,
+  getTokenUrl,
+  getOAuthClientId,
   getBackendUrlOverride,
   getEventTimeoutMs,
   getRetryDaemonIntervalMs,
   getTranscriptChunkMaxBytes,
-  GITHUB_DEVICE_CODE_URL,
-  GITHUB_TOKEN_URL,
-  GITHUB_OAUTH_SCOPE,
+  OAUTH_SCOPE,
 };

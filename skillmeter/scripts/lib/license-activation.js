@@ -1,30 +1,13 @@
 /**
- * License activation orchestrator.
- *
- * Owns the two ways a device gets a license JWT without an interactive sign-in:
- * rotating an existing token through the Lambda's /refresh, and the silent
- * `gh auth token` → /activate fallback. The validated org is minted into the
- * JWT by the activator (no client org lookup).
- *
- * Refresh policy (ADR 001, decision 2):
- *   - /refresh is the only call made on a routine expiry.
- *   - Silent re-activation runs only when the token itself is no longer
- *     usable: /refresh answered 410 (sliding window exceeded) or 401 (signature
- *     no longer valid). Every other refresh failure is transient: keep the
- *     token, back off, retry /refresh later.
- *   - Consecutive failures back off exponentially (see license-status.js) and
- *     end in a terminal state that stops retrying until SessionStart or
- *     /skillmeter:signin clears it. 402 (license revoked), gh not authenticated,
- *     and an exhausted backoff are terminal.
- *   - Every outcome is written to the license status record so the daemon,
- *     hooks, and skills can read it without a network call.
- *
- * The exported surface is limited to activation and refresh orchestration.
+ * License refresh and retry orchestration, following ADR001.
+ * Refresh 401/410 requires interactive sign-in; 402 marks the license revoked.
+ * Other failures retain the token and use the shared status record for backoff.
+ * SessionStart or explicit sign-in can reset terminal retry state.
+ * No background path starts a new broker device grant.
  */
 
 const fs = require("fs");
 const path = require("path");
-const { execSync } = require("child_process");
 const credstore = require("../credstore");
 const { LOG_DIR } = require("./paths");
 const { getActivateUrl, getRefreshUrl } = require("./config");
@@ -103,102 +86,8 @@ async function refreshExpiredJwt(jwt, deviceId) {
   return { outcome: "rotated", token: newJwt };
 }
 
-/**
- * Silent re-activation through the GitHub CLI's stored credential. Reads
- * `gh auth token` (never opens a browser or a device-code flow) and exchanges
- * it at the activation endpoint.
- *
- * Returns an outcome object:
- *   { outcome: "reactivated", token }
- *   { outcome: "signed_out" }                  /skillmeter:signout is in effect
- *   { outcome: "gh_unauthenticated", message } gh missing, not logged in, empty
- *   { outcome: "revoked", status: 402 }
- *   { outcome: "rejected", status }            other 4xx from /activate
- *   { outcome: "transient", status?, message } network, 5xx, bad body
- */
-async function silentGhActivate(deviceId) {
-  if (credstore.getSignedOut()) {
-    console.error("[skillmeter] gh activation skipped: signed out (run /skillmeter:signin to re-enable)");
-    return { outcome: "signed_out" };
-  }
-
-  let ghToken;
-  try {
-    ghToken = execSync("gh auth token", {
-      encoding: "utf8",
-      stdio: ["pipe", "pipe", "ignore"],
-      timeout: 3000,
-    }).trim();
-  } catch {
-    console.error("[skillmeter] gh activation skipped: gh CLI not installed or not authenticated");
-    return { outcome: "gh_unauthenticated", message: "gh CLI not installed or not authenticated" };
-  }
-  if (!ghToken) {
-    console.error("[skillmeter] gh activation skipped: `gh auth token` returned empty");
-    return { outcome: "gh_unauthenticated", message: "gh auth token returned empty" };
-  }
-
-  console.error("[skillmeter] gh activation: exchanging token with activation endpoint");
-
-  let res;
-  try {
-    res = await postBearerJson(getActivateUrl(), ghToken, { device_id: deviceId }, { timeoutMs: 5000 });
-  } catch (err) {
-    console.error(`[skillmeter] gh activation failed: network error (${err.message})`);
-    return { outcome: "transient", message: `network error: ${err.message}` };
-  }
-
-  if (res.status === 402) {
-    console.error("[skillmeter] gh activation rejected: organization license is no longer active");
-    return { outcome: "revoked", status: 402 };
-  }
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    console.error(`[skillmeter] gh activation rejected: HTTP ${res.status} (${body.slice(0, 200)})`);
-    return res.status >= 500
-      ? { outcome: "transient", status: res.status, message: `HTTP ${res.status}` }
-      : { outcome: "rejected", status: res.status, message: `HTTP ${res.status}` };
-  }
-
-  let payload;
-  try {
-    payload = await res.json();
-  } catch {
-    console.error("[skillmeter] gh activation failed: activation endpoint returned invalid JSON");
-    return { outcome: "transient", status: res.status, message: "invalid JSON in response" };
-  }
-  const jwt = payload?.token;
-  if (!jwt) {
-    console.error("[skillmeter] gh activation failed: response missing `token` field");
-    return { outcome: "transient", status: res.status, message: "response missing token" };
-  }
-
-  // The validated org is carried in the JWT; just persist the license.
-  if (!credstore.commitSignin({ jwt })) {
-    console.error("[skillmeter] gh activation discarded: signed out during issuance");
-    return { outcome: "signed_out" };
-  }
-  console.error("[skillmeter] gh activation succeeded");
-  return { outcome: "reactivated", token: jwt };
-}
-
-/**
- * Compatibility wrapper for the sign-in commands: token string or null.
- */
-async function trySilentGhActivate(deviceId) {
-  const result = await silentGhActivate(deviceId);
-  return result.outcome === "reactivated" ? result.token : null;
-}
-
-// ---------------------------------------------------------------------------
-// Refresh orchestration with cross-process single-flight.
-//
-// Callers: SessionStart (once per session), the queue drains (right before an
-// upload), and the retry-daemon monitor (every sweep, so a long session never
-// runs on an expired token). A file lock collapses concurrent callers into a
-// single /refresh round-trip; the license status record supplies backoff and
-// terminal decisions across processes.
-// ---------------------------------------------------------------------------
+// SessionStart, queue drains and the retry monitor share refresh coordination.
+// The status record supplies backoff and terminal state across processes.
 
 const LICENSE_REFRESH_LOCK_FILE = path.join(LOG_DIR, ".license-refresh.lock");
 // Don't retry a refresh within this window of the last attempt. Also serves as
@@ -239,20 +128,9 @@ function shouldRefresh(
 }
 
 /**
- * Take the refresh lock. Returns true only for the single process that ends up
- * owning it.
- *
- * Fast path: exclusive create (`wx`). When a lock exists and the caller judged
- * it stale, the takeover is a two-step atomic claim: re-check that the file is
- * still older than the cooldown, then `rename` it to a per-process claim name.
- * Only one process can rename a given file, so a second taker gets ENOENT and
- * backs off, and a live lock created by a faster process in the meantime fails
- * the re-check and is left alone. After a successful claim the new lock is
- * created with `wx` again; EEXIST there means a third process created one
- * between our claim and our create, and we back off too.
- *
- * Best-effort: I/O errors other than the expected EEXIST/ENOENT let the refresh
- * proceed, matching the plugin's never-block policy.
+ * Try exclusive lock creation, then reclaim a lock older than the cooldown.
+ * Recheck age before renaming and create the replacement exclusively. This is
+ * best-effort coordination: some I/O errors allow refresh to proceed unlocked.
  */
 function acquireRefreshLock(staleLockPresent, cooldownMs = LICENSE_REFRESH_COOLDOWN_MS, now = Date.now()) {
   const stamp = `${process.pid} ${now}\n`;
@@ -309,10 +187,8 @@ function acquireRefreshLock(staleLockPresent, cooldownMs = LICENSE_REFRESH_COOLD
 async function refreshLicense(deviceId, { source = "unknown", aheadMs = 0 } = {}) {
   const current = credstore.getLicenseTokenUncached();
   if (current && !credstore.isLicenseTokenExpired(current, renewSkewSeconds(aheadMs))) return current;
-  // SessionStart and queue drainers may refresh an existing sign-in, but must
-  // never create a brand-new sign-in before the user invokes /skillmeter:signin.
-  // (ADR 001 decision 4 relaxes this for devices with a prior-sign-in marker;
-  // that lands with A4.)
+  // Refresh requires an existing sign-in. A missing license requires
+  // the user to invoke /skillmeter:signin.
   if (!current || !deviceId) return null;
   if (credstore.getSignedOut()) return null;
 
@@ -333,44 +209,20 @@ async function refreshLicense(deviceId, { source = "unknown", aheadMs = 0 } = {}
       });
       return null;
     case "rejected":
-      break; // fall through to re-activation
+      break; // record that interactive sign-in is required
     default:
       return null;
   }
 
-  // The stored token can no longer be rotated (410/401). Only a new activation
-  // helps, and only the gh-backed silent one is allowed here.
-  let activation;
-  try {
-    activation = await silentGhActivate(deviceId);
-  } catch (err) {
-    activation = { outcome: "transient", message: err && err.message ? err.message : String(err) };
-  }
-  switch (activation.outcome) {
-    case "reactivated":
-      licenseStatus.recordRefreshSuccess({ source, outcome: "reactivated" });
-      return activation.token;
-    case "revoked":
-      licenseStatus.recordTerminal({ source, reason: TERMINAL_REASONS.REVOKED, status: 402 });
-      return null;
-    case "gh_unauthenticated":
-      licenseStatus.recordTerminal({
-        source,
-        reason: TERMINAL_REASONS.GH_UNAUTHENTICATED,
-        message: activation.message,
-      });
-      return null;
-    case "signed_out":
-      return null;
-    default:
-      licenseStatus.recordRefreshFailure({
-        source,
-        kind: "activate",
-        status: activation.status ?? rotation.status ?? null,
-        message: activation.message || `refresh ${rotation.status}, activation ${activation.outcome}`,
-      });
-      return null;
-  }
+  // Refresh 401/410 requires a new browser-approved sign-in. Record a terminal
+  // state so background callers do not keep retrying this token.
+  licenseStatus.recordTerminal({
+    source,
+    reason: TERMINAL_REASONS.REACTIVATION_REQUIRED,
+    status: rotation.status ?? null,
+    message: "licence can no longer be refreshed — run /skillmeter:signin",
+  });
+  return null;
 }
 
 /**
@@ -421,10 +273,8 @@ async function ensureFreshLicense(deviceId, { source = "drain", aheadMs = 0 } = 
 }
 
 module.exports = {
-  trySilentGhActivate,
   refreshLicense,
   ensureFreshLicense,
   // exported for tests
   _acquireRefreshLock: acquireRefreshLock,
-  _LICENSE_REFRESH_LOCK_FILE: LICENSE_REFRESH_LOCK_FILE,
 };

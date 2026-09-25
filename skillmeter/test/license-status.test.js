@@ -106,13 +106,13 @@ test("success resets the counters and clears terminal", () => {
 
 test("clearTerminal keeps history but re-arms retries; clearLicenseStatus wipes", () => {
   ls.recordRefreshSuccess({ source: "daemon", now: 100 });
-  ls.recordTerminal({ source: "daemon", reason: ls.TERMINAL_REASONS.GH_UNAUTHENTICATED, now: 200 });
+  ls.recordTerminal({ source: "daemon", reason: ls.TERMINAL_REASONS.REACTIVATION_REQUIRED, now: 200 });
   let s = ls.clearTerminal({ source: "session_start" });
   assert.equal(s.terminal, null);
   assert.equal(s.consecutive_failures, 0);
   assert.equal(s.next_retry_at, null);
   assert.equal(s.last_success_at, 100, "history survives clearTerminal");
-  assert.equal(s.last_error.kind, "gh_unauthenticated", "last error kept for notices");
+  assert.equal(s.last_error.kind, "reactivation_required", "last error kept for notices");
 
   s = ls.clearLicenseStatus({ source: "signin" });
   assert.equal(s.last_success_at, null);

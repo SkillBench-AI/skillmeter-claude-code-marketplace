@@ -71,13 +71,18 @@ The current plugin processes the following categories.
 
 - a randomly generated device identifier;
 - a locally generated hashing salt;
-- a SkillMeter license JWT and the organization encoded in it;
-- a GitHub OAuth access token obtained from `gh auth token` or GitHub's device
-  flow, transmitted as a bearer credential to the SkillMeter activation
-  service together with the device identifier.
+- a SkillMeter license JWT and the workspace encoded in it;
+- an OpenID Connect ID token issued by SkillBench's own identity service at
+  `id.skillbench.ai` when you sign in, transmitted once as a bearer credential
+  to the SkillMeter activation service together with the device identifier.
 
-The plugin does not intentionally persist the GitHub access token. It stores
-the SkillMeter license JWT locally for authenticated uploads and refresh.
+The ID token is used only to obtain a license and is not persisted; the plugin
+keeps it in memory for the duration of the exchange. The SkillMeter license JWT
+is stored locally for authenticated uploads and refresh.
+
+Sign-in no longer involves GitHub. Earlier versions authenticated with a GitHub
+OAuth access token, read from `gh auth token` or obtained through GitHub's
+device flow, and sent that token to the activation service.
 
 ### Session and workflow telemetry
 
@@ -164,7 +169,7 @@ personal information.
 
 The plugin communicates with:
 
-- GitHub, for OAuth device authorization when needed;
+- `id.skillbench.ai`, for sign-in (OAuth 2.0 device authorization);
 - `api.skillbench.ai`, for license activation and refresh; and
 - the tenant-specific HTTPS telemetry endpoint encoded in the license JWT.
 

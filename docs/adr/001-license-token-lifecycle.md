@@ -1,7 +1,14 @@
 # License Token Lifecycle: Lifetime, Refresh, and Recovery
 
 **Date:** 2026-09-10
-**Status:** Accepted (PR #104, merged 2026-09-10)
+**Status:** Accepted (PR #104, merged 2026-09-10). Amended 2026-09-16: sign-in
+moved off GitHub, which retires decision 4; see the
+[amendment](#amendment-2026-09-16-sign-in-moves-to-the-broker-and-decision-4-is-retired)
+at the end.
+Shared consent across clients is decided in
+[ADR 004](004-shared-consent.md), not here; see the
+[2026-09-25 note](#amendment-2026-09-25-shared-consent-is-decided-in-adr-004)
+at the end.
 **Tracker:** INF-167 (2026 Q3 Production Readiness / Telemetry pipeline)
 **Related:** `skillmeter-license-activation` (server-side counterpart for decision 1), `skillmeter-codex-marketplace`, `skillmeter-vscode-extension`
 
@@ -13,7 +20,7 @@ the tenant's API Gateway JWT authorizer validates signature, issuer,
 audience, and expiry before the collector Lambda sees a request. There is no
 revocation list, so `exp` is the only revocation mechanism.
 
-### Current behaviour (as-is)
+### Behaviour at the original decision (2026-09-10)
 
 Server (`skillmeter-license-activation`):
 
@@ -87,6 +94,12 @@ TTL does provide. The TTL alone does not fix long sessions; decision 2 does.
 
 ### 2. The retry-daemon monitor refreshes the token in the background, independent of queue state
 
+- *The re-activation half of this decision was retired by the 2026-09-16
+  amendment. The cadence, the narrowing to 410/401, the backoff and the
+  terminal rule all stand; what changes is that 410 and 401 now end in a
+  terminal state directly instead of attempting a `gh`-backed re-activation
+  first.*
+
 On every sweep the daemon first runs the refresh path when the token is
 inside the expiry skew window, then drains. The refresh step is not subject
 to the adaptive drain backoff; it has its own failure backoff described
@@ -150,6 +163,10 @@ explicit removal list keeps the local footprint bounded now that expiry no
 longer stops recording.
 
 ### 4. Silent re-activation is allowed when the device has a prior sign-in and is not signed out
+
+- *Retired by the 2026-09-16 amendment; kept for history. Silent re-activation
+  needed a credential the client could read without a browser, and `gh auth
+  token` was the only one. There is no longer any such credential.*
 
 When no token is stored, the daemon and SessionStart may attempt the `gh`
 re-activation if this device completed a sign-in before and `signed_out` is
@@ -230,3 +247,107 @@ checked against it and against the VS Code extension's auth service (A6).
 - The status surface hooks use to tell the user about refresh failures is
   designed in B1; this ADR only requires that refresh outcomes are written
   where hooks can read them.
+
+## Amendment 2026-09-16: sign-in moves to the broker, and decision 4 is retired
+
+**Tracker:** INF-220 (plugin authentication cutover), INF-112
+
+Sign-in no longer goes through GitHub. It is the same RFC 8628 device grant,
+run against SkillBench's own identity service at `id.skillbench.ai`, and the
+token handed to `/activate` is an OpenID Connect ID token rather than a GitHub
+access token. The reason is INF-112: `/activate` resolved a tenant through a
+GitHub App installation, and nobody who onboards normally has one, so that
+route could not see them at all. The broker path resolves the tenant through
+workspace membership instead.
+
+### What this changes here
+
+**Decision 4 is retired, not re-implemented.** It rested on there being a
+credential the client could turn into a licence without a browser — `gh auth
+token`. The device grant has no such credential: approving it *is* opening a
+browser. So the two calls that used to attempt silent re-activation are gone:
+
+- the `/skillmeter:signin` prompt expansion no longer tries `gh` before telling
+  the user how to sign in; and
+- the refresh orchestrator no longer falls back to `/activate` on 410 or 401.
+
+**410 and 401 are now terminal.** A licence that can no longer be rotated ends
+the retry loop with `reactivation_required`, replacing the `gh_unauthenticated`
+terminal reason, and the person runs `/skillmeter:signin`. Decisions 1, 2, 3
+and 5 are unaffected: the TTL, the seven-day sliding window, the background
+refresh cadence, and the record-while-signed-in rule all stand.
+
+**The prior-sign-in marker described in decision 4 was never built** — it was
+already listed under open items — and nothing now needs it. The identity it
+would have pinned (`github_id`, the GitHub organization) is not what a broker
+licence carries: `sub` holds the control-plane tenant id and a new `broker_sub`
+claim holds the person, while `github_id` is absent rather than zero.
+
+### Consequences of the amendment
+
+The cost is concentrated in one place, and it is a real regression: a user with
+`gh` authenticated used to cross the seven-day window without noticing. Now
+that window ends in an interactive sign-in. Nothing else about the lifecycle
+got worse, and everything about who *can* sign in got better.
+
+The obvious repair is the broker's own refresh token. The device flow already
+requests `offline` and the broker already issues one; the plugin discards it.
+Storing it would restore silent recovery without reintroducing GitHub, and
+would make the seven-day window a policy choice rather than a hard wall. That
+is tracked as an open decision on INF-220, not settled here.
+
+### Implementation mapping (amendment)
+
+- `scripts/signin.js`, `scripts/lib/config.js` — the device grant and its
+  endpoints (marketplace#112).
+- `scripts/user_prompt_expansion_signin.js` — the silent attempt removed.
+- `scripts/lib/license-activation.js` — `silentGhActivate` and
+  `trySilentGhActivate` removed; the 410/401 branch records a terminal state.
+- `scripts/lib/license-status.js` — `GH_UNAUTHENTICATED` becomes
+  `REACTIVATION_REQUIRED`. Terminal reasons are only ever logged, never
+  branched on, so a record written by an older build stays readable.
+
+### Open items (amendment)
+
+- Whether to store the broker refresh token and what that does to the
+  seven-day window (INF-220 open decision 4).
+- The VS Code extension still authenticates with GitHub and is on its own
+  track behind INF-200.
+- `/activate` still accepts GitHub tokens, deliberately, until deployed
+  plugins stop sending them.
+
+
+## Amendment: Stop-triggered recovery without a monitor
+
+Stop requests the existing detached `drain_once.js` worker when its repository
+allows transmission and the token is expired or within the monitor's look-ahead
+window. This request does not depend on queued data. The hook performs no network
+I/O; the worker rechecks sign-out, token presence, consent, terminal state and
+backoff before refreshing, then drains the queues. The existing drain lock and
+refresh single-flight controls apply.
+
+This supplements decision 2 when the session has no running retry monitor.
+Recovery makes later hooks eligible to capture; it does not replay turns skipped
+while the token was expired. It does not create a sign-in, bypass disabled
+telemetry, change token lifetime, or rearm terminal 401/402/410 outcomes.
+
+Implementation: `scripts/lib/hook-license-recovery.js`, `scripts/stop.js` and
+`scripts/drain_once.js`. Run `node --test skillmeter/test/expiry-recovery.test.js`
+from the repository root. The suite covers empty-queue recovery, consent and
+terminal boundaries, and a real detached child that persists a synthetic refresh
+after Stop exits. Its clock and network are substituted; it does not use live
+authentication or production telemetry.
+
+## Amendment 2026-09-25: shared consent is decided in ADR 004
+
+**Status:** Accepted with ADR 004 (PR #129). Replaces the amendment proposed
+here on 2026-09-24 (PR #128).
+
+This ADR is about the license: its lifetime, refresh and recovery, and the
+one credential file every client shares. Consent is not a credential. The
+amendment proposed on 2026-09-24 (shared ON and migration, missing or invalid
+policy, consent changes while data is queued, with acceptance cases A1 to C6)
+moved to ADR 004 as decisions 4 to 6 and its acceptance table, and is
+withdrawn here in its favour. A token change never changes consent, and a
+consent change never mints or revokes a token; anything that touches both is
+decided in ADR 004 and mirrored in each client's ADR set.

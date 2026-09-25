@@ -1,49 +1,13 @@
 "use strict";
 
 /**
- * Harness detection — SBEE-166 (Phase 1) implementation of the locked SBEE-164
- * harness-metadata contract (`spec/harness-metadata-contract.v1.json`), with the
- * SBEE-165 sanitization integration baked in.
+ * Collect filesystem-detectable Claude configuration in the shared harness schema.
+ * Names, permission rules and bounded custom skill bodies are collected;
+ * instruction-file bodies, hook commands and MCP command/args/env are excluded.
+ * Secret-bearing names are dropped, and callers sanitize the resulting event.
  *
- * "Harness" = the scaffolding a developer wraps around their coding agent:
- * instruction files (CLAUDE.md / AGENTS.md), skills, subagents, slash commands,
- * lifecycle hooks, MCP servers, plugins/marketplaces, and higher-level
- * orchestration. Analysis needs to know whether a session was run bare or with a
- * sophisticated harness so it can judge the work fairly.
- *
- * This module emits the contract's **flat** `data.harness` field set. As of
- * schema v2.0 (SBEE-170, analysis-side request) it carries harness identifiers
- * — skill / subagent / command / MCP server / plugin names — as **raw** values
- * so the analysis pipeline can do semantic work (e.g. join public skill names to
- * the catalog) that opaque hashes made impossible. As of schema v2.1 (SBEE-169)
- * it also emits the SKILL.md body of CUSTOM (project/user) skills — which have no
- * public catalog to join against — size-capped and secret-scrubbed. It still
- * never emits CLAUDE.md/AGENTS.md bodies, hook command strings, or MCP
- * command/args/env (those carry literal secrets; see below). It is
- * deterministic, filesystem-only, and must never throw: detection
- * runs inside the SessionStart hook and a failure here must not break the
- * session, so every probe is wrapped and falls back to a safe default.
- *
- * Detection levels (contract `detectionLevels`):
- *   - Level 1 (filesystem-detectable): everything collected here.
- *   - Level 2 (architecture-level, NOT detectable): external orchestration /
- *     multi-agent topology. Emitted as "unknown" (SBEE-168) — `multi_agent` may
- *     be upgraded to "present" downstream once a subagent is observed running.
- *
- * Privacy (SANITIZATION_EPIC.md 3-tier policy, contract `tiers`/`actions`):
- *   - tier3_safe values (presence/counts/buckets/enums/versions) are collected
- *     raw.
- *   - Harness identifiers (skill / subagent / command / MCP / plugin names) are
- *     collected raw in v2.0. Names/permission rules that embed a secret
- *     are STILL dropped fail-closed — "raw names" never means "leak a
- *     credential" (epic Guiding Principle #1). Every string in the block is also
- *     routed through the central `sanitizeEventData` secret/PII boundary by
- *     the caller as a catch-all before egress.
- *   - Secret material (hook commands, MCP command/args/env) is never
- *     collected: those fields hold API keys/tokens directly, so they stay out
- *     regardless of the identifier policy.
- * Every fail-closed drop is tallied in the `redactions` bookkeeping (counts/
- * types only, never original values).
+ * External orchestration and multi-agent topology remain unknown. Detection runs
+ * at SessionStart and returns defaults on failure.
  */
 
 const fs = require("fs");
@@ -91,9 +55,8 @@ const KNOWN_HOOK_EVENTS = new Set([
   "WorktreeRemove",
 ]);
 
-// Marketplaces recognised as public/known. As of schema v2.0 all plugin names
-// are emitted raw, so this set is no longer a raw-vs-hash gate; it is retained
-// so downstream can still tell public-catalog plugins from private ones.
+// Marketplaces recognised as public/known. Plugin names are emitted raw; this
+// set lets downstream tell public-catalog plugins from private ones.
 const PUBLIC_MARKETPLACES = new Set([
   "skillbench",
   "claude-plugins-official",
@@ -124,7 +87,7 @@ const SKIP_DIRS = new Set([
 // Cap the number of names we enumerate per surface; counts stay exact, but the
 // name lists are bounded so a huge library can't bloat the event.
 const NAMES_LIMIT = 64;
-// Custom-skill CONTENT collection (SBEE-169): for developer-authored skills
+// Custom skill content: for developer-authored skills
 // (project/user scope) with no public catalog to join against, we emit the
 // SKILL.md body so the analysis side can do semantic work on custom skills.
 // Public/plugin-marketplace skills are name-only (catalog join). The body is
@@ -185,11 +148,7 @@ function safeReadDir(p) {
 const findRepoRoot = findGitRoot;
 
 /**
- * Collect harness identifier names for emission. As of schema v2.0 names are
- * emitted RAW (the analysis side joins them to the catalog / reads them
- * semantically). Fail-closed remains: a name embedding a secret is
- * dropped outright and tallied in `redactions` — the raw-name policy never
- * permits leaking a credential that happens to be baked into a name.
+ * Keep harness names readable; drop secret-bearing names and count the drops.
  */
 function collectNames(names, type, redactions) {
   const out = [];
@@ -244,7 +203,7 @@ function collectSkillNames(root, depth, acc, paths) {
   }
 }
 
-// Read a custom skill's SKILL.md into the emittable content shape (SBEE-169):
+// Read a custom skill's SKILL.md into the upload shape:
 // `description` (from YAML frontmatter when present) + `body` (the rest,
 // size-capped). Never throws. The strings are emitted raw here and scrubbed for
 // secrets / PII by the central sanitizer before egress.
@@ -355,7 +314,7 @@ function readHooks(hooksFilePath) {
 
 /**
  * Detect Level 1 harness metadata for a session running in `cwd` and emit the
- * flat SBEE-164 contract field set.
+ * shared flat harness schema.
  *
  * @param {string} cwd - session working directory (only used to probe the
  *   filesystem — never emitted).
@@ -401,7 +360,7 @@ function detectHarness(cwd, options = {}) {
     skills_count: 0,
     skill_source_counts: { project: 0, user: 0, plugin: 0 },
     skill_names: [],
-    // Custom (project/user) skill bodies for semantic analysis (SBEE-169).
+    // Custom (project/user) skill bodies for analysis.
     // Public/plugin skills are name-only (catalog join); see skill_names.
     skill_contents: [],
 
@@ -524,7 +483,7 @@ function detectHarness(cwd, options = {}) {
       "skill_name",
       harness.redactions
     );
-    // Custom-skill CONTENT (SBEE-169): body of each project/user skill that
+    // Custom skill content: body of each project/user skill that
     // survived the name secret-check (a skill dropped for a secret in its NAME
     // is not read at all). Emitted raw; secret-scrubbed by the central sanitizer.
     // Bounded by MAX_SKILL_CONTENTS + per-body MAX_SKILL_BODY_BYTES.

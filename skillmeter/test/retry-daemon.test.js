@@ -40,7 +40,7 @@ test("maybeRefreshLicense makes no network call while the record is terminal, an
     hash_salt: "0123456789abcdef0123456789abcdef",
     license_jwt: makeJwt({ exp: Math.floor(Date.now() / 1000) - 60, aud: "https://x.meter.skillbench.ai" }),
   });
-  licenseStatus.recordTerminal({ source: "daemon", reason: "gh_unauthenticated" });
+  licenseStatus.recordTerminal({ source: "daemon", reason: "reactivation_required" });
 
   const realFetch = global.fetch;
   let fetched = 0;

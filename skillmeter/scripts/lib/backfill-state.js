@@ -237,6 +237,24 @@ function finishBackfill(offerId, status, details = {}) {
   });
 }
 
+// One-way transition, taken once, after the snapshot finished and no chunk of
+// this offer is still waiting to upload. `status` keeps its snapshot meaning.
+function markBackfillDelivered(offerId, details = {}) {
+  let delivered = false;
+  const state = mutateBackfillState((current) => {
+    if (
+      !["completed", "failed"].includes(current.status) ||
+      current.offer_id !== offerId ||
+      current.delivered_at
+    ) {
+      return null;
+    }
+    delivered = true;
+    return { ...current, ...details, delivered_at: nowMs() };
+  });
+  return { delivered, state };
+}
+
 function isBackfillRunning() {
   const state = readBackfillState();
   if (!state || state.status !== "running") return false;
@@ -258,6 +276,7 @@ module.exports = {
   beginBackfill,
   updateBackfillProgress,
   finishBackfill,
+  markBackfillDelivered,
   isBackfillRunning,
   isBackfillUploadAuthorized,
 };

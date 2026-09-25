@@ -1,22 +1,9 @@
 "use strict";
 
 /**
- * Unit tests for Level 1 harness detection — SBEE-166 (Phase 1) implementation
- * of the flat harness-metadata contract, updated for the v2.0 raw-identifier
- * schema (SBEE-170).
- * Run with:  node --test skillmeter/test/harness.test.js
- *
- * detectHarness is pure filesystem inspection, so each test builds a throwaway
- * project tree (and a fake $HOME) and asserts on the emitted metadata shape.
- * The contract under test (spec/harness-metadata-contract.v1.json, v2.0):
- *   - flat field set under data.harness; presence/shape metadata + RAW
- *     identifiers (skill/subagent/command/MCP/plugin names) and permission
- *     rules; never raw file CONTENT, hook command strings, or MCP env;
- *   - Level 2 (external_orchestration / multi_agent) is always "unknown";
- *   - detection never throws and degrades to safe defaults;
- *   - identifiers are emitted RAW (no HMAC hashing); a name embedding a
- *     secret is still DROPPED fail-closed and tallied in `redactions`;
- *   - the emitted block survives the sanitizeEventData boundary.
+ * Filesystem harness tests with synthetic projects and homes. Cover names,
+ * permission rules, bounded custom skill bodies, excluded configuration secrets,
+ * unknown topology and event sanitization.
  */
 
 const fs = require("fs");

@@ -1,15 +1,7 @@
 /**
- * License refresh status record.
- *
- * One small JSON file next to credentials.json that says how the last refresh
- * attempts went, so the retry daemon can back off, and hooks and skills can
- * tell the user why collection stopped without making a network call.
- *
- * The record is a device-level fact (the token it describes lives in the same
- * directory), so it sits in STATE_DIR and is shared by every session on the
- * machine. Writers: the refresh orchestrator (scripts/lib/license-activation.js)
- * and the sign-in commands (which clear it). Readers: the retry daemon, the
- * SessionStart hook, and later the B1 notice and /skillmeter:status.
+ * Device-wide refresh status in STATE_DIR, shared across sessions. Refresh and
+ * sign-in update it; hooks and the retry daemon read it for notices and backoff
+ * without a network request.
  *
  * Shape (schema_version 1):
  *   last_attempt_at       ms epoch of the last refresh or re-activation attempt
@@ -24,14 +16,9 @@
  *   revision              monotonically increasing write counter used for
  *                         compare-and-update (see updateLicenseStatus)
  *
- * Concurrency: several processes (daemon, drains, SessionStart, sign-in) mutate
- * this file. Every transition goes through updateLicenseStatus, which re-reads
- * the record, applies the mutation, and commits only if the on-disk revision is
- * still the one it read; otherwise it retries on the newer record. A stale
- * writer therefore re-applies its change on top of the newer state instead of
- * overwriting it.
- *
- * Leaf module: requires only fs, path, ./config and ./io.
+ * updateLicenseStatus retries when the revision changes before rename, then
+ * falls back to last-writer-wins after five attempts. This narrows concurrent
+ * write races; it does not make the revision check and rename atomic.
  */
 
 const fs = require("fs");
@@ -50,8 +37,7 @@ const BACKOFF_CAP_MS = 30 * 60_000;
 // this session and the user has to act (or a new session has to start).
 const TERMINAL_REASONS = Object.freeze({
   REVOKED: "revoked", // 402 from /refresh or /activate
-  GH_UNAUTHENTICATED: "gh_unauthenticated", // gh CLI missing or not logged in
-  IDENTITY_MISMATCH: "identity_mismatch", // A4: gh identity != prior sign-in
+  REACTIVATION_REQUIRED: "reactivation_required", // 410/401: only a new sign-in helps
   BACKOFF_EXHAUSTED: "backoff_exhausted", // failures kept coming past the cap
 });
 
@@ -81,10 +67,8 @@ function readLicenseStatus() {
 let persistenceFailureReported = false;
 
 function reportPersistenceFailure(err) {
-  // Best-effort, like every other store in the plugin: a status record that
-  // cannot be written degrades backoff (extra attempts, still bounded by the
-  // refresh lock cooldown) and notices, never correctness — a revoked license
-  // is re-detected on the next attempt. Say so once in the debug log.
+  // Failed persistence can restart backoff and leave notices stale. Report it
+  // once; revocation is checked again on the next refresh attempt.
   if (persistenceFailureReported) return;
   persistenceFailureReported = true;
   console.error(
@@ -234,7 +218,7 @@ function recordRefreshFailure({
   const failures = (prev.consecutive_failures || 0) + 1;
   // A terminal state is sticky: a late transient-failure write from another
   // process (SessionStart bypasses the refresh lock) must not turn a revoked
-  // or gh_unauthenticated record back into a retrying one. Only a success,
+  // or reactivation-required record back into a retrying one. Only a success,
   // SessionStart's clearTerminal, or /skillmeter:signin lifts it.
   if (prev.terminal) {
     return {
@@ -309,7 +293,6 @@ function clearLicenseStatus({ source = "signin" } = {}) {
 
 module.exports = {
   LICENSE_STATUS_FILE,
-  BACKOFF_CAP_MS,
   TERMINAL_REASONS,
   readLicenseStatus,
   backoffDelayMs,

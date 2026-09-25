@@ -1,13 +1,7 @@
 #!/usr/bin/env node
 /**
- * Sign the current machine out of SkillMeter:
- *   - Drop the license JWT, allowed-orgs list, and gh fallback cooldown.
- *   - Set `signed_out: true` so the next SessionStart doesn't silently
- *     re-mint a license via a still-authenticated gh CLI.
- *   - Preserve `device_id` and `hash_salt` — the machine identity is
- *     persistent and is reused if the user signs back in.
- *
- * /skillmeter:signin clears the `signed_out` flag on success.
+ * Remove the shared license and mark the device signed out. Preserve device ID,
+ * hash salt and telemetry policy. Explicit sign-in clears the sentinel.
  */
 
 const credstore = require("./credstore.js");

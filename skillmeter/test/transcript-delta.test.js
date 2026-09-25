@@ -20,6 +20,11 @@ setTestEnv("SKILLMETER_TRANSCRIPT_CHUNK_MAX_BYTES", undefined);
 
 const d = require("../scripts/lib/transcript-delta");
 const transfer = require("../scripts/lib/transfer");
+const {
+  isChunkEligible,
+  quarantinePathFor,
+  recordUploadFailure,
+} = require("../scripts/lib/chunk-retry");
 
 const SALT = "deadbeefcafe";
 const TEST_REPOSITORY = {
@@ -233,4 +238,67 @@ test("listDeltaChunks excludes a body without a meta sidecar", () => {
   const orphan = path.join(dir, "9999999999-1.jsonl");
   writeFile(orphan, "{}\n"); // no sibling .meta.json
   assert.ok(!transfer.listDeltaChunks().includes(orphan), "orphan body not listed");
+});
+
+// A chunk the backend rejects every time spends its retry budget and is renamed
+// aside. This is the durable half of that: once renamed, no drain can pick it
+// up again, and both files are still on disk to be restored by hand.
+test("a quarantined chunk pair is invisible to the drain but still on disk", () => {
+  const body = transfer.sealDeltaChunk("poison.jsonl", ['{"uuid":"z"}'], {
+    seq: 9,
+    reset: false,
+    resetBaselineSeq: null,
+    promptId: "backfill",
+  }, TEST_REPOSITORY);
+  const metaPath = body.replace(/\.jsonl$/, ".meta.json");
+  assert.ok(transfer.listDeltaChunks().includes(body), "listed before quarantine");
+
+  const quarantinedBody = quarantinePathFor(body);
+  const quarantinedMeta = quarantinePathFor(metaPath);
+  fs.renameSync(metaPath, quarantinedMeta);
+  fs.renameSync(body, quarantinedBody);
+
+  const listed = transfer.listDeltaChunks();
+  assert.ok(!listed.includes(body), "the original path is gone");
+  assert.ok(
+    !listed.some((file) => file.endsWith(".quarantined")),
+    "and the renamed body is not listed either"
+  );
+  assert.ok(fs.existsSync(quarantinedBody), "body kept, not deleted");
+  assert.ok(fs.existsSync(quarantinedMeta), "meta kept, not deleted");
+});
+
+// The budget is shared through the meta sidecar, so a chunk that failed
+// recently is skipped by whichever drain runs next instead of being re-sent at
+// the rate drains happen to be spawned. The drain filters on exactly this
+// predicate, while listDeltaChunks keeps counting the chunk so the retry
+// daemon's progress check still sees the work as outstanding.
+test("a chunk still inside its backoff window is not eligible, but is still queued", () => {
+  const body = transfer.sealDeltaChunk("backoff.jsonl", ['{"uuid":"y"}'], {
+    seq: 4,
+    reset: false,
+    resetBaselineSeq: null,
+    promptId: "backfill",
+  }, TEST_REPOSITORY);
+  const metaPath = body.replace(/\.jsonl$/, ".meta.json");
+  const now = Date.now();
+  const failed = recordUploadFailure(
+    JSON.parse(fs.readFileSync(metaPath, "utf8")),
+    { now, error: "HTTP 500" }
+  );
+  writeFile(metaPath, JSON.stringify(failed));
+
+  const stored = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+  assert.equal(stored.uploadAttempts, 1, "the attempt is durable across drains");
+  assert.equal(stored.seq, 4, "and the original meta survives the update");
+  assert.equal(isChunkEligible(stored, now), false, "skipped by the next drain");
+  assert.equal(
+    isChunkEligible(stored, stored.nextAttemptAt),
+    true,
+    "and picked up again once the window passes"
+  );
+  assert.ok(
+    transfer.listDeltaChunks().includes(body),
+    "still counted as queued work while it waits"
+  );
 });

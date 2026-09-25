@@ -1,25 +1,12 @@
 /**
- * Resolve the host-provided persistent plugin data dir.
+ * Resolve persistent plugin data from CLAUDE_PLUGIN_DATA or the installed layout.
+ * Hooks receive the variable; monitors pass its substituted value explicitly.
+ * Skill commands start with node to match their tool grant, so they rely on
+ * derivation from the caller's resolved plugin root.
  *
- * Per the plugins reference, Claude Code exports CLAUDE_PLUGIN_ROOT /
- * CLAUDE_PLUGIN_DATA as environment variables only to hook processes and to
- * MCP/LSP subprocesses. Monitor commands and skill content instead get the
- * `${...}` placeholders substituted inline, so monitors.json and every SKILL.md
- * command passes CLAUDE_PLUGIN_DATA explicitly — that substitution is the
- * supported mechanism and the primary path here.
- *
- * Derivation below is only a backstop for a host that did not substitute. The
- * documented location is `~/.claude/plugins/data/{id}/`, where {id} is the
- * `plugin@marketplace` identifier with characters outside [a-zA-Z0-9_-] replaced
- * by `-`; the installed plugin root is
- * `<config>/plugins/cache/<marketplace>/<plugin>/<version>`, which yields the
- * same {id}. It is accepted only when the host's `plugins/data` parent already
- * exists, so an unexpected layout fails loudly rather than writing elsewhere.
- *
- * The plugin root is taken from the caller, never from the environment: a
- * monitor has no CLAUDE_PLUGIN_ROOT exported, only the substituted command text.
- *
- * This is a LEAF module — fs/path only, so paths.js can use it without a cycle.
+ * Derive <config>/plugins/data/<plugin>-<marketplace> only from a recognized
+ * cache layout with an existing data parent. Never use the install directory as
+ * a queue fallback. Keep this module independent of paths and credentials.
  */
 
 const fs = require("fs");

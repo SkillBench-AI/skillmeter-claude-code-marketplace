@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+const fs = require("fs");
 const path = require("path");
 const { spawn } = require("child_process");
 
@@ -15,8 +16,34 @@ function loadRuntime() {
       require("./lib/repository-telemetry").loadRepositoryTelemetryState,
     appendBackfillLog: require("./lib/backfill-log").appendBackfillLog,
     transcriptReport: require("./lib/backfill-report").transcriptReport,
+    scanHistoricalSessions: require("./lib/backfill-scan").scanHistoricalSessions,
+    countBackfillChunks: require("./lib/backfill-delivery").countBackfillChunks,
     pluginRoot: require("./lib/paths").PLUGIN_ROOT,
   };
+}
+
+// What the import will send, so the skill can say so before the upload runs in
+// the background. The scan reads only the head of each transcript. The worker
+// repeats it against the same cutoff, and its own counts drive completion.
+function historySummary(runtime, state, repositories) {
+  try {
+    const scan = runtime.scanHistoricalSessions({
+      allowedRepoKeys: new Set(repositories.map((repository) => repository.repoKey)),
+      cutoffAt: state.cutoff_at,
+      excludeSessionId: state.active_session_id || "",
+    });
+    let bytes = 0;
+    for (const session of scan.included) {
+      try { bytes += fs.statSync(session.sessionFile).size; } catch {}
+    }
+    return {
+      sessions: scan.included.length,
+      bytes,
+      repositories: repositories.length,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function fail(message) {
@@ -88,6 +115,7 @@ async function accept(args, runtime) {
     repositoryKeys: selected.map((repository) => repository.repoKey),
   });
   if (!started.started) fail("the backfill offer is no longer available.");
+  const history = historySummary(runtime, started.state, selected);
 
   const policyResult = {
     revision: repositoryState.revision,
@@ -113,6 +141,7 @@ async function accept(args, runtime) {
       started: true,
       status: "running",
       workerPid,
+      history,
     }) + "\n");
   } catch (err) {
     runtime.backfillState.finishBackfill(offerId, "failed", {
@@ -161,11 +190,21 @@ async function main() {
     // diagnose exactly that — so report it instead of throwing a type error.
     const state = runtime.backfillState.readBackfillState();
     if (!state) fail("the backfill lifecycle record is unreadable or corrupt.");
+    const chunks = state.offer_id
+      ? runtime.countBackfillChunks(state.offer_id)
+      : null;
     process.stdout.write(JSON.stringify({
       lifecycleId: state.lifecycle_id,
       status: state.status,
       reason: state.reason,
       offerId: state.offer_id || null,
+      delivery: chunks
+        ? {
+            deliveredAt: state.delivered_at || null,
+            pendingChunks: chunks.pending,
+            setAsideChunks: chunks.setAside,
+          }
+        : null,
       transcripts: runtime.transcriptReport(state),
     }) + "\n");
     return;

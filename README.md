@@ -10,7 +10,7 @@ authorize the licensed GitHub organization and then enable each repository.
 The current plugin can process and transmit sanitized conversation and
 developer-authored content, including prompts, tool inputs and responses,
 assistant messages, transcript deltas, and selected Claude Code configuration
-content. Secret and email detection plus path hashing reduce exposure, but do
+content. Secret/PII detection and path hashing reduce exposure, but do
 not make arbitrary content anonymous or guarantee removal of every sensitive
 value.
 
@@ -32,6 +32,16 @@ Inside Claude Code, run `/skillmeter:signin` to authenticate and review the
 organization and repository telemetry choices. Use
 `/skillmeter:telemetry list` at any time to review or change repository
 selection.
+
+## Update
+
+```sh
+claude plugin marketplace update skillbench
+claude plugin update skillmeter@skillbench
+```
+
+Restart Claude Code or run `/reload-plugins`. See [support](SUPPORT.md) for
+troubleshooting and version checks.
 
 ## Validate and test
 
