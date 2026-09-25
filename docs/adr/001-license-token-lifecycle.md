@@ -5,6 +5,10 @@
 moved off GitHub, which retires decision 4; see the
 [amendment](#amendment-2026-09-16-sign-in-moves-to-the-broker-and-decision-4-is-retired)
 at the end.
+Shared consent across clients is decided in
+[ADR 004](004-shared-consent.md), not here; see the
+[2026-09-25 note](#amendment-2026-09-25-shared-consent-is-decided-in-adr-004)
+at the end.
 **Tracker:** INF-167 (2026 Q3 Production Readiness / Telemetry pipeline)
 **Related:** `skillmeter-license-activation` (server-side counterpart for decision 1), `skillmeter-codex-marketplace`, `skillmeter-vscode-extension`
 
@@ -333,3 +337,17 @@ from the repository root. The suite covers empty-queue recovery, consent and
 terminal boundaries, and a real detached child that persists a synthetic refresh
 after Stop exits. Its clock and network are substituted; it does not use live
 authentication or production telemetry.
+
+## Amendment 2026-09-25: shared consent is decided in ADR 004
+
+**Status:** Accepted with ADR 004 (PR #129). Replaces the amendment proposed
+here on 2026-09-24 (PR #128).
+
+This ADR is about the license: its lifetime, refresh and recovery, and the
+one credential file every client shares. Consent is not a credential. The
+amendment proposed on 2026-09-24 (shared ON and migration, missing or invalid
+policy, consent changes while data is queued, with acceptance cases A1 to C6)
+moved to ADR 004 as decisions 4 to 6 and its acceptance table, and is
+withdrawn here in its favour. A token change never changes consent, and a
+consent change never mints or revokes a token; anything that touches both is
+decided in ADR 004 and mirrored in each client's ADR set.
