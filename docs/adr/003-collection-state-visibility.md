@@ -190,8 +190,8 @@ the design does not depend on. Healthy state is silent.
 Deduplication keys on the last resolved state per session: the handler
 stores the state it last resolved for the hook's `session_id` and rewrites
 it after every resolution, and a line is emitted only when the new state
-differs from the stored one and the change enters or leaves the stopped
-group. The daemon's routine rewrite of `credentials.json` on each refresh
+differs from the stored one and the change enters or leaves the
+capture-stopped group or `delivery_paused`. The daemon's routine rewrite of `credentials.json` on each refresh
 resolves to the same state and produces nothing; `token_missing →
 unconfigured → token_missing` is two transitions and two lines.
 `signed_out` counts as a stop for every open session; the session that ran
