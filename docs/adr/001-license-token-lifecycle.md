@@ -242,7 +242,8 @@ checked against it and against the VS Code extension's auth service (A6).
   a device claim inside the token is a server-side follow-up for
   `skillmeter-license-activation`, tracked with A5.
 - Whether a stale token should gate the exclusion-audit path the same way as
-  decision 3 (follows C1).
+  decision 3. This waits on the decision about the exclusion-audit event's
+  scope and frequency.
 - The status surface hooks use to tell the user about refresh failures is
   designed in B1; this ADR only requires that refresh outcomes are written
   where hooks can read them.
@@ -309,7 +310,7 @@ here.
 ### Open items (amendment)
 
 - Whether to store the broker refresh token and what that does to the
-  seven-day window (cutover open decision 4).
+  seven-day window.
 - The VS Code extension still authenticates with GitHub and is on its own
   track behind the shared-credential ownership decision.
 - `/activate` still accepts GitHub tokens, deliberately, until deployed
