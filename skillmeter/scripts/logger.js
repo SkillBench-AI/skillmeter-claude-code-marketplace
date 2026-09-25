@@ -167,6 +167,7 @@ async function runHook(eventName, buildData, options = {}) {
     ? telemetryStore.getOrganizationConsent(repoScopeDecision.remoteOrg)
     : null;
   const gate = resolveTelemetryGate({
+    policyBlocked: telemetryStore.getPolicyBlockedReason(),
     globalDisabled: telemetryStore.getGlobalDisabled(),
     hasValidLicense: credstore.hasValidLicense(),
     cwdAvailable,

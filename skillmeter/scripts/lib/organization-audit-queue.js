@@ -156,12 +156,22 @@ function organizationAuditContextForPath(filePath) {
   ) || null;
 }
 
+// Same precedence as the repository queues (ADR 004, decision 6): an explicit
+// organization OFF purges before the global pause is considered; an unset
+// organization choice holds.
 function organizationAuditDisposition(context) {
   if (!context) return "delete";
-  if (telemetryStore.getGlobalDisabled()) return "pause";
+  const state = telemetryStore.readPolicyState();
+  if (state.status === "blocked") return "pause";
   const current = currentTenantFingerprint();
   if (!current || current !== context.tenantFingerprint) return "delete";
-  return credstore.isTelemetryTransmissionAllowed("") ? "send" : "delete";
+  const policy = state.policy;
+  const orgs = credstore.getAllowedGitHubOrgs();
+  if (orgs.some((org) => policy.organizations[telemetryStore.normalizeOrg(org)]?.enabled === false)) {
+    return "delete";
+  }
+  if (policy.global.enabled === false) return "pause";
+  return credstore.isTelemetryTransmissionAllowed("") ? "send" : "pause";
 }
 
 function clearOrganizationAuditPayloads(context) {

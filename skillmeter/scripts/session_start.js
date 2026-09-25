@@ -23,6 +23,8 @@ const {
   telemetryConsentRequiredBanner,
   telemetryRepositoryRequiredBanner,
   telemetryActiveBanner,
+  telemetryPolicyUnreadableBanner,
+  telemetryAcknowledgementBanner,
   telemetrySentNotice,
   telemetryFailedNotice,
 } = require("./lib/banner.js");
@@ -119,6 +121,8 @@ function runSessionStartHook() {
       }
       if (!credstore.hasValidLicense()) {
         lines.push(signInRequiredBanner());
+      } else if (gate.mode === "policy_unreadable") {
+        lines.push(telemetryPolicyUnreadableBanner(gate.reason));
       } else if (gate.mode === "org_consent_required") {
         lines.push(telemetryConsentRequiredBanner(repoScopeDecision.remoteOrg));
       } else if (gate.mode === "repository_consent_required") {
@@ -133,6 +137,9 @@ function runSessionStartHook() {
         // Telemetry actually captures only when the repo is in scope too (the
         // hard repo-scope block downstream); show "active" only then.
         lines.push(telemetryActiveBanner(repoScopeDecision.remoteOrg));
+        let acknowledgement = false;
+        try { acknowledgement = telemetryStore.acknowledgementRequired(); } catch {}
+        if (acknowledgement) lines.push(telemetryAcknowledgementBanner());
       }
       if (lines.length) out.systemMessage = lines.join("\n");
       process.stdout.write(JSON.stringify(out) + "\n");
@@ -149,6 +156,10 @@ function runSessionStartHook() {
       }
 
       // stderr notices + SessionStart-only side effects (wording unchanged).
+      if (gate.mode === "policy_unreadable") {
+        process.stderr.write(`SkillMeter v${PLUGIN_VERSION} (telemetry policy file ${String(gate.reason).replace(/_/g, " ")}; on hold)\n`);
+        return;
+      }
       if (gate.mode === "project_disabled") {
         process.stderr.write(`SkillMeter v${PLUGIN_VERSION} (telemetry disabled for this project)\n`);
         return;

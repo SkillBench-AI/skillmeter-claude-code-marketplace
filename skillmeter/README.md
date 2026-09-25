@@ -125,6 +125,7 @@ and browser approval. See [ADR001](../docs/adr/001-license-token-lifecycle.md).
 | --- | --- |
 | `~/.skillbench/credentials.json` | Device ID, hash salt and license |
 | `~/.skillbench/telemetry-policy.json` | Global, organization and repository choices |
+| `<plugin data>/telemetry-policy-observed.<hash>.json` | Marker that this plugin has read a valid policy file; once present, a missing or unreadable policy holds capture and uploads instead of resetting to defaults |
 | `~/.skillbench/license-status.json` | Refresh timestamps, failures and terminal reason |
 | `${CLAUDE_PLUGIN_DATA}/logs/repositories/` | Repository event and transcript queues |
 | `${CLAUDE_PLUGIN_DATA}/logs/backfill.ndjson` | Local backfill progress and upload outcomes |

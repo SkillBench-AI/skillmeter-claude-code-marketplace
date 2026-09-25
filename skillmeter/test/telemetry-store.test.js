@@ -70,7 +70,7 @@ test("repository OFF purges queued chunks before fetch", async (t) => {
   assert.equal(fs.existsSync(body), false);
 });
 
-test("an unset repository queue is deleted and never transmitted", () => {
+test("an unset repository queue is held and never transmitted", async (t) => {
   const repoKey = "github.com/skillbench-ai/not-selected";
   const body = transfer.sealDeltaChunk(
     "not-selected.jsonl",
@@ -80,8 +80,20 @@ test("an unset repository queue is deleted and never transmitted", () => {
   );
   assert.ok(body && fs.existsSync(body));
 
+  const previousFetch = global.fetch;
+  let fetches = 0;
+  global.fetch = async () => {
+    fetches++;
+    return { ok: true };
+  };
+  t.after(() => { global.fetch = previousFetch; });
+
+  // ADR 004, decision 6: only an explicit OFF purges; an unset choice holds.
   transfer.purgeDisallowedQueues();
-  assert.equal(fs.existsSync(body), false);
+  assert.equal(fs.existsSync(body), true);
+  await transfer.drainDeltaChunks(10);
+  assert.equal(fetches, 0);
+  assert.equal(fs.existsSync(body), true);
 });
 
 test("global OFF pauses queues without deleting them", async (t) => {

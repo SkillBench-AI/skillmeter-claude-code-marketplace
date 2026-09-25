@@ -76,11 +76,17 @@ function queueContextForPath(filePath) {
   ) || null;
 }
 
+// ADR 004, decision 6: an explicit organization or repository OFF purges even
+// while the global pause holds everything else; an unset choice holds.
 function queueDisposition(context) {
-  const policy = telemetryStore.readPolicy();
+  const state = telemetryStore.readPolicyState();
+  if (state.status === "blocked") return "pause";
+  const policy = state.policy;
+  const org = policy.organizations[context.org];
+  const repo = policy.repositories[context.repoKey];
+  if (org?.enabled === false || repo?.enabled === false) return "delete";
   if (policy.global.enabled === false) return "pause";
-  if (policy.organizations[context.org]?.enabled !== true) return "delete";
-  if (policy.repositories[context.repoKey]?.enabled !== true) return "delete";
+  if (org?.enabled !== true || repo?.enabled !== true) return "pause";
   return "send";
 }
 

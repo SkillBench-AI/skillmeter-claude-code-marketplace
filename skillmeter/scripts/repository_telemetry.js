@@ -15,11 +15,36 @@ function fail(message) {
 async function main() {
   const [action, ...args] = process.argv.slice(2);
 
-  if (!["list", "toggle", "onboard"].includes(action)) {
-    fail("usage: repository_telemetry.js <list|toggle|onboard> ...");
+  if (!["list", "toggle", "onboard", "acknowledge"].includes(action)) {
+    fail("usage: repository_telemetry.js <list|toggle|onboard|acknowledge> ...");
   }
 
   const state = await loadRepositoryTelemetryState();
+
+  if (action === "acknowledge") {
+    // Confirms the shared-client statement for choices recorded before it
+    // existed. Stamps the consent version; changes no choice.
+    const revision = Number(args[0]);
+    if (!Number.isSafeInteger(revision) || revision < 0) {
+      fail("acknowledge requires the policy revision from `list`.");
+    }
+    if (revision !== state.revision) {
+      process.stdout.write(JSON.stringify({ revision: state.revision, acknowledged: 0, stale: true }) + "\n");
+      return;
+    }
+    const telemetryStore = require("./lib/telemetry-store");
+    try {
+      const result = telemetryStore.acknowledgeConsentStatement(revision);
+      process.stdout.write(JSON.stringify({ ...result, stale: false }) + "\n");
+    } catch (err) {
+      if (err?.code === "STALE_POLICY") {
+        process.stdout.write(JSON.stringify({ revision: err.policy.revision, acknowledged: 0, stale: true }) + "\n");
+        return;
+      }
+      fail(err.message);
+    }
+    return;
+  }
 
   if (action === "list") {
     process.stdout.write(JSON.stringify(publicRepositoryState(state)) + "\n");

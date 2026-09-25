@@ -32,6 +32,13 @@ Organization authorization never silently enables a newly discovered
 repository. The plugin checks the current repository's Git remote against the
 organization encoded in the license before capture and again before transfer.
 
+A choice applies to every SkillMeter client on this machine (the Claude Code
+and Codex plugins) and to every clone or worktree of the repository. The plugin
+states this before recording a choice, and asks once to confirm it for choices
+made before the statement existed. If the local policy file cannot be read,
+capture and uploads stop until it is readable again; the plugin never rewrites
+it into a permissive default.
+
 The plugin may create local device and policy state, inspect repository
 ownership, and display consent UI before telemetry is enabled. That local
 processing is not uploaded as telemetry.

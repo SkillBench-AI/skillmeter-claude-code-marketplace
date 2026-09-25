@@ -29,13 +29,38 @@ If the command fails, report the error and make no changes. If no repositories
 are returned, report that no local organization repositories were found and do
 not call `AskUserQuestion`.
 
+If `policyBlocked` is not `null`, report that the telemetry policy file is
+unreadable (its value names the reason) and that capture and uploads are on
+hold until it is readable again; do not offer any toggle and stop here.
+
 Report the global state and the enabled and disabled counts. Repositories whose
 `action` is `null` are blocked by the global or organization setting: list
 their `optionLabel` and `description`, but do not offer them as toggle choices.
 
-Before opening the first page, mention in one line that
-`/skillmeter:telemetry enable`, run inside a repository, opts that repository in
-without the picker at all — the global and organization gates still apply.
+If `acknowledgementRequired` is `true`, some ON choices were recorded before
+the shared-client statement existed. Before any page, call `AskUserQuestion`
+exactly once with a single-select question:
+
+- Header: `Telemetry`
+- Question: the `statement` value, followed by
+  `Confirm that your existing telemetry choices apply this way?`
+- First option: Label `Confirm`, Description
+  `Keep every current choice and record that it applies to every SkillMeter client on this machine.`
+- Second option: Label `Not now`, Description
+  `Keep collecting here as before; other SkillMeter clients will not use these choices until you confirm.`
+
+On `Confirm`, run the command below with the `revision` from `list`, report
+the `acknowledged` count, and use the returned `revision` for the first
+`toggle`. On `Not now`, continue without running it.
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/scripts/repository_telemetry.js acknowledge REVISION
+```
+
+Before opening the first page, state the `statement` value in one line, then
+mention that `/skillmeter:telemetry enable`, run inside a repository, opts that
+repository in without the picker at all — the global and organization gates
+still apply.
 
 For repositories with a non-null `action`, use `AskUserQuestion`. Claude Code's
 native question UI supports only 2-4 options per question; it does not expose a

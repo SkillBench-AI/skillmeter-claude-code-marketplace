@@ -11,6 +11,9 @@ function currentStatus() {
   const orgs = credstore.getAllowedGitHubOrgs();
   return {
     signedIn: credstore.hasValidLicense(),
+    policyBlocked: telemetryStore.getPolicyBlockedReason(),
+    acknowledgementRequired: telemetryStore.acknowledgementRequired(),
+    statement: telemetryStore.CONSENT_STATEMENT,
     orgs: orgs.map((org) => ({
       org,
       consent: telemetryStore.getOrganizationConsent(org),

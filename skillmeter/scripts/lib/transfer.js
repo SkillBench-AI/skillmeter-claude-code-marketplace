@@ -495,10 +495,12 @@ function isBackfillChunkAuthorized(meta, context) {
 }
 
 function chunkDisposition(meta, context) {
-  if (telemetryStore.getGlobalDisabled()) return "pause";
   if (meta?.promptId === "backfill" && meta.backfillOfferId) {
+    if (telemetryStore.getGlobalDisabled()) return "pause";
     return isBackfillChunkAuthorized(meta, context) ? "send" : "delete";
   }
+  // Repository chunks follow queueDisposition, which lets an explicit
+  // organization or repository OFF purge even during the global pause.
   return queueDisposition(context);
 }
 

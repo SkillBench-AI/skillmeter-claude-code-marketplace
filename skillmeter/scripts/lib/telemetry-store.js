@@ -13,8 +13,24 @@ const { TELEMETRY_POLICY_FILE } = require("./config");
 const { safeReadJson, atomicWriteJson } = require("./io");
 
 const SCHEMA_VERSION = 1;
+// Version of the consent statement shown before a choice is recorded (ADR 004,
+// decision 3). Version 2 names every client and every clone of the repository;
+// records at 1 or without the field are legacy choices.
+const CONSENT_VERSION = 2;
+const CONSENT_STATEMENT =
+  "Telemetry choices apply to every SkillMeter client on this machine " +
+  "(Claude Code and Codex) and to every clone or worktree of the repository.";
 const LOCK_FILE = `${TELEMETRY_POLICY_FILE}.lock`;
 const LOCK_STALE_MS = 10_000;
+// Client-owned marker that this plugin has read a valid policy file. Once it
+// exists, a missing policy file blocks capture and delivery instead of
+// reading as first use (ADR 004, decision 5). One marker per policy path, so
+// the dev and prod state directories never observe each other.
+const OBSERVED_FILE = path.join(
+  require("./paths").DATA_ROOT,
+  `telemetry-policy-observed.${require("crypto")
+    .createHash("sha256").update(TELEMETRY_POLICY_FILE).digest("hex").slice(0, 12)}.json`
+);
 
 function emptyPolicy() {
   return {
@@ -105,18 +121,109 @@ function ensurePolicy() {
   });
 }
 
-function readPolicy() {
-  const existing = safeReadJson(TELEMETRY_POLICY_FILE, null);
-  if (existing && existing.schema_version === SCHEMA_VERSION) {
-    return normalizePolicy(existing);
+function blockedError(reason) {
+  const err = new Error(
+    `Telemetry policy file is ${reason.replace(/_/g, " ")}; repair ` +
+    `${TELEMETRY_POLICY_FILE} before changing telemetry settings.`
+  );
+  err.code = "POLICY_BLOCKED";
+  err.reason = reason;
+  return err;
+}
+
+// Classify the policy file without normalizing it into permission. A blocked
+// state keeps the file's bytes, holds queues and refuses the ordinary
+// enable/disable controls; only a readable policy or an explicit repair ends it.
+function classifyPolicyFile() {
+  let raw;
+  try {
+    raw = fs.readFileSync(TELEMETRY_POLICY_FILE, "utf8");
+  } catch (err) {
+    if (err && err.code === "ENOENT") return { status: "absent" };
+    return { status: "unreadable" };
   }
-  return ensurePolicy();
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { status: "malformed" };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { status: "malformed" };
+  }
+  if (parsed.schema_version !== SCHEMA_VERSION) return { status: "unsupported_schema" };
+  return { status: "valid", raw: parsed };
+}
+
+function recordObservation(policy) {
+  const previous = safeReadJson(OBSERVED_FILE, null);
+  if (previous?.file === TELEMETRY_POLICY_FILE && previous.revision === policy.revision) {
+    return true;
+  }
+  try {
+    atomicWriteJson(OBSERVED_FILE, {
+      file: TELEMETRY_POLICY_FILE,
+      revision: policy.revision,
+      observed_at: Date.now(),
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function policyObserved() {
+  return safeReadJson(OBSERVED_FILE, null)?.file === TELEMETRY_POLICY_FILE;
+}
+
+// The state every reader shares: `{ status: "valid", policy }` or a blocked
+// state `{ status, reason, policy }` whose policy grants nothing.
+function readPolicyState() {
+  const file = classifyPolicyFile();
+  if (file.status === "absent") {
+    if (policyObserved()) {
+      return { status: "blocked", reason: "missing_after_observation", policy: blockedPolicy("missing_after_observation") };
+    }
+    const policy = ensurePolicy();
+    if (!recordObservation(policy)) {
+      return { status: "blocked", reason: "marker_unavailable", policy: blockedPolicy("marker_unavailable") };
+    }
+    return { status: "valid", policy };
+  }
+  if (file.status !== "valid") {
+    return { status: "blocked", reason: file.status, policy: blockedPolicy(file.status) };
+  }
+  const policy = normalizePolicy(file.raw);
+  if (!recordObservation(policy)) {
+    return { status: "blocked", reason: "marker_unavailable", policy: blockedPolicy("marker_unavailable") };
+  }
+  return { status: "valid", policy };
+}
+
+function blockedPolicy(reason) {
+  return { ...emptyPolicy(), blocked: reason };
+}
+
+function readPolicy() {
+  return readPolicyState().policy;
+}
+
+function getPolicyBlockedReason() {
+  const state = readPolicyState();
+  return state.status === "blocked" ? state.reason : null;
 }
 
 function mutatePolicy(mutator, expectedRevision = null) {
   let changed = false;
   const policy = withPolicyLock(() => {
-    const current = normalizePolicy(safeReadJson(TELEMETRY_POLICY_FILE, null));
+    const file = classifyPolicyFile();
+    if (file.status === "absent" && policyObserved()) {
+      throw blockedError("missing_after_observation");
+    }
+    if (file.status !== "absent" && file.status !== "valid") {
+      throw blockedError(file.status);
+    }
+    const current = normalizePolicy(file.status === "valid" ? file.raw : null);
     if (
       expectedRevision !== null &&
       current.revision !== expectedRevision
@@ -130,6 +237,7 @@ function mutatePolicy(mutator, expectedRevision = null) {
     if (changed) {
       current.revision++;
       atomicWriteJson(TELEMETRY_POLICY_FILE, current);
+      recordObservation(current);
     }
     return current;
   });
@@ -164,7 +272,7 @@ function setOrganizationConsent(org, enabled) {
   return mutatePolicy((policy) => {
     policy.organizations[normalized] = {
       enabled,
-      consent_version: 1,
+      consent_version: CONSENT_VERSION,
       decided_at: Date.now(),
       source: "user",
     };
@@ -187,6 +295,7 @@ function setRepositoryOverride(repoKey, enabled, expectedRevision = null) {
   return mutatePolicy((policy) => {
     policy.repositories[normalized] = {
       enabled,
+      consent_version: CONSENT_VERSION,
       decided_at: Date.now(),
       source: "user",
     };
@@ -216,18 +325,62 @@ function authorizeOrganizationRepositories(
     const decidedAt = Date.now();
     policy.organizations[normalizedOrg] = {
       enabled: true,
-      consent_version: 1,
+      consent_version: CONSENT_VERSION,
       decided_at: decidedAt,
       source: "user",
     };
     for (const repoKey of normalizedKeys) {
       policy.repositories[repoKey] = {
         enabled,
+        consent_version: CONSENT_VERSION,
         decided_at: decidedAt,
         source: "user",
       };
     }
   }, expectedRevision).policy;
+}
+
+// ON records written before the cross-client statement existed. They keep
+// authorizing this plugin, which recorded them, but another client must not
+// treat them as shared consent until the user confirms the statement once.
+function legacyConsentRecords(policy = readPolicy()) {
+  const legacy = { organizations: [], repositories: [] };
+  for (const [org, record] of Object.entries(policy.organizations)) {
+    if (record?.enabled === true && record.consent_version !== CONSENT_VERSION) {
+      legacy.organizations.push(org);
+    }
+  }
+  for (const [repoKey, record] of Object.entries(policy.repositories)) {
+    if (record?.enabled === true && record.consent_version !== CONSENT_VERSION) {
+      legacy.repositories.push(repoKey);
+    }
+  }
+  return legacy;
+}
+
+function acknowledgementRequired(policy) {
+  const legacy = legacyConsentRecords(policy);
+  return legacy.organizations.length > 0 || legacy.repositories.length > 0;
+}
+
+// Stamp every ON record with the current statement version. Runs under the
+// policy lock with an expected revision so a concurrent OFF is never overwritten.
+function acknowledgeConsentStatement(expectedRevision = null) {
+  let acknowledged = 0;
+  const { policy } = mutatePolicy((current) => {
+    const legacy = legacyConsentRecords(current);
+    const stamp = { consent_version: CONSENT_VERSION, acknowledged_at: Date.now() };
+    for (const org of legacy.organizations) {
+      Object.assign(current.organizations[org], stamp);
+      acknowledged++;
+    }
+    for (const repoKey of legacy.repositories) {
+      Object.assign(current.repositories[repoKey], stamp);
+      acknowledged++;
+    }
+    return acknowledged > 0;
+  }, expectedRevision);
+  return { revision: policy.revision, acknowledged };
 }
 
 function getPolicyRevision() {
@@ -236,10 +389,18 @@ function getPolicyRevision() {
 
 module.exports = {
   SCHEMA_VERSION,
+  CONSENT_VERSION,
+  CONSENT_STATEMENT,
   TELEMETRY_POLICY_FILE,
+  OBSERVED_FILE,
   normalizeOrg,
   normalizeRepoKey,
   readPolicy,
+  readPolicyState,
+  getPolicyBlockedReason,
+  legacyConsentRecords,
+  acknowledgementRequired,
+  acknowledgeConsentStatement,
   getGlobalDisabled,
   setGlobalEnabled,
   getOrganizationConsent,

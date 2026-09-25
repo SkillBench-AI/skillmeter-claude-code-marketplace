@@ -67,6 +67,7 @@ function effectiveLine() {
     ? telemetryStore.getOrganizationConsent(repoScopeDecision.remoteOrg)
     : null;
   const gate = resolveTelemetryGate({
+    policyBlocked: telemetryStore.getPolicyBlockedReason(),
     globalDisabled: telemetryStore.getGlobalDisabled(),
     hasValidLicense: credstore.hasValidLicense(),
     repoOrgOwned: repoScopeDecision.allowed,
@@ -79,6 +80,14 @@ function effectiveLine() {
 }
 
 function printStatus() {
+  const blocked = telemetryStore.getPolicyBlockedReason();
+  if (blocked) {
+    process.stderr.write(
+      `SkillMeter: telemetry policy file is ${blocked.replace(/_/g, " ")} ` +
+      `(${telemetryStore.TELEMETRY_POLICY_FILE}). Capture and uploads are on hold ` +
+      "until it is readable again.\n"
+    );
+  }
   process.stderr.write(
     "SkillMeter telemetry:\n" +
     `  global:       ${globalLine()}\n` +
