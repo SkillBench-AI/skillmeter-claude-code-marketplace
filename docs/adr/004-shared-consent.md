@@ -228,10 +228,29 @@ on its own.
 | 8 | privacy cursors | consent journal (#49) |
 | 9 | this file | `docs/adr/004-shared-consent.md` |
 
-Acceptance cases A1 to C6 from PR #128 apply as written; the native canary in
-Codex #57 and #58 exercises the shared controls on pinned versions.
+The acceptance cases below come from PR #128 and apply as written; the native
+canary in Codex #57 and #58 exercises the shared controls on pinned versions.
 Intercepted local delivery proves neither production receipt nor report
 generation; those stay separate gates.
+
+## Acceptance cases
+
+| ID | Setup or action | Required observation |
+| --- | --- | --- |
+| A1 | Legacy local ON; shared choice absent | No automatic shared grant or policy migration. |
+| A2 | Shared ON; a clone or client has never opted in | The migration acknowledgement is required before the legacy local gate is dropped. |
+| A3 | Shared ON; local or descendant OFF | Capture stays blocked; migration surfaces the conflict. |
+| A4 | User confirms while another client writes OFF | Stale revision fails; OFF survives and the user sees the changed choice. |
+| A5 | Same canonical repository via clone or worktree; another repository B | Shared OFF blocks every A checkout; B is unaffected. |
+| B1 | Malformed JSON, wrong schema, unreadable file or dangling path | Capture and delivery blocked; queues and the original policy bytes preserved; truthful status. |
+| B2 | Policy removed after observation, process restarted, then policy restored | The durable client marker survives; hold while absent; blocked-interval transcript growth excluded on resume. A marker I/O failure cannot authorize capture. |
+| B3 | Missing choice versus explicit OFF | A missing choice holds; an applicable valid OFF revokes known payloads. |
+| C1 | A and B queued; shared A OFF, then ON | A's backlog deleted; B's bytes and privacy cursors retained; old A content cannot reappear on reset. |
+| C2 | Global OFF, then ON | Queues retained, nothing transmitted during the pause, paused transcript growth excluded. |
+| C3 | ON timestamp changes without an observed OFF; old policy restored | Earlier payloads stay held; no inferred deletion, no restored authorization. |
+| C4 | Consent changes between a failed upload and its retry | The retry re-checks consent; no newly revoked payload is sent. |
+| C5 | Reaffirmation or an edit to another repository | An unrelated edit preserves authorization; a reaffirmation follows C3 until a stronger contract exists. |
+| C6 | Global OFF and repository or organization A OFF together | A's payloads revoked despite the pause; B's queues and all privacy cursors retained. |
 
 ## Open items
 
