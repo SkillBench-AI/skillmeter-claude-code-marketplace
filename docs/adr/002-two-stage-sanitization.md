@@ -5,7 +5,6 @@
 handling, repository identity and the file-name policy; see the
 [amendment](#amendment-2026-09-11-path-handling-repository-identity-and-file-name-policy)
 at the end.
-**Tracker:** INF-192 (2026 Q3 Production Readiness / Telemetry pipeline)
 **Related:** `skillmeter-codex-marketplace` and `session-collector` (sibling
 sanitizers under the same policy), `skillmeter-vscode-extension` (shared HMAC
 scheme), `skillbench-pipelines` (stage 2 lives there), GitHub issues #102 and
@@ -270,9 +269,9 @@ does not claim complete PII removal anywhere.
 
 | Decision | Where |
 | --- | --- |
-| 1, 2 | Stage 2 engine, object lifecycle and dashboard: follow-up issue in the pipelines tracker, filed from INF-192 |
-| 3, 4 | INF-192 (this repository, policy `3.0.0`), then parity issues for the Codex plugin and the session collector |
-| 5 | INF-192 (`PRIVACY.md` ships in the same PR as `3.0.0`) |
+| 1, 2 | Stage 2 engine, object lifecycle and dashboard: follow-up issue in the pipelines repository |
+| 3, 4 | this repository (policy `3.0.0`), then parity issues for the Codex plugin and the session collector |
+| 5 | `PRIVACY.md`, shipped in the same PR as `3.0.0` |
 
 ## Open items
 
@@ -482,7 +481,7 @@ default and audit trail.
 
 | Decision | Where |
 | --- | --- |
-| 6 | 0.34.1 plugin PR (INF-192): segment hashing, vocabulary file, `counts.path`, PRIVACY.md and README |
+| 6 | 0.34.1 plugin PR: segment hashing, vocabulary file, `counts.path`, PRIVACY.md and README |
 | 7 | Same plugin PR (`repo_name` field); verification query in ClickHouse after rollout |
 | 6, 7 parity | Codex plugin, session collector, VS Code extension: follow-up issues |
 | 8 | Deferred until a tenant-policy channel exists |
