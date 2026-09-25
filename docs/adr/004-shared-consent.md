@@ -6,7 +6,6 @@ Juho Kim. Decisions 4 to 6 restate the amendment Juho proposed on ADR 001 in
 PR #128; this ADR replaces that amendment, and ADR 001 keeps a pointer here.
 Acceptance covers the contract; implementation and the open items are gated
 separately.
-**Tracker:** INF-232, INF-140
 **Related:** ADR 001 (the license is already shared), ADR 002 (sanitization),
 `skillmeter-codex-marketplace` `docs/adr/004-shared-consent.md` (adopts this
 ADR), `skillmeter-vscode-extension`, the ChatGPT Work extension (its per-task

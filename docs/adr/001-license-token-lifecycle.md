@@ -9,7 +9,6 @@ Shared consent across clients is decided in
 [ADR 004](004-shared-consent.md), not here; see the
 [2026-09-25 note](#amendment-2026-09-25-shared-consent-is-decided-in-adr-004)
 at the end.
-**Tracker:** INF-167 (2026 Q3 Production Readiness / Telemetry pipeline)
 **Related:** `skillmeter-license-activation` (server-side counterpart for decision 1), `skillmeter-codex-marketplace`, `skillmeter-vscode-extension`
 
 ## Context
@@ -230,7 +229,7 @@ checked against it and against the VS Code extension's auth service (A6).
 | --- | --- |
 | 1 | A5 (server TTL), with a linked ADR in `skillmeter-license-activation` |
 | 2 | A2 (background refresh) |
-| 3 | A3 (INF-170) |
+| 3 | A3 (recording while the token is expired) |
 | 4 | A4 (recovery without a stored token) |
 | 5 | A6 (Codex plugin and VS Code extension) |
 
@@ -243,19 +242,18 @@ checked against it and against the VS Code extension's auth service (A6).
   a device claim inside the token is a server-side follow-up for
   `skillmeter-license-activation`, tracked with A5.
 - Whether a stale token should gate the exclusion-audit path the same way as
-  decision 3 (follows C1, INF-171).
+  decision 3 (follows C1).
 - The status surface hooks use to tell the user about refresh failures is
   designed in B1; this ADR only requires that refresh outcomes are written
   where hooks can read them.
 
 ## Amendment 2026-09-16: sign-in moves to the broker, and decision 4 is retired
 
-**Tracker:** INF-220 (plugin authentication cutover), INF-112
 
 Sign-in no longer goes through GitHub. It is the same RFC 8628 device grant,
 run against SkillBench's own identity service at `id.skillbench.ai`, and the
 token handed to `/activate` is an OpenID Connect ID token rather than a GitHub
-access token. The reason is INF-112: `/activate` resolved a tenant through a
+access token. The reason: `/activate` resolved a tenant through a
 GitHub App installation, and nobody who onboards normally has one, so that
 route could not see them at all. The broker path resolves the tenant through
 workspace membership instead.
@@ -294,7 +292,8 @@ The obvious repair is the broker's own refresh token. The device flow already
 requests `offline` and the broker already issues one; the plugin discards it.
 Storing it would restore silent recovery without reintroducing GitHub, and
 would make the seven-day window a policy choice rather than a hard wall. That
-is tracked as an open decision on INF-220, not settled here.
+is tracked as an open decision of the authentication cutover, not settled
+here.
 
 ### Implementation mapping (amendment)
 
@@ -310,9 +309,9 @@ is tracked as an open decision on INF-220, not settled here.
 ### Open items (amendment)
 
 - Whether to store the broker refresh token and what that does to the
-  seven-day window (INF-220 open decision 4).
+  seven-day window (cutover open decision 4).
 - The VS Code extension still authenticates with GitHub and is on its own
-  track behind INF-200.
+  track behind the shared-credential ownership decision.
 - `/activate` still accepts GitHub tokens, deliberately, until deployed
   plugins stop sending them.
 
