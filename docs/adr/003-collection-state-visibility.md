@@ -1,10 +1,12 @@
 # Collection State Visibility: Notices, Monitor Lifecycle, and the Local Status Record
 
 **Date:** 2026-09-14
-**Status:** Proposed. Revised 2026-09-25 against `main` (0.37.0): the backfill
-monitor is gone, sign-in is broker-only and ADR 001 decision 4 is retired,
-Stop-triggered recovery exists, and the review threads of 2026-09-17 are
-folded in.
+**Status:** Accepted (PR #111, 2026-09-25). Revised the same day against
+`main` (0.37.0): the backfill monitor is gone, sign-in is broker-only and ADR
+001 decision 4 is retired, Stop-triggered recovery exists, and the review
+threads of 2026-09-17 are folded in. Acceptance covers the design; B1
+implements decisions 1 to 4 and verifies the two Claude Code behaviours
+listed under Open items before it merges.
 **Related:** ADR 001 (decision 2, its Stop-recovery amendment and the local status record it requires; decision 4 is retired by the 2026-09-16 amendment), `skillmeter-codex-marketplace`, `skillmeter-vscode-extension` (parity)
 
 ## Context
@@ -185,9 +187,13 @@ persistent surface: the task panel stops saying "running" and Claude receives
 the reason; whether the panel keeps an ended entry is a Claude Code detail
 the design does not depend on. Healthy state is silent.
 
-Deduplication is per session and per state (a marker keyed by the hook's
-`session_id`), so every open session shows the line once and the daemon's
-routine rewrite of `credentials.json` on each refresh produces nothing.
+Deduplication keys on the last resolved state per session: the handler
+stores the state it last resolved for the hook's `session_id` and rewrites
+it after every resolution, and a line is emitted only when the new state
+differs from the stored one and the change enters or leaves the stopped
+group. The daemon's routine rewrite of `credentials.json` on each refresh
+resolves to the same state and produces nothing; `token_missing →
+unconfigured → token_missing` is two transitions and two lines.
 `signed_out` counts as a stop for every open session; the session that ran
 `/skillmeter:signout` sees the command's own output and the line, which is
 acceptable.
