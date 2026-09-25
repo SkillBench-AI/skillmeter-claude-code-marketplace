@@ -4,11 +4,11 @@
 **Status:** Proposed. Authors: Seungho Baek, Juho Kim. Decisions 4 to 6
 restate the amendment Juho proposed on ADR 001 in PR #128; accepting this ADR
 replaces that amendment, and ADR 001 keeps a pointer here.
-**Tracker:** INF-232 (2026 Q3 Production Readiness / Multi-agent surfaces),
-INF-140 (Consent Management Procedure)
+**Tracker:** INF-232, INF-140
 **Related:** ADR 001 (the license is already shared), ADR 002 (sanitization),
 `skillmeter-codex-marketplace` `docs/adr/004-shared-consent.md` (adopts this
-ADR), `skillmeter-vscode-extension`, INF-177, INF-195, INF-247 (ChatGPT Work)
+ADR), `skillmeter-vscode-extension`, the ChatGPT Work extension (its per-task
+consent is outside this ADR)
 
 ## Context
 
@@ -53,8 +53,9 @@ Codex plugin (0.7.0):
 - No organization authorization record. Eligibility comes from the
   organizations in the license, optionally narrowed by
   `SKILLMETER_REPO_SCOPE_ORGS` or `skillmeter.repoScopeOrgs`.
-- Global pause is `telemetry_disabled` in the shared credential file, also
-  set by sign-out. It keeps queues.
+- Global pause is `telemetry_disabled` in the shared credential file. Sign-out
+  sets it together with `signed_out` and a new authentication generation. It
+  keeps queues.
 - A consent journal per transcript (Codex #49): the first observation
   excludes the existing prefix; byte ranges observed while capture was off
   are excluded from staging and from baseline rebuilds; a settings revision
@@ -88,8 +89,8 @@ Codex plugin (0.7.0):
    the cross-client scope existed cannot be distinguished from one made
    after, so a new client cannot know whether the user meant it (PR #128,
    decision A).
-5. Compliance needs one procedure. INF-140 documents how a data subject
-   consents and withdraws; two consent models mean two procedures and two
+5. Compliance needs one procedure. The consent management procedure
+   documents how a data subject consents and withdraws; two consent models mean two procedures and two
    sets of screenshots.
 
 ## Decisions
@@ -121,10 +122,14 @@ client may add restrictions of its own (Codex's originator rejection, the
 
 Enabling `github.com/org/repo` authorizes every supported client and every
 clone or worktree of that repository on the machine. The control says so
-before the choice is recorded. Each organization and repository record
-carries `scope_version`, the version of that statement the user saw; a
-record without it is a legacy choice. Schema 1 passes unknown keys inside
-those records through, so no schema bump is needed for this field. No
+before the choice is recorded. Organization records already carry
+`consent_version: 1`; repository records get the same field. The statement
+that names every client and every clone is `consent_version: 2`; a record at
+1 or without the field is a legacy choice. `normalizePolicy()` passes
+organization and repository records through unchanged, and the writers
+replace a record only when its choice changes, so a reader that predates
+version 2 keeps the field and a record it rewrites reads as legacy again,
+which is the right answer for a choice made without the statement. No
 client-specific consent flag exists; a client that must not upload something
 (ChatGPT Work transcripts) enforces a capability boundary, not a consent
 choice.
@@ -135,8 +140,8 @@ A local ON is never promoted to a shared ON automatically. A local OFF stays
 a restriction until the user resolves it. Migration shows the conflicts,
 writes through the shared store's lock with an expected revision, and
 reloads on a stale revision instead of overwriting a concurrent OFF. A
-client that finds a shared ON without `scope_version` asks for the one-time
-acknowledgement of decision 3 before using it. Until then the Codex plugin
+client that finds a shared ON without `consent_version: 2` asks for the
+one-time acknowledgement of decision 3 before using it. Until then the Codex plugin
 keeps its local opt-in requirement.
 
 ### 5. A missing, unreadable or unsupported record blocks (PR #128, decision B)
@@ -158,9 +163,13 @@ This changes this plugin's reader, which normalizes today.
 
 Organization or repository OFF purges that scope's known unsent payloads and
 keeps privacy cursors and other repositories' data. Global OFF holds. An
-organization or repository OFF takes precedence over the global pause: the
-purge happens even while the pause holds everything else, which changes this
-plugin's `queueDisposition()`. A positive decision whose timestamp changed
+unset organization or repository choice holds that scope's queued data; only
+an explicit OFF purges it. An organization or repository OFF takes precedence
+over the global pause: the purge happens even while the pause holds
+everything else. Both change this plugin: `queueDisposition()` in
+`repository-queue.js` deletes on an unset record and, like
+`organizationAuditDisposition()` in `organization-audit-queue.js`, returns
+pause before it looks at the organization. A positive decision whose timestamp changed
 without an observed OFF is held, not sent and not deleted. A retry
 re-evaluates consent before sending. Data already transmitted or in flight is
 outside local revocation.
@@ -194,12 +203,13 @@ on its own.
   migrating per-checkout choices (decision 4), and retiring
   `.codex/settings.local.json` as a source of permission.
 - This plugin changes in three places: fail-closed reading (decision 5),
-  organization/repository OFF before global pause in `queueDisposition()`
-  (decision 6), and `scope_version` on new decisions with the acknowledgement
-  flow for legacy ones (decisions 3 and 4).
+  hold on unset and organization/repository OFF before global pause in both
+  queue dispositions (decision 6), and `consent_version: 2` on new decisions
+  with the acknowledgement flow for legacy ones (decisions 3 and 4).
 - `PRIVACY.md`, both READMEs and the consent skills say "for every SkillMeter
   client on this machine" wherever they describe a choice.
-- INF-140 can describe one consent and withdrawal procedure.
+- The consent management procedure can describe one consent and withdrawal
+  flow and take its screenshots from either client.
 - Rollout order matters: ship the fail-closed readers in both clients before
   any writer adds a field an old reader would drop. Today's closed top-level
   schema drops unknown top-level keys on the next write, so new top-level
@@ -207,16 +217,16 @@ on its own.
 
 ## Implementation mapping
 
-| Decision | This plugin | Codex plugin | Tracker |
-| --- | --- | --- | --- |
-| 1, 2 | `telemetry-store.js`, `telemetry-policy.js`, drains | `shared-telemetry-policy.js` (#55, #56), then write path | INF-232 |
-| 3 | `scope_version` in `telemetry-store.js`; wording in `skills/telemetry`, `skills/signin` | acknowledgement in `telemetry.js` CLI | INF-232, INF-140 |
-| 4 | none | migration command, conflict preview | INF-232 |
-| 5 | reader change in `telemetry-store.js`, status in ADR 003 | already fail-closed in #55/#56 | INF-232 |
-| 6 | `queueDisposition()` in `transfer.js` | `repository-queue.js` (#52, #56) | INF-232 |
-| 7 | `backfill-state.js` unchanged | none | |
-| 8 | privacy cursors | consent journal (#49) | INF-260 for multi-day objects |
-| 9 | this file | `docs/adr/004-shared-consent.md` | |
+| Decision | This plugin | Codex plugin |
+| --- | --- | --- |
+| 1, 2 | `telemetry-store.js`, `telemetry-policy.js`, drains | `shared-telemetry-policy.js` (#55, #56), then the write path |
+| 3 | `consent_version: 2` in `telemetry-store.js`; wording in `skills/telemetry`, `skills/signin` | acknowledgement in the `telemetry.js` CLI |
+| 4 | none | migration command, conflict preview |
+| 5 | reader change in `telemetry-store.js`; status wording per ADR 003 (PR #111, proposed) | already fail-closed in #55 and #56 |
+| 6 | `queueDisposition()` (`repository-queue.js`), `organizationAuditDisposition()` (`organization-audit-queue.js`) | `repository-queue.js` (#52, #56) |
+| 7 | `backfill-state.js` unchanged | none |
+| 8 | privacy cursors | consent journal (#49) |
+| 9 | this file | `docs/adr/004-shared-consent.md` |
 
 Acceptance cases A1 to C6 from PR #128 apply as written; the native canary in
 Codex #57 and #58 exercises the shared controls on pinned versions.
@@ -225,14 +235,13 @@ generation; those stay separate gates.
 
 ## Open items
 
-- Wording and version of the scope statement (decision 3) need the privacy
-  owner; INF-140 is the place.
+- Wording of the version 2 statement (decision 3) needs the privacy owner.
 - Codex has no organization authorization control today. Decide whether the
   Codex CLI gains one or whether the first authorization always happens in
   a client that has the control.
 - Disposition of legacy queue entries that carry no repository attribution.
-- ChatGPT Work per-task consent, duration and revocation (INF-247) are
-  outside this ADR; the VS Code extension follows when it captures.
+- ChatGPT Work per-task consent, duration and revocation are outside this
+  ADR; the VS Code extension follows when it captures.
 - A durable revocation generation that distinguishes reaffirmation from an
   OFF/ON cycle would replace the hold in decision 6; its schema is a separate
   decision.
