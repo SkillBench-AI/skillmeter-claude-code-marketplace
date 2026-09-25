@@ -277,7 +277,7 @@ client. The reasons known today:
 | `backoff_exhausted` | `license refresh failed repeatedly` |
 
 The next command is `/skillmeter:signin` in every case; `revoked` adds
-"contact your administrator". This table is the B2 (B2) deliverable;
+"contact your administrator". This table is the B2 deliverable;
 new terminal reasons must add a row here.
 
 ### 6. `/skillmeter:telemetry status` is the on-demand view of the same state
