@@ -5,8 +5,7 @@
 monitor is gone, sign-in is broker-only and ADR 001 decision 4 is retired,
 Stop-triggered recovery exists, and the review threads of 2026-09-17 are
 folded in.
-**Tracker:** INF-174 (B1), with INF-179 (B3), INF-178 (B2), INF-180 (B4) and INF-200 (2026 Q3 Production Readiness / Telemetry observability & transparency)
-**Related:** ADR 001 (decision 2, its Stop-recovery amendment and the local status record it requires; decision 4 is retired by the 2026-09-16 amendment), `skillmeter-codex-marketplace`, `skillmeter-vscode-extension` (parity, INF-177)
+**Related:** ADR 001 (decision 2, its Stop-recovery amendment and the local status record it requires; decision 4 is retired by the 2026-09-16 amendment), `skillmeter-codex-marketplace`, `skillmeter-vscode-extension` (parity)
 
 ## Context
 
