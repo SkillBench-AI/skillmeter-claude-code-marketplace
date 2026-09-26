@@ -136,6 +136,34 @@ test("transient 500: keep the token and back off", async () => {
   assert.equal(s.terminal, null);
 });
 
+for (const [label, token] of [
+  ["a token that is not a JWT", () => "not-a-jwt"],
+  ["an already-expired token", () => EXPIRED()],
+]) {
+  test(`a 200 carrying ${label} is transient and keeps the stored token`, async () => {
+    const before = credstore.getLicenseTokenUncached();
+    responses = [respond(200, { token: token() })];
+    assert.equal(await refreshLicense(DEVICE_ID, { source: "daemon" }), null);
+    assert.equal(credstore.getLicenseTokenUncached(), before, "the working token is not replaced");
+    const s = licenseStatus.readLicenseStatus();
+    assert.equal(s.last_outcome, "transient_failure", "backs off instead of counting a rotation");
+    assert.equal(s.consecutive_failures, 1);
+  });
+}
+
+test("a refresh lock dated well into the future is reclaimed", async () => {
+  // The clock moved back after another process wrote the lock.
+  fs.mkdirSync(path.dirname(LOCK_FILE), { recursive: true });
+  fs.writeFileSync(LOCK_FILE, "999 0\n");
+  const future = new Date(Date.now() + 3 * 60 * 60_000);
+  fs.utimesSync(LOCK_FILE, future, future);
+
+  const next = FRESH();
+  responses = [respond(200, { token: next })];
+  assert.equal(await ensureFreshLicense(DEVICE_ID, { source: "daemon" }), next);
+  assert.equal(calls.length, 1, "refresh is not blocked until the clock catches up");
+});
+
 test("network error is transient too, and failures accumulate", async () => {
   // refreshLicense itself never gates on the record (ensureFreshLicense does),
   // so two back-to-back calls both reach the network and both count.

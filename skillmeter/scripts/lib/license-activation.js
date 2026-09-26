@@ -84,6 +84,12 @@ async function refreshExpiredJwt(jwt, deviceId, expected) {
     console.error("[skillmeter] license refresh failed: response missing `token` field");
     return { outcome: "transient", status: res.status, message: "response missing token" };
   }
+  // Storing a malformed or already-expired token would replace the working one
+  // and, counted as a rotation, repeat every sweep without backoff.
+  if (typeof newJwt !== "string" || credstore.isLicenseTokenExpired(newJwt)) {
+    console.error("[skillmeter] license refresh failed: response token is malformed or already expired");
+    return { outcome: "transient", status: res.status, message: "unusable token in response" };
+  }
 
   if (!credstore.commitRefresh(newJwt, expected)) return { outcome: "superseded" };
   console.error("[skillmeter] license refresh: rotated successfully");
@@ -127,7 +133,10 @@ function shouldRefresh(
 ) {
   if (tokenFresh) return "return_current";
   const lockAge = lockMtimeMs == null ? Infinity : now - lockMtimeMs;
-  if (lockAge < cooldownMs) return "skip_locked";
+  // A lock dated well into the future means the clock moved back after it was
+  // written; honouring it would block refresh until the clock catches up.
+  // Small negative ages are ordinary timestamp jitter on a live lock.
+  if (lockAge > -cooldownMs && lockAge < cooldownMs) return "skip_locked";
   return "acquire_and_refresh";
 }
 
@@ -158,7 +167,8 @@ function acquireRefreshLock(staleLockPresent, cooldownMs = LICENSE_REFRESH_COOLD
   // Re-check staleness right before claiming: another process may already have
   // replaced the stale lock with a live one.
   try {
-    if (now - fs.statSync(LICENSE_REFRESH_LOCK_FILE).mtimeMs < cooldownMs) return false;
+    const age = now - fs.statSync(LICENSE_REFRESH_LOCK_FILE).mtimeMs;
+    if (age > -cooldownMs && age < cooldownMs) return false;
   } catch {
     // vanished: someone else claimed it; fall through to a final create
   }
