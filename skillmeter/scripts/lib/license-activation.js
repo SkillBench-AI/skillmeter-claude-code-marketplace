@@ -84,6 +84,12 @@ async function refreshExpiredJwt(jwt, deviceId, expected) {
     console.error("[skillmeter] license refresh failed: response missing `token` field");
     return { outcome: "transient", status: res.status, message: "response missing token" };
   }
+  // Storing a malformed or already-expired token would replace the working one
+  // and, counted as a rotation, repeat every sweep without backoff.
+  if (typeof newJwt !== "string" || credstore.isLicenseTokenExpired(newJwt)) {
+    console.error("[skillmeter] license refresh failed: response token is malformed or already expired");
+    return { outcome: "transient", status: res.status, message: "unusable token in response" };
+  }
 
   if (!credstore.commitRefresh(newJwt, expected)) return { outcome: "superseded" };
   console.error("[skillmeter] license refresh: rotated successfully");
@@ -263,6 +269,17 @@ async function ensureFreshLicense(deviceId, { source = "drain", aheadMs = 0 } = 
     lockMtimeMs = fs.statSync(LICENSE_REFRESH_LOCK_FILE).mtimeMs;
   } catch {
     // lock absent
+  }
+  // A lock dated more than a cooldown into the future means the clock moved
+  // back after it was written; left alone it would block refresh until the
+  // clock caught up. Re-date it to now instead of reclaiming it: a refresh
+  // still in flight under it finishes well within the cooldown, and the next
+  // attempt after the cooldown proceeds as usual.
+  if (lockMtimeMs != null && lockMtimeMs - Date.now() > LICENSE_REFRESH_COOLDOWN_MS) {
+    // Same clock as every other lock-age comparison here.
+    const nowSec = Date.now() / 1000;
+    try { fs.utimesSync(LICENSE_REFRESH_LOCK_FILE, nowSec, nowSec); } catch {}
+    return current;
   }
 
   const action = shouldRefresh(tokenFresh, lockMtimeMs, Date.now());
