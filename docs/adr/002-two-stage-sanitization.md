@@ -1,7 +1,7 @@
 # Two-Stage Sanitization and Typed PII Placeholders
 
 **Date:** 2026-09-11
-**Status:** Accepted (PR #107, merged 2026-09-11). Amended 2026-09-23 for colliding object keys (policy 3.1.1, PR #121) and 2026-09-11 for path
+**Status:** Accepted (PR #107, merged 2026-09-11). Amended 2026-09-26 for the remaining directory fields (policy 3.1.2), 2026-09-23 for colliding object keys (policy 3.1.1, PR #121) and 2026-09-11 for path
 handling, repository identity and the file-name policy; see the
 [amendment](#amendment-2026-09-11-path-handling-repository-identity-and-file-name-policy)
 at the end.
@@ -519,3 +519,18 @@ across records from a suffix. Existing noncolliding keys, value redaction and
 path hashing stay unchanged. The fix cannot recover entries already discarded
 by earlier sanitization. Sibling sanitizers pin this policy by upstream commit;
 refresh the pin to the merged commit.
+
+## Amendment 2026-09-26: hash the remaining directory fields
+
+**Status:** Proposed. Policy `3.1.2`.
+
+Policy `3.1.2` adds `directory`, `worktree_path` and `scratchpad_dir` to the
+wholesale-hashed directory keys, next to `cwd`, `old_cwd` and `new_cwd`.
+`directory` arrives with the new `DirectoryAdded` hook (`/add-dir`, SDK
+`register_repo_root`). `worktree_path` was already captured by `WorktreeRemove`
+and only had its home prefix hashed, leaving repository and worktree names in
+clear. `scratchpad_dir` is a common hook input field since Claude Code
+v2.1.257; SkillMeter does not record it, and the key is listed so that a
+future mapper cannot ship it raw. Values are hashed the same way as `cwd`, and
+each counts under `counts.path`. Sibling sanitizers pin this policy by
+upstream commit; refresh the pin to the merged commit.

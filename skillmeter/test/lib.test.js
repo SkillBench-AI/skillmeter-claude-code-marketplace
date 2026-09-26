@@ -165,7 +165,7 @@ test("every command hook uses exec form with a bundled script", () => {
     }
   }
 
-  assert.equal(commandHookCount, 30, "expected every configured hook command");
+  assert.equal(commandHookCount, 32, "expected every configured hook command");
 });
 
 test("every hook.js-dispatched event has a matching registry mapper", () => {
@@ -213,6 +213,18 @@ test("WorktreeCreate is not registered as an observation hook", () => {
 
   assert.equal(hooks.WorktreeCreate, undefined);
   assert.equal(registry.WorktreeCreate, undefined);
+});
+
+test("events that can block the session or stream content are not registered", () => {
+  // PreModelSwitch runs synchronously and a timed-out hook blocks the switch;
+  // MessageDisplay fires per streamed text delta and carries message content.
+  const registry = require("../scripts/lib/hook-registry");
+  const hooks = require("../hooks/hooks.json").hooks;
+
+  for (const event of ["PreModelSwitch", "MessageDisplay"]) {
+    assert.equal(hooks[event], undefined, `${event} must not be in hooks.json`);
+    assert.equal(registry[event], undefined, `${event} must not have a mapper`);
+  }
 });
 
 test("registry mappers match current official hook payload fixtures", () => {

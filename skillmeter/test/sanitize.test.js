@@ -144,6 +144,22 @@ test("CwdChanged old_cwd and new_cwd are HMAC-hashed wholesale", () => {
   assert.notEqual(value.old_cwd, value.new_cwd);
 });
 
+test("directory, worktree_path and scratchpad_dir are HMAC-hashed wholesale", () => {
+  const { value, meta } = s.sanitizeEventData(
+    {
+      directory: "/Users/example/other-repo",
+      worktree_path: "/Users/example/project/.claude/worktrees/feature-x",
+      scratchpad_dir: "/private/tmp/claude-501/session/scratchpad",
+    },
+    SALT
+  );
+
+  for (const key of ["directory", "worktree_path", "scratchpad_dir"]) {
+    assert.match(value[key], /^[0-9a-f]{12}$/, `${key} hashed`);
+  }
+  assert.equal(meta.counts.path, 3);
+});
+
 test("command is scrubbed for content (structure kept), NOT wholesale-hashed", () => {
   const { value } = s.sanitizeEventData(
     { tool_input: { command: `curl -H "Authorization: Bearer ${SAMPLES.jwt}" https://api.x` } },

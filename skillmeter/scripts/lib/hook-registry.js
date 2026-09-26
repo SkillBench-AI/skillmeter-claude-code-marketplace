@@ -139,6 +139,14 @@ module.exports = {
     new_cwd: input.new_cwd,
   }),
 
+  // A working directory joined mid-session (/add-dir or the SDK
+  // register_repo_root request). `directory` is a WHOLE_KEY, so the central
+  // scrub hashes it the same way as old_cwd/new_cwd.
+  DirectoryAdded: (input) => ({
+    directory: input.directory,
+    source: input.source,
+  }),
+
   WorktreeRemove: (input) => ({
     worktree_path: input.worktree_path,
   }),
@@ -152,6 +160,15 @@ module.exports = {
   // official compact_summary field is conversation content and is excluded.
   PostCompact: (input) => ({
     trigger: input.trigger,
+  }),
+
+  // The session model changed mid-session (/model, or Claude Code restoring it
+  // on resume). SessionStart records only the initial model, so this is what
+  // keeps later turns attributable. PreModelSwitch is deliberately not used: it
+  // is synchronous and a timed-out hook blocks the switch.
+  PostModelSwitch: (input) => ({
+    from_model: input.from_model,
+    to_model: input.to_model,
   }),
 
   // Claude Code started with --init / --maintenance.

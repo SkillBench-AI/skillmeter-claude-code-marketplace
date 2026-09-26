@@ -42,6 +42,11 @@ concise English for readers who do not know the team's internal history.
   exercise affected handlers with synthetic stdin and isolated state. Verify
   relevant sanitization and consent behavior; historical snapshots additionally
   exclude tool results and images.
+- Register only events that cannot change Claude Code's behavior. Never
+  register `WorktreeCreate` (the hook replaces git worktree creation) or
+  `PreModelSwitch` (it is synchronous and a timed-out hook blocks the switch);
+  skip `MessageDisplay` (per streamed text delta, message content). Hooks whose
+  stdout reaches Claude, such as `PostModelSwitch`, must print nothing.
 - Keep upload, retry and cleanup failures best-effort so hooks can return.
   Preserve existing validation, privacy boundaries and recovery behavior.
 

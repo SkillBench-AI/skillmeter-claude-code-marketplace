@@ -127,7 +127,8 @@ Before telemetry is queued, the plugin:
   IP addresses with `[IP]`, Korean resident registration and US Social
   Security numbers with `[ID_NUMBER]`, and payment card numbers with `[CARD]`;
 - hashes the home-directory prefix wherever it appears; hashes directory
-  fields (`cwd`, `old_cwd`, `new_cwd`) and the generic `path` field as whole
+  fields (`cwd`, `old_cwd`, `new_cwd`, `directory`, `worktree_path`,
+  `scratchpad_dir`) and the generic `path` field as whole
   values; and hashes file-path fields (`file_path`, `filePath`,
   `notebook_path`) segment by segment so that directory structure, file
   extensions and common technical names (`src`, `test`, `package.json`) stay
