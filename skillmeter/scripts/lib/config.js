@@ -112,6 +112,11 @@ function getTokenUrl() {
   return getBrokerUrl() + "/oauth2/token";
 }
 
+// RFC 7009. Sign-out revokes this client's refresh token here (ADR 005).
+function getRevokeUrl() {
+  return getBrokerUrl() + "/oauth2/revoke";
+}
+
 // Same id in every environment, so dev and prod share a default. It stays
 // overridable because a client id is the one thing likely to differ in a
 // one-off local broker.
@@ -159,6 +164,7 @@ module.exports = {
   getRefreshUrl,
   getDeviceCodeUrl,
   getTokenUrl,
+  getRevokeUrl,
   getOAuthClientId,
   getBackendUrlOverride,
   getEventTimeoutMs,

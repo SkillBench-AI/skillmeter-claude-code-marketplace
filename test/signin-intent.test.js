@@ -50,7 +50,7 @@ for (const mode of ["background", "background-cycle", "background-missing", "bac
             store.writeSigninResult({status:"success", marker:"newer-intent"});
           }
           if (mode.endsWith("failure")) throw Error("synthetic-old-poll-error");
-          payload = {id_token:"fixture-id-token"};
+          payload = {id_token:"fixture-id-token", refresh_token:"fixture-refresh"};
         }
         return {ok:true,status:200,json:async()=>payload,text:async()=>JSON.stringify(payload)};
       };
@@ -72,5 +72,8 @@ for (const mode of ["background", "background-cycle", "background-missing", "bac
     if (mode === "spawn") assert.equal(fs.readFileSync(path.join(root, "spawn-checked"), "utf8"), "yes");
     else assert.equal(current.license_jwt, mode.includes("cycle") ? "fixture-newer" :
       mode === "background-missing" ? undefined : "fixture-issued");
+    // The broker's refresh token is kept only by the sign-in that won (ADR 005).
+    if (mode === "background" || mode === "foreground") assert.equal(current.refresh_token, "fixture-refresh");
+    else assert.equal(current.refresh_token, undefined);
   });
 }

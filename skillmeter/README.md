@@ -114,10 +114,14 @@ license removes them, and are deleted once they are older than 7 days.
 Recording does not wait for the license: while you are signed in, hooks record
 even if the license has expired, and the data is sent after the next refresh.
 The license is refreshed in one place, by the upload drain just before it sends,
-and once more if the server rejects the token (HTTP 401). Transient failures
-back off up to a 30-minute interval and keep retrying. A license that can no
-longer be refreshed (401/410) or was revoked (402) requires `/skillmeter:signin`
-and browser approval. See [ADR001](../docs/adr/001-license-token-lifecycle.md).
+and once more if the server rejects the token (HTTP 401). Sign-in keeps the
+sign-in service's refresh token, which renews the license for this workspace
+only; sign-out revokes it. Transient failures back off up to a 30-minute
+interval and keep retrying. A session the sign-in service ended, or a license
+that was revoked because the workspace no longer licenses you (402), requires
+`/skillmeter:signin` and browser approval. See
+[ADR001](../docs/adr/001-license-token-lifecycle.md) and
+[ADR005](../docs/adr/005-per-client-session.md).
 
 ## Local state and diagnostics
 

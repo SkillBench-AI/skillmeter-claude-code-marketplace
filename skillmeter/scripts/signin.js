@@ -2,8 +2,9 @@
 /**
  * Start broker device authorization and print the user code and URL. Poll in a
  * detached child so the shell runner can return and display the code immediately.
- * Exchange the broker ID token for a license, then persist the result for the
- * FileChanged notifier and the next /skillmeter:signin invocation.
+ * Exchange the broker ID token for a license and keep the broker's refresh
+ * token, which renews the license from then on (ADR 005). Persist the result
+ * for the FileChanged notifier and the next /skillmeter:signin invocation.
  */
 
 const credstore = require("./credstore.js");
@@ -11,17 +12,10 @@ const { signinStatusBanner } = require("./lib/banner.js");
 const { startSpinner } = require("./lib/spinner.js");
 const { getRepoScopeDecision } = require("./lib/repo-scope");
 const telemetryStore = require("./lib/telemetry-store");
-const { postBearerJson } = require("./lib/http");
 const { clearLicenseStatus } = require("./lib/license-status");
-const {
-  STATE_DIR,
-  getActivateUrl,
-  getDeviceCodeUrl,
-  getTokenUrl,
-  getOAuthClientId,
-  OAUTH_SCOPE,
-} = require("./lib/config");
-const { brokerReason } = require("./lib/http");
+const { STATE_DIR } = require("./lib/config");
+const { requestDeviceCode, pollDeviceToken } = require("./lib/broker");
+const { exchangeIdToken } = require("./lib/license-exchange");
 const { spawnSync, spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
@@ -90,114 +84,13 @@ function copyToClipboard(text) {
   return false;
 }
 
-async function postForm(url, params) {
-  const { res, payload, text } = await postFormRaw(url, params);
-  if (!res.ok) {
-    throw new Error(`${url} returned ${res.status}: ${text}`);
-  }
-  return payload;
-}
-
-async function postFormRaw(url, params) {
-  const body = new URLSearchParams(params).toString();
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Accept": "application/json",
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body,
-    signal: AbortSignal.timeout(10_000),
-  });
-  const text = await res.text().catch(() => "");
-  let payload = null;
-  try {
-    payload = JSON.parse(text);
-  } catch {}
-  return { res, payload, text };
-}
-
-// OAuth pending/slow_down responses can use HTTP 400. Parse their error body
-// before treating a non-2xx response as a transport failure.
-async function postFormExpectingOAuthErrors(url, params) {
-  const { res, payload, text } = await postFormRaw(url, params);
-  if (payload && typeof payload === "object") return payload;
-  throw new Error(`${url} returned ${res.status}: ${text}`);
-}
-
-async function requestDeviceCode() {
-  return postForm(getDeviceCodeUrl(), { client_id: getOAuthClientId(), scope: OAUTH_SCOPE });
-}
-
-// Poll using the device grant and respect pending, slow_down and expiry.
-// Return the ID token: /activate verifies its signature through the broker
-// JWKS. Opaque access tokens cannot be used for this exchange.
-async function pollForToken(deviceCode, initialInterval) {
-  let interval = initialInterval;
-  while (true) {
-    await new Promise((r) => setTimeout(r, interval * 1000));
-
-    const payload = await postFormExpectingOAuthErrors(getTokenUrl(), {
-      client_id: getOAuthClientId(),
-      device_code: deviceCode,
-      grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-    });
-
-    if (payload.id_token) return payload.id_token;
-    if (payload.access_token && !payload.id_token) {
-      throw new Error("Sign-in returned no id_token — the `openid` scope was not granted.");
-    }
-
-    switch (payload.error) {
-      case "authorization_pending":
-        continue;
-      case "slow_down":
-        interval += 5;
-        continue;
-      // Keeps its own sentence. The broker does not write this one — Hydra
-      // does, and its description says less than the next action does.
-      case "expired_token":
-        throw new Error("The code expired. Run /skillmeter:signin again.");
-
-      // WHERE THE ONLY EXPLANATION LIVES. Every refusal the broker makes comes
-      // back as this one code, and what distinguishes them is the description
-      // beside it. Thrown from here it travels the whole way on both surfaces
-      // with no further plumbing: the foreground prints `err.message`, and the
-      // background writes it into signin-result.json, which the FileChanged
-      // hook turns into a systemMessage.
-      case "access_denied":
-        throw new Error(brokerReason(payload) ?? "Sign-in was denied. Aborting.");
-
-      // Same courtesy for a code we do not know: if the server troubled itself
-      // to say why, that beats repeating the code back at the person.
-      default:
-        throw new Error(
-          brokerReason(payload) ??
-            `Sign-in failed: ${payload.error || "unknown error"}`,
-        );
-    }
-  }
-}
-
 async function exchangeForLicense(idToken, deviceId) {
-  const res = await postBearerJson(
-    getActivateUrl(),
-    idToken,
-    { device_id: deviceId },
-    { timeoutMs: 10_000 }
-  );
-
-  if (res.status === 402) {
+  const result = await exchangeIdToken(idToken, deviceId);
+  if (result.outcome === "issued") return result.token;
+  if (result.status === 402) {
     throw new Error("No active SkillMeter license found for your workspaces.");
   }
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`Activation failed (HTTP ${res.status}): ${text}`);
-  }
-
-  const payload = await res.json();
-  if (!payload?.token) throw new Error("Activation response missing token.");
-  return payload.token;
+  throw new Error(`Activation failed (${result.status ? `HTTP ${result.status}` : result.message})`);
 }
 
 // Background phase: invoked when the script is re-spawned with
@@ -211,13 +104,13 @@ async function runBackgroundPoll(deviceId, deviceCode, interval, generation) {
   const expected = { generation, deviceId };
   log(`[${new Date().toISOString()}] background poll started (device_id=${deviceId})`);
   try {
-    const idToken = await pollForToken(deviceCode, interval);
+    const { idToken, refreshToken } = await pollDeviceToken(deviceCode, interval);
     log(`[${new Date().toISOString()}] sign-in approved`);
 
     const licenseJwt = await exchangeForLicense(idToken, deviceId);
     log(`[${new Date().toISOString()}] license issued`);
 
-    if (!credstore.commitSignin({ jwt: licenseJwt, expected, onCommit: () => {
+    if (!credstore.commitSignin({ jwt: licenseJwt, refreshToken, expected, onCommit: () => {
       clearLicenseStatus({ source: "signin" });
       credstore.writeSigninResult({ status: "success" });
     } })) {
@@ -318,10 +211,10 @@ async function main() {
 async function runForegroundPoll(deviceId, device, expected) {
   const stop = startSpinner("Waiting for approval");
   try {
-    const idToken = await pollForToken(device.device_code, device.interval || 5);
+    const { idToken, refreshToken } = await pollDeviceToken(device.device_code, device.interval || 5);
     const licenseJwt = await exchangeForLicense(idToken, deviceId);
     stop();
-    if (!credstore.commitSignin({ jwt: licenseJwt, expected, onCommit: () => clearLicenseStatus({ source: "signin" }) })) {
+    if (!credstore.commitSignin({ jwt: licenseJwt, refreshToken, expected, onCommit: () => clearLicenseStatus({ source: "signin" }) })) {
       say("Sign-in discarded: authentication changed during issuance.");
       process.exit(0);
     }

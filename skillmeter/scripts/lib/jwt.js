@@ -99,7 +99,20 @@ function getLicenseAudiences(token) {
   )].sort();
 }
 
+/**
+ * The tenant a broker license is for: its slug, which the license server keeps
+ * in `org.login` (a GitHub-path license keeps the GitHub login there). Renewal
+ * pins `/activate` to it so a renewal can never move the license to another
+ * workspace (ADR 005). Empty string when absent.
+ */
+function getLicenseTenantSlug(token) {
+  const payload = decodeJwtPayload(token);
+  const login = payload && payload.org && payload.org.login;
+  return typeof login === "string" ? login.trim() : "";
+}
+
 module.exports = {
+  getLicenseTenantSlug,
   isJwtExpired,
   getEndpointFromTokenAllowExpired,
   getLicenseOrgs,
