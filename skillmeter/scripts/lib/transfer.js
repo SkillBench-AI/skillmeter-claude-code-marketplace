@@ -77,6 +77,11 @@ const TRANSCRIPT_TIMEOUT = 30_000;
 // spent its retry budget and was quarantined — it is no longer awaiting
 // anything, and at a whole transcript slice each it cannot be kept forever.
 const CLEANUP_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+// Unsent telemetry older than the license's 7-day refresh window is deleted
+// (ADR 001, decision 3). Capture does not wait for a fresh token, so without
+// this a device that can no longer sign in would keep it indefinitely; by
+// then the token chain is dead and a new sign-in is required anyway.
+const UNSENT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const DRAIN_ONCE_LOCK_FILE = path.join(LOG_DIR, ".drain-once.lock");
 const DRAIN_ONCE_LOCK_STALE_MS = 30_000;
 const QUEUE_DRAIN_LOCK_STALE_MS = 2 * 60_000;
@@ -356,7 +361,13 @@ function clearDrainOnceLock() {
   try { fs.unlinkSync(DRAIN_ONCE_LOCK_FILE); } catch {}
 }
 
+// One hook process asks for at most one drain: a Stop that records and then
+// requests license recovery would otherwise spawn two, relying only on the
+// file debounce below to collapse them.
+let drainSpawnedInProcess = false;
+
 function spawnDetachedDrain() {
+  if (drainSpawnedInProcess) return false;
   if (!shouldSpawnDrainOnce()) return false;
 
   const script = path.join(PLUGIN_ROOT, "scripts", "drain_once.js");
@@ -367,6 +378,7 @@ function spawnDetachedDrain() {
       env: process.env,
     });
     child.unref();
+    drainSpawnedInProcess = true;
     console.error(`[skillmeter] Drain trigger spawned: pid=${child.pid}`);
     return true;
   } catch (err) {
@@ -1187,8 +1199,23 @@ function retryFailedTranscripts() {
 function cleanupStaleFiles() {
   const now = Date.now();
   const candidates = [];
+  const unsent = [];
 
   for (const context of listRepositoryQueueContexts()) {
+    try {
+      for (const f of fs.readdirSync(context.root)) {
+        if (f === "events.jsonl" || /^events\.jsonl\.\d+$/.test(f)) {
+          unsent.push(path.join(context.root, f));
+        }
+      }
+    } catch {}
+    try {
+      for (const f of fs.readdirSync(context.chunks)) {
+        if (f.endsWith(".jsonl") || f.endsWith(".meta.json")) {
+          unsent.push(path.join(context.chunks, f));
+        }
+      }
+    } catch {}
     try {
       for (const f of fs.readdirSync(context.root)) {
         if (/^events\.jsonl\.\d+\.sent$/.test(f)) {
@@ -1246,6 +1273,20 @@ function cleanupStaleFiles() {
 
   if (deleted > 0) {
     console.error(`[skillmeter] Cleaned up ${deleted} stale file(s) older than 30 days`);
+  }
+
+  let expired = 0;
+  for (const p of unsent) {
+    try {
+      const st = fs.statSync(p);
+      if (st.isFile() && now - st.mtimeMs > UNSENT_MAX_AGE_MS) {
+        fs.unlinkSync(p);
+        expired++;
+      }
+    } catch {}
+  }
+  if (expired > 0) {
+    console.error(`[skillmeter] Deleted ${expired} unsent file(s) older than 7 days`);
   }
   cleanupStaleSessionContexts(CLEANUP_MAX_AGE_MS, now);
 }

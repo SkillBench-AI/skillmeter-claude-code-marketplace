@@ -291,7 +291,7 @@ function buildRepositoryTelemetryState(roots, {
   getOrgConsent = telemetryStore.getOrganizationConsent,
   getGlobalDisabled = telemetryStore.getGlobalDisabled,
   getPolicyBlockedReason = telemetryStore.getPolicyBlockedReason,
-  hasValidLicense = credstore.hasValidLicense,
+  isSignedIn = credstore.isSignedIn,
   getHashSalt = credstore.getOrCreateHashSalt,
   getConfiguredRepositories = () =>
     telemetryStore.readPolicy().repositories,
@@ -299,7 +299,7 @@ function buildRepositoryTelemetryState(roots, {
 } = {}) {
   const globalDisabled = getGlobalDisabled();
   const policyBlocked = getPolicyBlockedReason();
-  const signedIn = hasValidLicense();
+  const signedIn = isSignedIn();
   let hashSalt = "";
   const repositories = [];
   const discovered = new Map();
@@ -354,7 +354,7 @@ function buildRepositoryTelemetryState(roots, {
     const gate = resolveTelemetryGate({
       policyBlocked,
       globalDisabled,
-      hasValidLicense: signedIn,
+      signedIn,
       repoOrgOwned: true,
       orgConsent,
       projectOptIn: projectSetting,

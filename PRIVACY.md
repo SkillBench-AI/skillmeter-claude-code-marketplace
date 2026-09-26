@@ -200,14 +200,19 @@ the feature is introduced.
   successful HTTP acknowledgement;
 - successfully uploaded event batches can remain locally for up to 30 days for
   diagnostics;
-- failed or paused uploads remain queued until a later success or an applicable
-  organization/repository OFF decision deletes the payload;
+- while you are signed in, events keep being recorded even if the license is
+  waiting to be refreshed; they are sent once a fresh license is available;
+- failed or paused uploads remain queued until a later success, an applicable
+  organization/repository OFF decision, or a revoked organization license
+  deletes the payload, and any unsent event log or transcript chunk older than
+  7 days is deleted;
 - the global kill-switch pauses queued uploads rather than deleting them;
 - repository and organization OFF decisions delete queued payloads for that
   scope, while privacy cursors can remain to prevent later upload of content
   created while telemetry was disabled;
-- sign-out removes the license but retains the random device identifier,
-  hashing salt, and telemetry policy;
+- sign-out removes the license and deletes unsent repository telemetry and
+  organization audit records (an accepted history import stays queued), but
+  retains the random device identifier, hashing salt, and telemetry policy;
 - uninstalling the plugin may not remove `~/.skillbench/`.
 
 To remove the retained local identity and policy files, sign out first, close

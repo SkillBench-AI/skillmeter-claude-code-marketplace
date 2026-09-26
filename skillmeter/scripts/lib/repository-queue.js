@@ -243,6 +243,17 @@ function purgeOrganizationQueues(org) {
   return removed;
 }
 
+// Sign-out: nothing recorded under the sign-in stays queued for upload.
+// Accepted historical-import chunks are kept, as everywhere else here; their
+// consent is separate from repository telemetry.
+function purgeAllRepositoryQueues() {
+  let removed = 0;
+  for (const context of listRepositoryQueueContexts()) {
+    if (clearRepositoryPayloads(context)) removed++;
+  }
+  return removed;
+}
+
 function purgeDisallowedQueues() {
   let removed = 0;
   for (const context of listRepositoryQueueContexts()) {
@@ -261,5 +272,6 @@ module.exports = {
   reconcileRevocations,
   purgeRepositoryQueue,
   purgeOrganizationQueues,
+  purgeAllRepositoryQueues,
   purgeDisallowedQueues,
 };
