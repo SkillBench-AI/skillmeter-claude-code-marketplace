@@ -1,18 +1,18 @@
 /**
  * Device-wide refresh status in STATE_DIR, shared across sessions. Refresh and
- * sign-in update it; hooks and the retry daemon read it for notices and backoff
- * without a network request.
+ * sign-in update it; the upload drains read it for backoff and SessionStart for
+ * its sign-in banner, without a network request.
  *
  * Shape (schema_version 1):
  *   last_attempt_at       ms epoch of the last refresh or re-activation attempt
  *   last_success_at       ms epoch of the last success
- *   last_outcome          "rotated" | "reactivated" | "transient_failure" | "terminal"
+ *   last_outcome          "rotated" | "transient_failure" | "terminal"
  *   last_error            { kind, status, message } for the last failure, or null
  *   consecutive_failures  failures since the last success
- *   next_retry_at         ms epoch before which the daemon must not retry, or null
+ *   next_retry_at         ms epoch before which no refresh is attempted, or null
  *   terminal              null, or { reason, at, status, message } — retrying is
  *                         pointless until SessionStart or /skillmeter:signin clears it
- *   updated_by            "daemon" | "session_start" | "drain" | "signin" | ...
+ *   updated_by            "drain" | "session_start" | "signin" | ...
  *   revision              monotonically increasing write counter used for
  *                         compare-and-update (see updateLicenseStatus)
  *
@@ -30,8 +30,9 @@ const { safeReadJson, atomicWriteJson } = require("./io");
 const LICENSE_STATUS_FILE = path.join(STATE_DIR, "license-status.json");
 const SCHEMA_VERSION = 1;
 
-// Backoff bounds. The base is the daemon sweep interval (2 min by default);
-// the cap matches the daemon's drain backoff cap. See ADR 001, decision 2.
+// Backoff bounds. The base is the monitor's sweep interval (2 min by default);
+// the cap matches its drain backoff cap. Transient failures keep retrying at
+// the cap (ADR 001, amendment "one refresh path").
 const BACKOFF_CAP_MS = 30 * 60_000;
 
 // Terminal reasons. A terminal state means the client has stopped retrying for
@@ -227,9 +228,10 @@ function recordRefreshFailure({
   return updateLicenseStatus((prev) => {
   const failures = (prev.consecutive_failures || 0) + 1;
   // A terminal state is sticky: a late transient-failure write from another
-  // process (SessionStart bypasses the refresh lock) must not turn a revoked
-  // or reactivation-required record back into a retrying one. Only a success,
-  // SessionStart's clearTerminal, or /skillmeter:signin lifts it.
+  // process (a request that started before the terminal answer landed) must
+  // not turn a revoked or reactivation-required record back into a retrying
+  // one. Only a success, SessionStart's clearTerminal, or /skillmeter:signin
+  // lifts it.
   if (prev.terminal) {
     return {
       ...prev,

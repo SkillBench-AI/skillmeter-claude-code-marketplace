@@ -60,10 +60,10 @@ async function prepareSession() {
   // marked done, or whose settle was interrupted.
   try { settleBackfillDelivery(); } catch {}
   if (!deviceId) return;
-  // A new session gets one fresh attempt even if the daemon gave up last time
-  // (ADR 001, decision 2: SessionStart clears the terminal state). Done before
-  // the global gate so a session that starts paused and is re-enabled later
-  // does not inherit a stale terminal state.
+  // A new session gets one fresh attempt even after a refresh ended in a
+  // sign-in-required state: SessionStart clears the terminal state. Done
+  // before the global gate so a session that starts paused and is re-enabled
+  // later does not inherit a stale terminal state.
   terminalAtStart = readLicenseStatus()?.terminal || null;
   clearTerminal({ source: "session_start" });
 }

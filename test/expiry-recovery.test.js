@@ -8,8 +8,10 @@ const { makeTempDir, writeJson, writeFile, writeTelemetryPolicy, makeJwt, runNod
 
 const scripts = path.resolve(__dirname, "../skillmeter/scripts");
 
-// Exercise real hook/refresh/queue code in separate processes. Only the clock,
-// network are substituted; most cases also stub launch. No monitor or real token is used.
+// Exercise real hook/refresh/queue code in separate processes: recording while
+// the license is expired, and the drain that refreshes before it sends. Only
+// the clock and network are substituted; most cases also stub the detached
+// launch. No monitor or real token is used.
 function fixture({ realSpawn = false } = {}) {
   const root = makeTempDir("skm-expiry-");
   const state = path.join(root, "state");
@@ -106,7 +108,7 @@ test("an expired session keeps recording, and the next drain renews the license 
   assert.match(f.hook(17).stderr, /logged/);
 });
 
-test("Stop launches a real detached worker that recovers after the hook exits", async () => {
+test("Stop's detached drain refreshes and uploads after the hook exits", async () => {
   const f = fixture({ realSpawn: true });
   f.hook(16);
   assert.ok(f.records().some(r => r.exited === "stop.js"));
@@ -164,7 +166,7 @@ test("refresh failure backs off and later recovers without SessionStart", () => 
 });
 
 for (const denied of ["signed_out", "global_off", "org_off", "repo_off", "missing_token"]) {
-  test(`empty-queue recovery respects ${denied}`, () => {
+  test(`${denied}: repository content is never sent`, () => {
     const f = fixture();
     if (denied === "signed_out") {
       writeJson(path.join(f.state, "credentials.json"), { ...f.credentials, signed_out: true });
@@ -202,7 +204,7 @@ for (const status of [401, 402, 410]) {
 }
 
 for (const change of ["signout", "revoke_consent"]) {
-  test(`queued recovery rechecks ${change} before starting`, () => {
+  test(`a queued drain rechecks ${change} before sending`, () => {
     const f = fixture();
     f.hook(16);
     assert.ok(f.records().filter(r => r.spawn).length >= 1);

@@ -11,8 +11,6 @@ const { makeTempDir, setTestEnv } = require("../testing/helpers");
 const stateDir = makeTempDir("skm-retry-daemon-");
 setTestEnv("SKILLMETER_STATE_DIR", stateDir);
 setTestEnv("SKILLMETER_RETRY_DAEMON_INTERVAL_MS", "120000");
-setTestEnv("SKILLMETER_BACKEND_URL", undefined);
-setTestEnv("SKILLMETER_ACTIVATE_URL", "https://activation.test/activate");
 
 const daemon = require("../skillmeter/scripts/monitors/retry_daemon");
 
