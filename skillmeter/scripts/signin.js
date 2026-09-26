@@ -206,7 +206,9 @@ async function exchangeForLicense(idToken, deviceId) {
 // no second identity lookup here. Output goes to BACKGROUND_LOG (redirected by
 // the parent's spawn() stdio) so it can be inspected if activation silently
 // fails.
-async function runBackgroundPoll(deviceId, deviceCode, interval) {
+async function runBackgroundPoll(deviceId, deviceCode, interval, generation) {
+  if (!generation) throw new Error("Sign-in intent missing. Run /skillmeter:signin again.");
+  const expected = { generation, deviceId };
   log(`[${new Date().toISOString()}] background poll started (device_id=${deviceId})`);
   try {
     const idToken = await pollForToken(deviceCode, interval);
@@ -215,32 +217,28 @@ async function runBackgroundPoll(deviceId, deviceCode, interval) {
     const licenseJwt = await exchangeForLicense(idToken, deviceId);
     log(`[${new Date().toISOString()}] license issued`);
 
-    if (!credstore.commitSignin({ jwt: licenseJwt })) {
-      log(`[${new Date().toISOString()}] sign-in discarded: signed out during poll`);
-      credstore.writeSigninResult({ status: "discarded" });
+    if (!credstore.commitSignin({ jwt: licenseJwt, expected, onCommit: () => {
+      clearLicenseStatus({ source: "signin" });
+      credstore.writeSigninResult({ status: "success" });
+    } })) {
+      log(`[${new Date().toISOString()}] sign-in discarded: authentication changed during poll`);
       process.exit(0);
     }
-    // The daemon may have recorded a terminal state against the old token
-    // while the user was approving; the new sign-in supersedes it.
-    clearLicenseStatus({ source: "signin" });
     log(`[${new Date().toISOString()}] activation complete`);
-    // Record success so the in-session FileChanged notifier can surface the
-    // welcome banner without the user re-running /skillmeter:signin.
-    credstore.writeSigninResult({ status: "success" });
     process.exit(0);
   } catch (err) {
     log(`[${new Date().toISOString()}] background poll failed: ${err.message}`);
-    credstore.writeSigninResult({ status: "failure", error: err.message });
+    credstore.writeSigninResult({ status: "failure", error: err.message }, expected);
     process.exit(1);
   }
 }
 
-function spawnBackgroundPoll(deviceId, deviceCode, interval) {
+function spawnBackgroundPoll(deviceId, deviceCode, interval, generation) {
   fs.mkdirSync(path.dirname(BACKGROUND_LOG), { recursive: true, mode: 0o700 });
   const logFd = fs.openSync(BACKGROUND_LOG, "a");
   const child = spawn(
     process.execPath,
-    [__filename, "--background-poll", deviceId, deviceCode, String(interval)],
+    [__filename, "--background-poll", deviceId, deviceCode, String(interval), generation],
     {
       detached: true,
       stdio: ["ignore", logFd, logFd],
@@ -252,7 +250,9 @@ function spawnBackgroundPoll(deviceId, deviceCode, interval) {
 
 async function main() {
   // Explicit sign-in clears the signed-out sentinel before starting the flow.
-  credstore.markEngaged();
+  const deviceId = credstore.getDeviceId();
+  const generation = credstore.markEngaged();
+  const expected = { generation, deviceId };
   clearLicenseStatus({ source: "signin" });
 
   const existingToken = credstore.getLicenseToken();
@@ -265,7 +265,6 @@ async function main() {
     log("License expired — refreshing...");
   }
 
-  const deviceId = credstore.getDeviceId();
   if (!deviceId) {
     log("Activation failed: unable to determine device ID.");
     process.exit(1);
@@ -307,26 +306,25 @@ async function main() {
   // detached background poll and let the user re-invoke /skillmeter:signin
   // to confirm.
   if (process.stdout.isTTY) {
-    await runForegroundPoll(deviceId, device);
+    await runForegroundPoll(deviceId, device, expected);
   } else {
-    spawnBackgroundPoll(deviceId, device.device_code, device.interval || 5);
+    spawnBackgroundPoll(deviceId, device.device_code, device.interval || 5, generation);
     say("Polling for approval in the background.");
     say("After approving in your browser, run /skillmeter:signin again to confirm.");
     say(`(background log: ${BACKGROUND_LOG})`);
   }
 }
 
-async function runForegroundPoll(deviceId, device) {
+async function runForegroundPoll(deviceId, device, expected) {
   const stop = startSpinner("Waiting for approval");
   try {
     const idToken = await pollForToken(device.device_code, device.interval || 5);
     const licenseJwt = await exchangeForLicense(idToken, deviceId);
     stop();
-    if (!credstore.commitSignin({ jwt: licenseJwt })) {
-      say("Sign-in discarded: signed out during issuance.");
+    if (!credstore.commitSignin({ jwt: licenseJwt, expected, onCommit: () => clearLicenseStatus({ source: "signin" }) })) {
+      say("Sign-in discarded: authentication changed during issuance.");
       process.exit(0);
     }
-    clearLicenseStatus({ source: "signin" });
     showSigninStatus();
   } catch (err) {
     stop();
@@ -339,7 +337,10 @@ if (process.argv[2] === "--background-poll") {
   const deviceId = process.argv[3];
   const deviceCode = process.argv[4];
   const interval = Number(process.argv[5]) || 5;
-  runBackgroundPoll(deviceId, deviceCode, interval);
+  runBackgroundPoll(deviceId, deviceCode, interval, process.argv[6]).catch((err) => {
+    say(err.message);
+    process.exitCode = 1;
+  });
 } else {
   main().catch((err) => {
     say(`Activation failed: ${err.message}`);

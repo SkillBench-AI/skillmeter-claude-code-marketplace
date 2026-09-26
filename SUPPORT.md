@@ -39,3 +39,19 @@ code, customer identifiers, or telemetry payloads in a public issue.
 - [Privacy notice](PRIVACY.md)
 - [SkillBench Privacy Policy](https://skillbench.com/privacy/)
 - [SkillBench subprocessors](https://skillbench.com/subprocessors/)
+
+## Credential store is busy
+
+A brief `credential-store-busy` error means another process may be writing the
+shared sign-in state. Retry after that operation finishes. The plugin will not
+evict a live writer because its lock is old.
+
+If the error persists, quit all Claude and Codex sessions and their background
+plugin workers. Mixed use requires both plugins to have compatible credential
+locking; an old process can retain its previous behavior after an update.
+Restart using the supported versions and retry.
+
+Malformed or unknown lock records, PID reuse, and repeated interrupted cleanup
+can require support-assisted recovery. Preserve the credential and lock files
+for local diagnosis; do not delete or edit them while any writer can run. Never
+attach `credentials.json`, tokens or raw state to a public issue.

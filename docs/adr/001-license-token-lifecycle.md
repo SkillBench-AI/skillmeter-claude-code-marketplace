@@ -351,3 +351,39 @@ moved to ADR 004 as decisions 4 to 6 and its acceptance table, and is
 withdrawn here in its favour. A token change never changes consent, and a
 consent change never mints or revokes a token; anything that touches both is
 decided in ADR 004 and mirrored in each client's ADR set.
+
+## Amendment: authentication intent across shared clients
+
+Credential writers coordinate on `credentials.json.lock`, preserving fields
+owned by other clients. Explicit sign-in, successful issuance, direct token
+replacement and sign-out rotate `auth_generation`. Refresh preserves that
+generation and commits only while the token, generation, device and sign-out
+state match its pre-request snapshot. This rejects delayed responses even when
+a new sign-in reuses the same token. Browser issuance carries the initiating
+generation and device through foreground and detached polling.
+
+Refresh status writes run under the same credential lock and recheck the
+exchange snapshot. New status records contain a hash of that authentication
+context, so a different client's sign-in invalidates stale backoff and terminal
+state without persisting another token copy. Older unbound status records remain
+readable. Refresh callers re-read credentials after an awaited exchange.
+
+The shared owner-token lock never expires a live writer by age. A contender
+reclaims only a valid owner whose PID check reports `ESRCH`. Cleanup takes a
+lock specific to the observed owner token, then rechecks that owner before
+unlinking. Every cleanup process for that incarnation uses the same guard,
+including through directory aliases. Dead cleanup owners use the same bounded
+recovery procedure. Unknown formats, unreadable ownership, permission-denied
+PID checks and potentially reused live PIDs hold the lock.
+
+This is a single-host, cooperating-client protocol on a local filesystem with
+atomic hard-link publication. It prefers a recoverable hold over simultaneous
+credential writers. Repeated crashes beyond the recovery depth also hold;
+`credential-store-busy` does not authorize deleting the lock while clients run.
+
+Both plugins must use the updated protocol, and old processes must exit after
+updating. Released clients that reclaim live locks by age and older Claude
+clients that ignore the lock cannot inherit this guarantee from a shared file.
+The candidate tests for surviving released processes cover their listed auth
+transitions only, not arbitrary overlapping writes. This amendment does not
+authorize telemetry, change consent, or establish a release support window.
