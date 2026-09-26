@@ -138,13 +138,13 @@ test("Stop launches a real detached worker that recovers after the hook exits", 
   assert.match(f.hook(17, { TEST_REAL_SPAWN: "0" }).stderr, /logged/);
 });
 
-test("proactive Stop recovery keeps an active session capturing across two token lifetimes", () => {
+test("an active session records and uploads every turn across two token lifetimes", () => {
   const f = fixture();
   for (let minute = 0; minute <= 34; minute += 2) {
     assert.match(f.hook(minute).stderr, /logged/, `capture at minute ${minute}`);
     f.drain(minute);
   }
-  assert.ok(f.records().filter(r => r.url?.endsWith("/refresh")).length >= 3);
+  assert.ok(f.records().filter(r => r.url?.endsWith("/refresh")).length >= 2);
   assert.deepEqual(f.records().flatMap(r => r.uploaded || []), Array(18).fill("Stop"));
   assert.deepEqual(f.records().flatMap(r => r.messages || []), Array.from({ length: 18 }, (_, i) => `synthetic turn ${i * 2}`));
 });
@@ -191,10 +191,12 @@ for (const denied of ["signed_out", "global_off", "org_off", "repo_off", "missin
 for (const status of [401, 402, 410]) {
   test(`terminal refresh ${status} is not rearmed by later hooks`, () => {
     const f = fixture();
+    // Something recorded while expired makes the drain refresh and find out.
+    f.hook(16);
     f.drain(16, { TEST_REFRESH_STATUS: String(status) });
     f.hook(20);
     f.drain(20);
-    assert.equal(f.records().filter(r => r.url).length, 1);
+    assert.equal(f.records().filter(r => r.url).length, 1, "no further refresh until a new sign-in");
     assert.ok(JSON.parse(fs.readFileSync(path.join(f.state, "license-status.json"))).terminal);
   });
 }

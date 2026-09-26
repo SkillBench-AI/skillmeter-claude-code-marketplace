@@ -107,17 +107,6 @@ const LICENSE_REFRESH_LOCK_FILE = path.join(LOG_DIR, ".license-refresh.lock");
 const LICENSE_REFRESH_COOLDOWN_MS = 60_000;
 
 /**
- * Hooks treat a token as expired LICENSE_EXPIRY_SKEW_SECONDS before `exp`. A
- * periodic caller (the daemon) must renew at least one period earlier than
- * that, otherwise hooks skip events between the moment the token crosses the
- * hooks' threshold and the caller's next tick. Pure.
- */
-function renewSkewSeconds(aheadMs = 0) {
-  const ahead = Number.isFinite(aheadMs) && aheadMs > 0 ? Math.ceil(aheadMs / 1000) : 0;
-  return credstore.LICENSE_EXPIRY_SKEW_SECONDS + ahead;
-}
-
-/**
  * Pure single-flight + cooldown decision (no I/O — unit-testable). All callers
  * are best-effort/proactive (there's no reactive force path), so a lock younger
  * than the cooldown simply means "someone else has it / just refreshed" → skip.
@@ -184,17 +173,6 @@ function acquireRefreshLock(staleLockPresent, cooldownMs = LICENSE_REFRESH_COOLD
   return tryCreate() !== "exists";
 }
 
-/**
- * Orchestrate one refresh and record its outcome. Returns the freshest token
- * or null. Reads the token uncached so a refresh written by another process is
- * observed.
- *
- * @param {string} deviceId
- * @param {object} [opts]
- * @param {string} [opts.source] who is asking ("session_start", "daemon", "drain")
- * @param {number} [opts.aheadMs] renew this much earlier than the hooks'
- *   expiry threshold (see renewSkewSeconds)
- */
 // 402: the organization license was cancelled. What was recorded under it
 // and not yet sent is removed (ADR 001, decision 3). Runs outside the
 // credential lock because the purge helpers may take it.
@@ -209,11 +187,22 @@ function purgeRevokedLicenseData(token) {
   }
 }
 
-async function refreshLicense(deviceId, { source = "unknown", aheadMs = 0 } = {}) {
+/**
+ * Orchestrate one refresh and record its outcome. Returns the freshest token
+ * or null. Reads the token uncached so a refresh written by another process is
+ * observed.
+ *
+ * @param {string} deviceId
+ * @param {object} [opts]
+ * @param {string} [opts.source] who is asking (a drain, or a test)
+ * @param {boolean} [opts.force] refresh even though the token looks fresh
+ *   locally: the server rejected it (401), e.g. under clock skew
+ */
+async function refreshLicense(deviceId, { source = "unknown", force = false } = {}) {
   const expected = credstore.recoverySnapshot();
   if (expected.signedOut || expected.deviceId !== deviceId) return null;
   const current = expected.token;
-  if (current && !credstore.isLicenseTokenExpired(current, renewSkewSeconds(aheadMs))) return current;
+  if (!force && current && !credstore.isLicenseTokenExpired(current)) return current;
   // Refresh requires an existing sign-in. A missing license requires
   // the user to invoke /skillmeter:signin.
   if (!current || !deviceId) return null;
@@ -261,19 +250,21 @@ async function refreshLicense(deviceId, { source = "unknown", aheadMs = 0 } = {}
 }
 
 /**
- * Best-effort, single-flight license refresh. Never throws; returns the
- * freshest token available (refreshed, existing, or null). Safe to call before
- * every drain/upload and on every daemon sweep — cheap no-op when the token is
- * already fresh, non-blocking when another process holds the refresh lock, and
- * silent while the status record says to back off or stop.
+ * Best-effort, single-flight license refresh; the one refresh path. The upload
+ * drains call it before sending a batch, and again with `force` after the
+ * server rejects the token (401). Recording never waits for it (ADR 001,
+ * decision 3), so nothing refreshes ahead of need. Never throws; returns the
+ * freshest token available (refreshed, existing, or null). A cheap no-op when
+ * the token is fresh, non-blocking when another process holds the refresh
+ * lock, and silent while the status record says to back off or stop.
  */
-async function ensureFreshLicense(deviceId, { source = "drain", aheadMs = 0 } = {}) {
+async function ensureFreshLicense(deviceId, { source = "drain", force = false } = {}) {
   if (!deviceId) return null;
   if (credstore.getSignedOut()) return null;
 
   const current = credstore.getLicenseTokenUncached();
   const tokenFresh =
-    Boolean(current) && !credstore.isLicenseTokenExpired(current, renewSkewSeconds(aheadMs));
+    !force && Boolean(current) && !credstore.isLicenseTokenExpired(current);
   if (tokenFresh) return current;
 
   // Backoff / terminal decisions are shared across processes through the
@@ -312,7 +303,7 @@ async function ensureFreshLicense(deviceId, { source = "drain", aheadMs = 0 } = 
   if (!acquireRefreshLock(lockMtimeMs != null, LICENSE_REFRESH_COOLDOWN_MS, Date.now())) return current;
 
   try {
-    await refreshLicense(deviceId, { source, aheadMs });
+    await refreshLicense(deviceId, { source, force });
   } catch {
     // A failed exchange or busy writer must not return the pre-await token.
   }

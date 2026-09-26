@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 const { runHook } = require("./logger.js");
-const { requestLicenseRecovery } = require("./lib/hook-license-recovery");
 const {
   discardSkippedSessionArtifacts,
   sealFinalSessionArtifacts,
@@ -12,5 +11,4 @@ runHook("Stop", (input) => ({
 }), {
   afterSkip: discardSkippedSessionArtifacts,
   afterLog: sealFinalSessionArtifacts,
-  afterComplete: requestLicenseRecovery,
 }).catch(() => process.exit(1));

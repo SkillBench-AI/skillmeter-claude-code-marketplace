@@ -39,7 +39,9 @@ const BACKOFF_CAP_MS = 30 * 60_000;
 const TERMINAL_REASONS = Object.freeze({
   REVOKED: "revoked", // 402 from /refresh or /activate
   REACTIVATION_REQUIRED: "reactivation_required", // 410/401: only a new sign-in helps
-  BACKOFF_EXHAUSTED: "backoff_exhausted", // failures kept coming past the cap
+  // Legacy: no longer written. Transient failures keep retrying at the cap;
+  // a record left by an older version is ignored (see refreshBlockedReason).
+  BACKOFF_EXHAUSTED: "backoff_exhausted",
 });
 
 function emptyStatus() {
@@ -178,24 +180,17 @@ function backoffDelayMs(consecutiveFailures, baseMs = getRetryDaemonIntervalMs()
 }
 
 /**
- * True when the attempt that just failed was already waited for at the cap,
- * i.e. the previous delay had reached `capMs`. With a 2-minute base and a
- * 30-minute cap the sequence is 2, 4, 8, 16, 30 minutes of waiting, and the
- * sixth failure is terminal (about an hour of trying). Pure.
- */
-function backoffExhausted(consecutiveFailures, baseMs = getRetryDaemonIntervalMs(), capMs = BACKOFF_CAP_MS) {
-  if (consecutiveFailures < 2) return false;
-  return backoffDelayMs(consecutiveFailures - 1, baseMs, capMs) >= capMs;
-}
-
-/**
  * Why a refresh attempt should be skipped right now, or null when it may run.
  * Pure: takes the status object and the clock.
  * @returns {"terminal"|"backoff"|null}
  */
 function refreshBlockedReason(status, now = Date.now()) {
   if (!status) return null;
-  if (status.terminal) return "terminal";
+  // Only a new sign-in can clear a terminal state, so only reasons that need
+  // one block refresh. An outage is never terminal.
+  if (status.terminal && status.terminal.reason !== TERMINAL_REASONS.BACKOFF_EXHAUSTED) {
+    return "terminal";
+  }
   if (typeof status.next_retry_at === "number" && status.next_retry_at > now) return "backoff";
   return null;
 }
@@ -215,9 +210,9 @@ function recordRefreshSuccess({ source = "unknown", outcome = "rotated", now = D
 }
 
 /**
- * Record a transient failure (network, 5xx, malformed response, rejected
- * re-activation that may succeed later). Advances the backoff; flips to the
- * backoff_exhausted terminal state once the cap has been waited out.
+ * Record a transient failure (network, 5xx, malformed response). Advances the
+ * backoff, which stays at the cap for as long as failures continue: an outage
+ * recovers on its own once the server answers again, without a new session.
  */
 function recordRefreshFailure({
   source = "unknown",
@@ -241,18 +236,6 @@ function recordRefreshFailure({
       last_attempt_at: now,
       last_error: error,
       consecutive_failures: failures,
-      updated_by: source,
-    };
-  }
-  if (backoffExhausted(failures, baseMs, capMs)) {
-    return {
-      ...prev,
-      last_attempt_at: now,
-      last_outcome: "terminal",
-      last_error: error,
-      consecutive_failures: failures,
-      next_retry_at: null,
-      terminal: { reason: TERMINAL_REASONS.BACKOFF_EXHAUSTED, at: now, status, message: error.message },
       updated_by: source,
     };
   }
@@ -311,7 +294,6 @@ module.exports = {
   TERMINAL_REASONS,
   readLicenseStatus,
   backoffDelayMs,
-  backoffExhausted,
   refreshBlockedReason,
   updateLicenseStatus,
   recordRefreshSuccess,

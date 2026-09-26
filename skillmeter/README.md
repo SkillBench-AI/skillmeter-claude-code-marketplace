@@ -107,16 +107,16 @@ Successful event batches become `.sent`; acknowledged transcript chunks are
 deleted. Transcript failures share a per-chunk retry budget across all drains:
 waits double from one minute to a 30-minute cap, then the eighth failed attempt
 quarantines the body and metadata. Quarantined files and delivered event logs
-are eligible for cleanup after 30 days. Pending chunks are retained for retry
-unless an applicable policy change removes them.
+are eligible for cleanup after 30 days. Pending event logs and chunks are
+retained for retry unless an applicable policy change, sign-out or a revoked
+license removes them, and are deleted once they are older than 7 days.
 
-License refresh runs at session start, before uploads and during monitor sweeps.
-Stop also requests a detached refresh for an enabled repository near expiry,
-even when its queue is empty and no monitor is running. Hooks do not wait for
-the request. This restores capture on later hooks after recovery; events skipped
-while the license is stale are still lost.
-Transient failures back off; repeated failure or revocation stops background
-retries. A license that can no longer be refreshed requires `/skillmeter:signin`
+Recording does not wait for the license: while you are signed in, hooks record
+even if the license has expired, and the data is sent after the next refresh.
+The license is refreshed in one place, by the upload drain just before it sends,
+and once more if the server rejects the token (HTTP 401). Transient failures
+back off up to a 30-minute interval and keep retrying. A license that can no
+longer be refreshed (401/410) or was revoked (402) requires `/skillmeter:signin`
 and browser approval. See [ADR001](../docs/adr/001-license-token-lifecycle.md).
 
 ## Local state and diagnostics
