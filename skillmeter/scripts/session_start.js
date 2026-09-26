@@ -7,7 +7,22 @@ const {
   initializeTranscriptCursor,
 } = require("./lib/transfer");
 const { ensureFreshLicense } = require("./lib/license-activation");
-const { clearTerminal } = require("./lib/license-status");
+const {
+  clearTerminal,
+  readLicenseStatus,
+  TERMINAL_REASONS,
+} = require("./lib/license-status");
+
+// Recording continues while a license waits out an outage, so the sign-in
+// banner is for states only a new sign-in can fix: the refresh chain ended
+// (410/401) or the organization license was revoked (402).
+function signInRequiredToRecover() {
+  const reason = readLicenseStatus()?.terminal?.reason;
+  return (
+    reason === TERMINAL_REASONS.REACTIVATION_REQUIRED ||
+    reason === TERMINAL_REASONS.REVOKED
+  );
+}
 const { detectHarness } = require("./harness.js");
 const { PLUGIN_ROOT, PLUGIN_VERSION } = require("./lib/paths");
 const { initializeBackfillLifecycle } = require("./lib/backfill-state");
@@ -122,7 +137,7 @@ function runSessionStartHook() {
           credstore.markUploadNotified();
         }
       }
-      if (!credstore.hasValidLicense()) {
+      if (!credstore.isSignedIn() || signInRequiredToRecover()) {
         lines.push(signInRequiredBanner());
       } else if (gate.mode === "org_consent_required") {
         lines.push(telemetryConsentRequiredBanner(repoScopeDecision.remoteOrg));
@@ -150,8 +165,10 @@ function runSessionStartHook() {
       ) {
         retryFailedLogs();
         retryFailedTranscripts();
-        cleanupStaleFiles();
       }
+      // Local-only; runs even without a usable license so unsent data still
+      // ages out for a device that can no longer sign in.
+      try { cleanupStaleFiles(); } catch {}
 
       // stderr notices + SessionStart-only side effects (wording unchanged).
       if (gate.mode === "project_disabled") {

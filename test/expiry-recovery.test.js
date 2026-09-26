@@ -88,13 +88,21 @@ global.fetch = async (url, options) => {
   };
 }
 
-test("an expired empty session requests recovery without a monitor, then records on the next hook", () => {
+// ADR 001 decision 3: recording does not depend on token freshness. The
+// fixture's clock is faked but file mtimes are real, so the drain trigger's
+// 30 s debounce cannot suppress the second spawn here; count at least one.
+test("an expired session keeps recording, and the next drain renews the license and uploads it", () => {
   const f = fixture();
-  f.hook(16);
-  assert.equal(f.records().filter(r => r.spawn).length, 1, "expired capture must not strand an empty queue");
+  assert.match(f.hook(16).stderr, /logged/, "an expired token does not drop the event");
+  assert.ok(f.records().filter(r => r.spawn).length >= 1, "a drain is requested");
   assert.equal(f.records().filter(r => r.url).length, 0, "hooks must not perform network I/O");
   f.drain(16);
-  assert.deepEqual(f.records().filter(r => r.url).map(r => r.url), ["https://activation.test/refresh"]);
+  assert.deepEqual(
+    f.records().filter(r => r.url).map(r => r.url),
+    ["https://activation.test/refresh", "https://acme.meter.skillbench.ai/logs/claude"],
+    "refresh first, then the event recorded while expired is sent"
+  );
+  assert.deepEqual(f.records().flatMap(r => r.messages || []), ["synthetic turn 16"]);
   assert.match(f.hook(17).stderr, /logged/);
 });
 
@@ -107,7 +115,10 @@ test("Stop launches a real detached worker that recovers after the hook exits", 
   // Longer than the worker's own 15 s release wait, so a slow machine surfaces
   // the worker's error instead of the test giving up first.
   const deadline = Date.now() + 20_000;
-  while (!f.records().some(r => r.exited === "drain_once.js") && Date.now() < deadline) {
+  // Two real children can run (see below); the first to exit may be the one the
+  // drain lock turned away, so wait for the upload itself, not the first exit.
+  const uploaded = () => f.records().some(r => r.url?.endsWith("/logs/claude"));
+  while (!(uploaded() && f.records().some(r => r.exited === "drain_once.js")) && Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, 20));
   }
   const records = f.records();
@@ -116,7 +127,12 @@ test("Stop launches a real detached worker that recovers after the hook exits", 
   assert.ok(worker, "Stop must launch the actual recovery entry point");
   assert.notEqual(worker.pid, stop.pid);
   assert.ok(records.some(r => r.exited === "drain_once.js"), "worker must finish within the deadline");
-  assert.deepEqual(records.filter(r => r.url).map(r => r.url), ["https://activation.test/refresh"]);
+  // Both real children may refresh here: the fixture fakes the clock while
+  // lock mtimes stay real, so the refresh lock's cooldown cannot hold.
+  const urls = records.filter(r => r.url).map(r => r.url);
+  const uploads = urls.filter(url => url.endsWith("/logs/claude"));
+  assert.equal(uploads.length, 1, "the event recorded while expired is sent once");
+  assert.ok(urls.indexOf("https://activation.test/refresh") < urls.indexOf(uploads[0]), "after a refresh");
   const renewed = JSON.parse(fs.readFileSync(path.join(f.state, "credentials.json"))).license_jwt;
   assert.notEqual(renewed, f.token, "child must persist the refreshed token to the isolated state root");
   assert.match(f.hook(17, { TEST_REAL_SPAWN: "0" }).stderr, /logged/);
@@ -160,7 +176,15 @@ for (const denied of ["signed_out", "global_off", "org_off", "repo_off", "missin
     }
     f.hook(16);
     f.drain(16);
-    assert.deepEqual(f.records(), []);
+    if (denied === "repo_off") {
+      // The organization is authorized, so its exclusion audit record is
+      // recorded and sent; the repository's own content never is.
+      const uploaded = f.records().flatMap(r => r.uploaded || []);
+      assert.ok(!uploaded.includes("Stop"), "repository content stays off");
+      assert.ok(uploaded.every(name => name === "TelemetryCaptureExcluded"));
+    } else {
+      assert.deepEqual(f.records(), []);
+    }
   });
 }
 
@@ -179,7 +203,7 @@ for (const change of ["signout", "revoke_consent"]) {
   test(`queued recovery rechecks ${change} before starting`, () => {
     const f = fixture();
     f.hook(16);
-    assert.equal(f.records().filter(r => r.spawn).length, 1);
+    assert.ok(f.records().filter(r => r.spawn).length >= 1);
     if (change === "signout") {
       const { license_jwt, ...rest } = f.credentials;
       writeJson(path.join(f.state, "credentials.json"), { ...rest, signed_out: true });

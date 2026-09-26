@@ -12,6 +12,7 @@ const credstore = require("../credstore");
 const { LOG_DIR } = require("./paths");
 const { getActivateUrl, getRefreshUrl } = require("./config");
 const { postBearerJson } = require("./http");
+const { getLicenseOrgs } = require("./jwt");
 const licenseStatus = require("./license-status");
 
 const { TERMINAL_REASONS } = licenseStatus;
@@ -194,6 +195,20 @@ function acquireRefreshLock(staleLockPresent, cooldownMs = LICENSE_REFRESH_COOLD
  * @param {number} [opts.aheadMs] renew this much earlier than the hooks'
  *   expiry threshold (see renewSkewSeconds)
  */
+// 402: the organization license was cancelled. What was recorded under it
+// and not yet sent is removed (ADR 001, decision 3). Runs outside the
+// credential lock because the purge helpers may take it.
+function purgeRevokedLicenseData(token) {
+  try {
+    const { purgeOrganizationQueues } = require("./repository-queue");
+    const { purgeOrganizationAuditQueues } = require("./organization-audit-queue");
+    for (const org of getLicenseOrgs(token)) purgeOrganizationQueues(org);
+    purgeOrganizationAuditQueues();
+  } catch (err) {
+    console.error(`[skillmeter] Revoked license cleanup failed: ${err.message}`);
+  }
+}
+
 async function refreshLicense(deviceId, { source = "unknown", aheadMs = 0 } = {}) {
   const expected = credstore.recoverySnapshot();
   if (expected.signedOut || expected.deviceId !== deviceId) return null;
@@ -207,6 +222,7 @@ async function refreshLicense(deviceId, { source = "unknown", aheadMs = 0 } = {}
   const rotation = await refreshExpiredJwt(current, deviceId, expected);
   const completed = rotation.outcome === "rotated" ? { ...expected, token: rotation.token } : expected;
   let result = null;
+  let revoked = false;
   credstore.withRecoveryCurrent(completed, () => {
     switch (rotation.outcome) {
       case "rotated":
@@ -215,6 +231,7 @@ async function refreshLicense(deviceId, { source = "unknown", aheadMs = 0 } = {}
         return;
       case "revoked":
         licenseStatus.recordTerminal({ source, reason: TERMINAL_REASONS.REVOKED, status: 402 });
+        revoked = true;
         return null;
       case "transient":
         licenseStatus.recordRefreshFailure({
@@ -239,6 +256,7 @@ async function refreshLicense(deviceId, { source = "unknown", aheadMs = 0 } = {}
       message: "licence can no longer be refreshed — run /skillmeter:signin",
     });
   });
+  if (revoked) purgeRevokedLicenseData(current);
   return result;
 }
 

@@ -130,7 +130,7 @@ test("one-time backfill is separate from every telemetry choice", () => {
 
 const ENABLED_POLICY = {
   globalDisabled: false,
-  hasValidLicense: true,
+  signedIn: true,
   repoOrgOwned: true,
   orgConsent: true,
   projectOptIn: null,
@@ -169,7 +169,7 @@ const POLICY_CASES = [
   ],
   [
     "missing sign-in blocks capture",
-    { hasValidLicense: false },
+    { signedIn: false },
     { capture: false, mode: "not_signed_in" },
   ],
   [
@@ -179,7 +179,7 @@ const POLICY_CASES = [
   ],
   [
     "global kill-switch has highest precedence",
-    { globalDisabled: true, hasValidLicense: false, repoOrgOwned: false },
+    { globalDisabled: true, signedIn: false, repoOrgOwned: false },
     { capture: false, mode: "global_disabled" },
   ],
 ];
