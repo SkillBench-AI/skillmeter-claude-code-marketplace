@@ -6,7 +6,7 @@ const {
   cleanupStaleFiles,
   initializeTranscriptCursor,
 } = require("./lib/transfer");
-const { refreshLicense } = require("./lib/license-activation");
+const { ensureFreshLicense } = require("./lib/license-activation");
 const { clearTerminal } = require("./lib/license-status");
 const { detectHarness } = require("./harness.js");
 const { PLUGIN_ROOT, PLUGIN_VERSION } = require("./lib/paths");
@@ -48,7 +48,11 @@ async function prepareSession() {
   // does not inherit a stale terminal state.
   clearTerminal({ source: "session_start" });
   if (telemetryStore.getGlobalDisabled()) return;
-  try { await refreshLicense(deviceId, { source: "session_start" }); } catch {}
+  // Through the refresh lock, like every other caller: sessions started
+  // together, or a session starting while the daemon or a drain is mid-refresh,
+  // must not POST /refresh with the same token at once. clearTerminal above
+  // already dropped the backoff clock, so the fresh attempt is not blocked.
+  try { await ensureFreshLicense(deviceId, { source: "session_start" }); } catch {}
 }
 
 function runSessionStartHook() {
