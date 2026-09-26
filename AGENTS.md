@@ -47,6 +47,9 @@ concise English for readers who do not know the team's internal history.
   `PreModelSwitch` (it is synchronous and a timed-out hook blocks the switch);
   skip `MessageDisplay` (per streamed text delta, message content). Hooks whose
   stdout reaches Claude, such as `PostModelSwitch`, must print nothing.
+- Claude Code does not enforce `timeout` on `async: true` command hooks, so
+  async hooks carry none; every network call bounds itself with
+  `AbortSignal.timeout`. Synchronous hooks keep an explicit `timeout`.
 - Keep upload, retry and cleanup failures best-effort so hooks can return.
   Preserve existing validation, privacy boundaries and recovery behavior.
 
