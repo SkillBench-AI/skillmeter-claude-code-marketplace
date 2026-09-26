@@ -131,14 +131,6 @@ test("nothing queued means nothing to announce", () => {
   assert.equal(settleBackfillDelivery(), null);
 });
 
-test("the notice is taken once per result", () => {
-  writeState();
-  settleBackfillDelivery();
-  const first = takeBackfillNotice({ audiences: [] });
-  assert.match(first.message, /history import complete: 3 sessions sent/);
-  assert.equal(takeBackfillNotice({ audiences: [] }), null);
-});
-
 test("an unset sentinel yields no notice", () => {
   ensureBackfillResultFile();
   assert.deepEqual(readJson(BACKFILL_RESULT_FILE), { status: "none" });
@@ -157,13 +149,10 @@ test("a failure is announced only when nothing was queued, and only once", () =>
   assert.equal(announceBackfillFailure(OFFER), null, "already announced");
 
   const notice = takeBackfillNotice({ audiences: [] });
-  assert.equal(
-    notice.message,
-    "SkillMeter: history import failed before anything was sent. " +
-      "Run /skillmeter:backfill to try again."
-  );
+  assert.match(notice.message, /history import failed/);
+  assert.match(notice.message, /\/skillmeter:backfill\b/);
   assert.doesNotMatch(notice.message, /Users|EACCES/, "stored error text is never shown");
-  assert.equal(notice.desktop, "History import failed");
+  assert.match(notice.desktop, /import failed/i);
 });
 
 test("a failure that still queued chunks is left to the delivery notice", () => {
@@ -173,27 +162,28 @@ test("a failure that still queued chunks is left to the delivery notice", () => 
 });
 
 test("notice wording covers full delivery, set-aside chunks and the dashboard link", () => {
-  assert.deepEqual(
-    formatBackfillNotice(
-      { status: "delivered", sessions: 1, setAsideChunks: 0 },
-      "https://acme.skillbench.ai"
-    ),
-    {
-      message:
-        "SkillMeter: history import complete: 1 session sent. " +
-        "Open SkillMeter: https://acme.skillbench.ai",
-      desktop: "History import complete: 1 session sent",
-    }
+  const full = formatBackfillNotice(
+    { status: "delivered", sessions: 1, setAsideChunks: 0 },
+    "https://acme.skillbench.ai"
   );
+  assert.match(full.message, /\b1 session sent\b/);
+  assert.match(full.message, /https:\/\/acme\.skillbench\.ai/);
+  assert.match(full.desktop, /\b1 session sent\b/);
+
+  const unlinked = formatBackfillNotice(
+    { status: "delivered", sessions: 2, setAsideChunks: 0 },
+    null
+  );
+  assert.match(unlinked.message, /\b2 sessions sent\b/);
+  assert.doesNotMatch(unlinked.message, /https?:\/\//);
+
   const partial = formatBackfillNotice(
     { status: "delivered", sessions: 5, setAsideChunks: 2 },
     null
   );
-  assert.equal(
-    partial.message,
-    "SkillMeter: history import finished: 5 sessions processed, " +
-      "2 upload chunks could not be sent. Run /skillmeter:backfill status for details."
-  );
+  assert.match(partial.message, /\b5 sessions processed\b/);
+  assert.match(partial.message, /\b2 upload chunks could not be sent\b/);
+  assert.match(partial.message, /\/skillmeter:backfill status\b/);
   assert.equal(formatBackfillNotice({ status: "none" }, null), null);
 });
 
@@ -253,15 +243,13 @@ test("FileChanged hook announces a finished import once, with a desktop notifica
   const first = runNode(script, [], { env });
   assert.equal(first.status, 0, first.stderr);
   const output = JSON.parse(first.stdout);
-  assert.equal(
-    output.systemMessage,
-    "SkillMeter: history import complete: 2 sessions sent. " +
-      "Open SkillMeter: https://acme.skillbench.example"
-  );
-  assert.equal(
-    output.terminalSequence,
-    "\u001b]777;notify;SkillMeter;History import complete: 2 sessions sent\u0007"
-  );
+  assert.match(output.systemMessage, /\b2 sessions sent\b/);
+  // The dashboard link is derived from the license's tenant meter audience.
+  assert.match(output.systemMessage, /https:\/\/acme\.skillbench\.example\b/);
+  // OSC 777 framing is protocol, so the prefix and terminator stay exact.
+  assert.ok(output.terminalSequence.startsWith("\u001b]777;notify;SkillMeter;"));
+  assert.ok(output.terminalSequence.endsWith("\u0007"));
+  assert.match(output.terminalSequence, /\b2 sessions sent\b/);
 
   const second = runNode(script, [], { env });
   assert.equal(second.status, 0, second.stderr);

@@ -232,12 +232,24 @@ test("sealDeltaChunk writes body+meta and listDeltaChunks finds it", () => {
 });
 
 test("listDeltaChunks excludes a body without a meta sidecar", () => {
-  const context = transfer.listRepositoryQueueContexts()[0];
-  const dir = context.chunks;
-  fs.mkdirSync(dir, { recursive: true });
-  const orphan = path.join(dir, "9999999999-1.jsonl");
+  // Seal an anchor chunk first so the queue directory exists regardless of
+  // which tests ran before this one.
+  const anchor = transfer.sealDeltaChunk("orphan-anchor.jsonl", ['{"uuid":"o"}'], {
+    seq: 1,
+    reset: false,
+    resetBaselineSeq: null,
+    promptId: "p",
+  }, TEST_REPOSITORY);
+  assert.ok(anchor, "anchor chunk sealed");
+  const context = transfer
+    .listRepositoryQueueContexts()
+    .find((c) => path.resolve(c.chunks) === path.resolve(path.dirname(anchor)));
+  assert.ok(context, "anchor's queue context resolved");
+  const orphan = path.join(context.chunks, "9999999999-1.jsonl");
   writeFile(orphan, "{}\n"); // no sibling .meta.json
-  assert.ok(!transfer.listDeltaChunks().includes(orphan), "orphan body not listed");
+  const listed = transfer.listDeltaChunks();
+  assert.ok(listed.includes(anchor), "sealed anchor is listed");
+  assert.ok(!listed.includes(orphan), "orphan body not listed");
 });
 
 // A chunk the backend rejects every time spends its retry budget and is renamed

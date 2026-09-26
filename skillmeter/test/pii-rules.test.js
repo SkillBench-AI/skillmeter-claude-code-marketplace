@@ -216,20 +216,18 @@ test("a forged _sanitization stamp does not disable hashing of raw paths", () =>
   assert.equal(s.hasSanitizationMarker({ _sanitization: { policyVersion: "latest" } }), false);
 });
 
-test("every record is stamped, transcript lines included", () => {
-  const line = s.sanitizeLine({ type: "user", message: { content: "hi" } }, SALT);
-  assert.equal(line._sanitization.policyVersion, "3.1.2");
-  assert.deepEqual(Object.keys(line._sanitization), ["policyVersion", "secrets", "pii", "counts", "ids"]);
-  const audit = s.sanitizeEventData({ source_hook_event_name: "Stop", gate_mode: "out_of_scope", cwd: "/x" }, SALT);
-  assert.equal(audit.value._sanitization.policyVersion, "3.1.2");
-});
-
 // --- Reporting --------------------------------------------------------------
 
-test("meta carries policy 3.1.2 and a full per-kind count map, zeros included", () => {
-  const { meta } = s.sanitizeEventData({ plain: "nothing to see" }, SALT);
-  assert.equal(meta.policyVersion, "3.1.2");
+test("meta carries the policy version and a full per-kind count map, zeros included", () => {
+  const { value, meta } = s.sanitizeEventData({ plain: "nothing to see" }, SALT);
+  assert.equal(meta.policyVersion, s.POLICY_VERSION);
+  // The one deliberate pin: bump it together with the policy.
   assert.equal(s.POLICY_VERSION, "3.1.2");
+  assert.deepEqual(
+    Object.keys(value._sanitization).sort(),
+    ["counts", "ids", "pii", "policyVersion", "secrets"],
+    "stamp schema"
+  );
   assert.deepEqual(Object.keys(meta.counts), rules.KINDS);
   for (const k of rules.KINDS) assert.equal(meta.counts[k], 0);
   assert.deepEqual(meta.ids, []);

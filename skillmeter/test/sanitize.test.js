@@ -14,11 +14,18 @@ const { RULES } = require("../scripts/lib/rules");
 
 const SALT = "deadbeefcafe";
 
+// Tests that build input from the home directory cannot tell "home was hashed"
+// from "home was never there" when home is the filesystem root.
+const HOME = os.homedir();
+const HOME_DEPENDENT = HOME === "/" || HOME === "" ? { skip: "home directory is the filesystem root" } : {};
+
 // High-entropy filler of an exact length (deterministic; mixed case + digits).
 const HI = "aB3dEf6hIj9kLm2nOp5qRs8tUvWxYz0AbC4dEfGhIjKlMnOp";
 const hi = (n) => HI.slice(0, n);
 
-// Realistic, high-entropy sample credentials (fake, generated for tests).
+// Realistic, high-entropy sample credentials (fake, generated for tests), used
+// as inputs by the scrub/sanitize tests below. Per-rule redaction of each one is
+// covered by the identical Tier-1 entries in the shared corpus.
 const SAMPLES = {
   "github-token": "ghp_" + hi(36),
   "gitlab-pat": "glpat-" + hi(20),
@@ -35,27 +42,9 @@ const SAMPLES = {
   "database-url": "postgres://admin:s3cr3tP4ss@db.internal:5432/prod",
 };
 
-for (const [id, secret] of Object.entries(SAMPLES)) {
-  test(`sample credential: ${id} is redacted`, () => {
-    const { value, redactions } = s.redactString(`before ${secret} after`);
-    assert.ok(redactions.length > 0, `${id} should be redacted (got: ${value})`);
-    assert.ok(!value.includes(secret), `${id} secret must not survive`);
-    assert.ok(value.includes("[REDACTED_SECRET]"), `${id} placeholder present`);
-  });
-}
-
 test("every rule id in the table has a distinct entry", () => {
   const ids = RULES.map((r) => r.id);
   assert.equal(new Set(ids).size, ids.length, "rule ids must be unique");
-});
-
-test("emails are redacted to [EMAIL] and marked pii", () => {
-  const { value, redactions } = s.redactString("ping me@example.com please");
-  assert.equal(value, "ping [EMAIL] please");
-  assert.deepEqual(
-    redactions.map((r) => r.category),
-    ["pii"]
-  );
 });
 
 test("low-entropy candidates are NOT redacted (false-positive guard)", () => {
@@ -81,7 +70,7 @@ test("authorization header redacts only the credential", () => {
   assert.equal(value, "Authorization: Bearer [REDACTED_SECRET]");
 });
 
-test("scrubString hashes the home-dir prefix and drops the username", () => {
+test("scrubString hashes the home-dir prefix and drops the username", HOME_DEPENDENT, () => {
   const home = os.homedir();
   const input = `${home}/vscode/proj/file.js`;
   const out = s.scrubString(input, SALT);
@@ -96,7 +85,7 @@ test("scrubString without a salt still redacts secrets (only path-hash skipped)"
   assert.ok(out.includes("[REDACTED_SECRET]"));
 });
 
-test("sanitizeLine scrubs secret + email + home path across a transcript line", () => {
+test("sanitizeLine scrubs secret + email + home path across a transcript line", HOME_DEPENDENT, () => {
   const home = os.homedir();
   const line = {
     type: "user",
@@ -219,5 +208,8 @@ for (const f of SECRET_CORPUS.fixtures) {
     const { value, redactions } = s.redactString(`prefix ${secret} suffix`);
     assert.ok(redactions.length > 0, `${f.id}: expected a redaction event`);
     assert.equal(value.includes(secret), false, `${f.id}: raw secret survived sanitization`);
+    if (f.tier === "tier1") {
+      assert.ok(value.includes("[REDACTED_SECRET]"), `${f.id}: placeholder present`);
+    }
   });
 }

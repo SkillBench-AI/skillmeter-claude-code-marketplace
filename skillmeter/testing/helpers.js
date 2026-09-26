@@ -88,6 +88,22 @@ function setTestEnv(name, value) {
   });
 }
 
+/**
+ * Child-process env with a fresh HOME, no global git config and a private
+ * XDG_CONFIG_HOME, so a spawned script cannot read the developer's real
+ * ~/.claude.json, ~/.gitconfig insteadOf rules or ~/.ssh/config.
+ */
+function isolatedEnv(overrides = {}) {
+  const home = makeTempDir("skillmeter-home-");
+  return {
+    ...process.env,
+    HOME: home,
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    XDG_CONFIG_HOME: path.join(home, ".config"),
+    ...overrides,
+  };
+}
+
 function runNode(script, args = [], options = {}) {
   return spawnSync(process.execPath, [script, ...args], {
     encoding: "utf8",
@@ -107,5 +123,6 @@ module.exports = {
   writeTelemetryPolicy,
   makeJwt,
   setTestEnv,
+  isolatedEnv,
   runNode,
 };

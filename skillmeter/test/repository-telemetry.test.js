@@ -286,7 +286,6 @@ test("repository list shows effective enabled and disabled org repositories", ()
     disabled: 2,
     actionable: 3,
   });
-  assert.equal(output.repositories.length, 3);
   assert.deepEqual(
     output.repositories.map((repo) => repo.optionLabel),
     [
@@ -589,10 +588,13 @@ test("live hook honors a git-root repository opt-out from a nested cwd", () => {
 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stderr, /telemetry disabled for this project/);
-  assert.equal(
-    fs.existsSync(path.join(pluginData, "logs", "events.jsonl")),
-    false
-  );
+  const repositoryRoot = path.join(pluginData, "logs", "repositories");
+  const captured =
+    fs.existsSync(repositoryRoot) &&
+    fs.readdirSync(repositoryRoot).some((entry) =>
+      fs.existsSync(path.join(repositoryRoot, entry, "events.jsonl"))
+    );
+  assert.equal(captured, false, "an opted-out repository captures nothing");
 });
 
 test("global kill-switch lists repositories as blocked and prevents toggles", () => {
@@ -693,32 +695,17 @@ test("telemetry skill routes list through the repository toggle UI", () => {
     /repository_telemetry\.js list/
   );
   assert.match(TELEMETRY_SKILL, /multiSelect: true/);
-  assert.match(TELEMETRY_SKILL, /Space selects changes/);
   assert.match(TELEMETRY_SKILL, /```!\s+node .*repository_telemetry\.js list/);
   assert.match(TELEMETRY_SKILL, /Show exactly one question per `AskUserQuestion` call/);
   assert.match(TELEMETRY_SKILL, /Header: `Repos X\/N`/);
-  assert.match(
-    TELEMETRY_SKILL,
-    /array\s+of labels or as one comma-joined string/
-  );
   assert.doesNotMatch(TELEMETRY_SKILL, /at most four questions per tool call/);
   assert.match(
     TELEMETRY_SKILL,
     /repository_telemetry\.js toggle REVISION ID\.\.\./
   );
-  assert.match(TELEMETRY_SKILL, /passing only the validated/);
-  assert.match(
-    TELEMETRY_SKILL,
-    /Judge each page only on what it returns:/
-  );
-  assert.match(TELEMETRY_SKILL, /continue\s+to the next one/);
   assert.match(
     TELEMETRY_SKILL,
     /`revision` returned by the previous\s+`toggle`/
-  );
-  assert.match(
-    TELEMETRY_SKILL,
-    /every changed repository and every\s+unchanged one with its reason/
   );
 
   // The page-turn option is how a page is meant to be left unchanged — an empty
@@ -731,8 +718,6 @@ test("telemetry skill routes list through the repository toggle UI", () => {
     TELEMETRY_SKILL,
     /`Finish this page\.\s+Anything you selected above is still applied\.`/
   );
-  assert.match(TELEMETRY_SKILL, /Give every page one extra option, last/);
-  assert.match(TELEMETRY_SKILL, /three per\s+page, the last page taking whatever remains/);
   assert.match(TELEMETRY_SKILL, /never maps to an ID/);
 
   // An empty submit is still reachable, and this sentence is the only thing

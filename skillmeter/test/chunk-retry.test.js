@@ -6,6 +6,7 @@
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
+const path = require("path");
 
 require("../testing/bootstrap");
 
@@ -67,7 +68,7 @@ test("isChunkEligible: a failed chunk waits out its backoff window", () => {
   assert.equal(isChunkEligible(meta, 1_000 + RETRY_BASE_MS), true);
 });
 
-test("isChunkEligible: a clock that jumped backwards does not strand a chunk", () => {
+test("isChunkEligible: a future nextAttemptAt blocks, a non-numeric one counts as eligible", () => {
   const meta = { nextAttemptAt: Number.MAX_SAFE_INTEGER };
   assert.equal(isChunkEligible(meta, 0), false);
   assert.equal(isChunkEligible({ nextAttemptAt: "soon" }, 0), true);
@@ -102,14 +103,12 @@ test("a chunk rejected the same way every time is given up on, not retried forev
 
 // ---- quarantinePathFor -----------------------------------------------------
 test("quarantinePathFor: sets a chunk aside where the drain no longer lists it", () => {
-  assert.equal(
-    quarantinePathFor("/q/chunks/1-2.jsonl"),
-    "/q/chunks/1-2.jsonl.quarantined"
-  );
-  assert.equal(
-    quarantinePathFor("/q/chunks/1-2.meta.json"),
-    "/q/chunks/1-2.meta.json.quarantined"
-  );
+  // Set aside next to the original, keeping its name as a prefix.
+  for (const p of ["/q/chunks/1-2.jsonl", "/q/chunks/1-2.meta.json"]) {
+    const q = quarantinePathFor(p);
+    assert.equal(path.dirname(q), path.dirname(p));
+    assert.ok(q.startsWith(p) && q !== p);
+  }
   // The drain lists bodies by a .jsonl suffix and metas by .meta.json; a
   // quarantined pair matches neither, so it is never picked up again.
   assert.equal(quarantinePathFor("/q/chunks/1-2.jsonl").endsWith(".jsonl"), false);

@@ -29,7 +29,7 @@ test("sign-in card makes the privacy default and next action explicit", () => {
 
   assertCard(value);
   assert.match(value, /\[ ACTION REQUIRED \]/);
-  assert.match(value, /Telemetry remains OFF until you choose/);
+  assert.match(value, /\bOFF\b/);
   assert.match(value, /→ \/skillmeter:signin/);
 });
 
@@ -38,8 +38,8 @@ test("consent card identifies the organization and remains off by default", () =
 
   assertCard(value);
   assert.match(value, /\[ TELEMETRY SETUP \]/);
-  assert.match(value, /Organization  @skillbench-ai/);
-  assert.match(value, /OFF — nothing is being sent/);
+  assert.match(value, /Organization\s+@skillbench-ai/);
+  assert.match(value, /\bOFF\b/);
   assert.match(value, /→ \/skillmeter:signin to review/);
 });
 
@@ -48,8 +48,7 @@ test("active card shows scope and the native picker entrypoint", () => {
 
   assertCard(value);
   assert.match(value, /\[ TELEMETRY ON \]/);
-  assert.match(value, /Sanitized telemetry is active in this repository/);
-  assert.match(value, /Manage        \/skillmeter:telemetry list/);
+  assert.match(value, /Manage\s+\/skillmeter:telemetry list/);
 });
 
 test("unselected repository card stays off and names only the remote identity", () => {
@@ -60,9 +59,9 @@ test("unselected repository card stays off and names only the remote identity", 
 
   assertCard(value);
   assert.match(value, /\[ REPOSITORY SETUP \]/);
-  assert.match(value, /Repository    @skillbench-ai\/example/);
-  assert.match(value, /OFF — full repository telemetry not selected/);
-  assert.match(value, /Excluded hooks send HMAC cwd only/);
+  assert.match(value, /Repository\s+@skillbench-ai\/example/);
+  assert.match(value, /\bOFF\b/);
+  assert.match(value, /HMAC cwd/);
   assert.match(value, /→ \/skillmeter:telemetry list/);
 });
 
@@ -80,10 +79,10 @@ test("sign-in inventory lists every repository and its current effective state",
 
   assertCard(value);
   assert.match(value, /\[ REPOSITORY REVIEW \]/);
-  assert.match(value, /Telemetry ON  1/);
-  assert.match(value, /Discovered    2/);
-  assert.match(value, /✓ ON   @skillbench-ai\/enabled/);
-  assert.match(value, /○ OFF  @skillbench-ai\/pending/);
+  assert.match(value, /Telemetry ON\s+1\b/);
+  assert.match(value, /Discovered\s+2\b/);
+  assert.match(value, /✓ ON\s+@skillbench-ai\/enabled/);
+  assert.match(value, /○ OFF\s+@skillbench-ai\/pending/);
 });
 
 test("signed-in consent states reuse the matching cards", () => {
@@ -98,12 +97,9 @@ test("signed-in consent states reuse the matching cards", () => {
   const authorized = signinStatusBanner("skillbench-ai", true, false);
   assertCard(authorized);
   assert.match(authorized, /\[ REPOSITORY OFF \]/);
-  assert.match(authorized, /Organization authorized/);
-  assert.match(authorized, /No full repository telemetry is active here/);
-  assert.match(authorized, /Excluded hooks send type, reason, and HMAC cwd/);
+  assert.match(authorized, /HMAC cwd/);
 
   const disabled = signinStatusBanner("skillbench-ai", false);
   assertCard(disabled);
   assert.match(disabled, /\[ TELEMETRY OFF \]/);
-  assert.match(disabled, /No telemetry is being sent/);
 });

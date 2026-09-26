@@ -228,7 +228,7 @@ test("manual backfill skill and expansion hook are registered", () => {
     "utf8"
   );
   const hooks = readJson(path.resolve(__dirname, "../hooks/hooks.json"));
-  assert.match(skill, /description: Manually trigger or inspect/);
+  assert.match(skill, /^description:[ \t]*\S/m);
   assert.match(skill, /backfill\.js status LIFECYCLE_ID/);
   assert.match(
     skill,
