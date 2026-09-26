@@ -332,7 +332,7 @@ while the token was expired. It does not create a sign-in, bypass disabled
 telemetry, change token lifetime, or rearm terminal 401/402/410 outcomes.
 
 Implementation: `scripts/lib/hook-license-recovery.js`, `scripts/stop.js` and
-`scripts/drain_once.js`. Run `node --test skillmeter/test/expiry-recovery.test.js`
+`scripts/drain_once.js`. Run `node --test test/expiry-recovery.test.js`
 from the repository root. The suite covers empty-queue recovery, consent and
 terminal boundaries, and a real detached child that persists a synthetic refresh
 after Stop exits. Its clock and network are substituted; it does not use live

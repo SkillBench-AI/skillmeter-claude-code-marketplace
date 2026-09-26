@@ -2,7 +2,7 @@
 
 // Regression coverage for the shared leaf helpers introduced by the E-series
 // dedup (lib/io.js) and the parametrized jwt expiry check (lib/jwt.js).
-// Run: node --test skillmeter/test/lib.test.js
+// Run: node --test test/lib.test.js
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
@@ -18,12 +18,12 @@ const {
 
 setTestEnv("SKILLMETER_BACKEND_URL", undefined);
 
-const io = require("../scripts/lib/io");
+const io = require("../skillmeter/scripts/lib/io");
 const {
   isJwtExpired,
   getEndpointFromTokenAllowExpired,
   getLicenseAudiences,
-} = require("../scripts/lib/jwt");
+} = require("../skillmeter/scripts/lib/jwt");
 
 // --- io.safeReadJson -------------------------------------------------------
 
@@ -134,8 +134,8 @@ test("getLicenseAudiences returns a stable sorted unique tenant identity", () =>
 // --- hook dispatch registry ↔ hooks.json contract --------------------------
 
 test("every command hook uses exec form with a bundled script", () => {
-  const hooks = require("../hooks/hooks.json").hooks;
-  const pluginRoot = path.resolve(__dirname, "..");
+  const hooks = require("../skillmeter/hooks/hooks.json").hooks;
+  const pluginRoot = path.resolve(__dirname, "..", "skillmeter");
   let commandHookCount = 0;
 
   for (const [event, entries] of Object.entries(hooks)) {
@@ -169,8 +169,8 @@ test("every command hook uses exec form with a bundled script", () => {
 });
 
 test("every hook.js-dispatched event has a matching registry mapper", () => {
-  const registry = require("../scripts/lib/hook-registry");
-  const hooks = require("../hooks/hooks.json").hooks;
+  const registry = require("../skillmeter/scripts/lib/hook-registry");
+  const hooks = require("../skillmeter/hooks/hooks.json").hooks;
 
   const dispatched = [];
   for (const [event, entries] of Object.entries(hooks)) {
@@ -199,7 +199,7 @@ test("every hook.js-dispatched event has a matching registry mapper", () => {
 });
 
 test("registry mappers return an object and can use ctx", () => {
-  const registry = require("../scripts/lib/hook-registry");
+  const registry = require("../skillmeter/scripts/lib/hook-registry");
   const ctx = { getTranscriptId: (p) => (p ? require("path").basename(p) : "") };
   assert.equal(
     registry.SubagentStop({ agent_transcript_path: "/x/y-uuid.jsonl" }, ctx).agent_transcript_path,
@@ -208,8 +208,8 @@ test("registry mappers return an object and can use ctx", () => {
 });
 
 test("WorktreeCreate is not registered as an observation hook", () => {
-  const registry = require("../scripts/lib/hook-registry");
-  const hooks = require("../hooks/hooks.json").hooks;
+  const registry = require("../skillmeter/scripts/lib/hook-registry");
+  const hooks = require("../skillmeter/hooks/hooks.json").hooks;
 
   assert.equal(hooks.WorktreeCreate, undefined);
   assert.equal(registry.WorktreeCreate, undefined);
@@ -218,8 +218,8 @@ test("WorktreeCreate is not registered as an observation hook", () => {
 test("events that can block the session or stream content are not registered", () => {
   // PreModelSwitch runs synchronously and a timed-out hook blocks the switch;
   // MessageDisplay fires per streamed text delta and carries message content.
-  const registry = require("../scripts/lib/hook-registry");
-  const hooks = require("../hooks/hooks.json").hooks;
+  const registry = require("../skillmeter/scripts/lib/hook-registry");
+  const hooks = require("../skillmeter/hooks/hooks.json").hooks;
 
   for (const event of ["PreModelSwitch", "MessageDisplay"]) {
     assert.equal(hooks[event], undefined, `${event} must not be in hooks.json`);
@@ -228,7 +228,7 @@ test("events that can block the session or stream content are not registered", (
 });
 
 test("registry mappers match current official hook payload fixtures", () => {
-  const registry = require("../scripts/lib/hook-registry");
+  const registry = require("../skillmeter/scripts/lib/hook-registry");
   const { hookPayloadFixtures } = require("../testing/hook-payloads");
 
   for (const { event, input, expected } of hookPayloadFixtures) {
@@ -238,7 +238,7 @@ test("registry mappers match current official hook payload fixtures", () => {
 });
 
 test("registry mappers do not emit legacy hook field names", () => {
-  const registry = require("../scripts/lib/hook-registry");
+  const registry = require("../skillmeter/scripts/lib/hook-registry");
   const { hookPayloadFixtures } = require("../testing/hook-payloads");
   const legacyFields = new Set([
     "setup_type",

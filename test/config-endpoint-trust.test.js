@@ -11,8 +11,8 @@ const {
   getTokenUrl,
   getOAuthClientId,
   getBackendUrlOverride,
-} = require("../scripts/lib/config");
-const { getEndpointFromTokenAllowExpired } = require("../scripts/lib/jwt");
+} = require("../skillmeter/scripts/lib/config");
+const { getEndpointFromTokenAllowExpired } = require("../skillmeter/scripts/lib/jwt");
 
 const PROD_ACTIVATE_HOST = "api.skillbench.ai";
 const PROD_BROKER_HOST = "id.skillbench.ai";

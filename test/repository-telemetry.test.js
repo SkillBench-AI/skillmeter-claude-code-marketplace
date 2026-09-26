@@ -24,16 +24,16 @@ const {
   repositoryNameFromRemote,
   safeDisplayComponent,
   applyRepositoryToggles,
-} = require("../scripts/lib/repository-telemetry");
+} = require("../skillmeter/scripts/lib/repository-telemetry");
 
 const REPOSITORY_TELEMETRY_SCRIPT = path.resolve(
   __dirname,
-  "../scripts/repository_telemetry.js"
+  "../skillmeter/scripts/repository_telemetry.js"
 );
-const TELEMETRY_SCRIPT = path.resolve(__dirname, "../scripts/telemetry.js");
-const HOOK_SCRIPT = path.resolve(__dirname, "../scripts/hook.js");
+const TELEMETRY_SCRIPT = path.resolve(__dirname, "../skillmeter/scripts/telemetry.js");
+const HOOK_SCRIPT = path.resolve(__dirname, "../skillmeter/scripts/hook.js");
 const TELEMETRY_SKILL = fs.readFileSync(
-  path.resolve(__dirname, "../skills/telemetry/SKILL.md"),
+  path.resolve(__dirname, "../skillmeter/skills/telemetry/SKILL.md"),
   "utf8"
 );
 
@@ -398,7 +398,7 @@ test("onboarding atomically authorizes the org and applies one choice to the dis
   const fixture = testEnvironment();
   const consentScript = path.resolve(
     __dirname,
-    "../scripts/org_telemetry_consent.js"
+    "../skillmeter/scripts/org_telemetry_consent.js"
   );
   assert.equal(
     runNode(consentScript, ["set", "skillbench-ai", "disabled"], {
@@ -487,7 +487,7 @@ test("onboarding rejects a stale displayed list without changing org consent", (
   );
   const consentScript = path.resolve(
     __dirname,
-    "../scripts/org_telemetry_consent.js"
+    "../skillmeter/scripts/org_telemetry_consent.js"
   );
   assert.equal(
     runNode(consentScript, ["set", "skillbench-ai", "disabled"], {

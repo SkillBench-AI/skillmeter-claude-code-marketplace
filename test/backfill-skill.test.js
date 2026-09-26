@@ -16,7 +16,7 @@ const {
 
 const BACKFILL_SCRIPT = path.resolve(
   __dirname,
-  "../scripts/backfill.js"
+  "../skillmeter/scripts/backfill.js"
 );
 const LIFECYCLE_ID = "66666666-6666-4666-8666-666666666666";
 const WRONG_LIFECYCLE_ID = "77777777-7777-4777-8777-777777777777";
@@ -129,7 +129,7 @@ test("manual backfill expansion exposes only the opaque lifecycle scope", () => 
   const result = runNode(
     path.resolve(
       __dirname,
-      "../scripts/user_prompt_expansion_backfill.js"
+      "../skillmeter/scripts/user_prompt_expansion_backfill.js"
     ),
     [],
     {
@@ -224,10 +224,10 @@ test("status reports backend-confirmed transcript uploads by UUID", () => {
 
 test("manual backfill skill and expansion hook are registered", () => {
   const skill = fs.readFileSync(
-    path.resolve(__dirname, "../skills/backfill/SKILL.md"),
+    path.resolve(__dirname, "../skillmeter/skills/backfill/SKILL.md"),
     "utf8"
   );
-  const hooks = readJson(path.resolve(__dirname, "../hooks/hooks.json"));
+  const hooks = readJson(path.resolve(__dirname, "../skillmeter/hooks/hooks.json"));
   assert.match(skill, /^description:[ \t]*\S/m);
   assert.match(skill, /backfill\.js"? status LIFECYCLE_ID/);
   assert.match(

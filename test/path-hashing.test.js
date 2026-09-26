@@ -4,7 +4,7 @@
 // structure, extension and shared vocabulary survive; every other segment is
 // its own HMAC; cwd-type and generic `path` keys stay whole-value hashes;
 // counts.path tallies every path HMAC.
-// Run: node --test skillmeter/test/path-hashing.test.js
+// Run: node --test test/path-hashing.test.js
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
@@ -12,9 +12,9 @@ const os = require("os");
 const fs = require("fs");
 const path = require("path");
 
-const s = require("../scripts/lib/sanitize");
+const s = require("../skillmeter/scripts/lib/sanitize");
 const VOCAB = JSON.parse(
-  fs.readFileSync(path.join(__dirname, "..", "scripts", "lib", "path-vocabulary.json"), "utf8")
+  fs.readFileSync(path.join(__dirname, "..", "skillmeter", "scripts", "lib", "path-vocabulary.json"), "utf8")
 );
 
 const SALT = "deadbeefcafe";

@@ -1,4 +1,4 @@
-// Run: node --test skillmeter/test/transcript-delta.test.js
+// Run: node --test test/transcript-delta.test.js
 //
 // Pure-core coverage for the uuid-cursor delta upload, plus a few real-tmpdir
 // round-trips for the transfer.js chunk/cursor persistence. Follows the repo's
@@ -18,13 +18,13 @@ setTestEnv("CLAUDE_PLUGIN_DATA", DATA_DIR);
 setTestEnv("SKILLMETER_STATE_DIR", STATE_DIR);
 setTestEnv("SKILLMETER_TRANSCRIPT_CHUNK_MAX_BYTES", undefined);
 
-const d = require("../scripts/lib/transcript-delta");
-const transfer = require("../scripts/lib/transfer");
+const d = require("../skillmeter/scripts/lib/transcript-delta");
+const transfer = require("../skillmeter/scripts/lib/transfer");
 const {
   isChunkEligible,
   quarantinePathFor,
   recordUploadFailure,
-} = require("../scripts/lib/chunk-retry");
+} = require("../skillmeter/scripts/lib/chunk-retry");
 
 const SALT = "deadbeefcafe";
 const TEST_REPOSITORY = {

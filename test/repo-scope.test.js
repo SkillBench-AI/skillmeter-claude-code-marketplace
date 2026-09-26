@@ -3,7 +3,7 @@
 // T1 parsing-hardening coverage for lib/repo-scope.js: robust remote → org
 // extraction across every common URL form, plus git `insteadOf` rewrites and
 // SSH host-alias resolution.
-// Run: node --test skillmeter/test/repo-scope.test.js
+// Run: node --test test/repo-scope.test.js
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
@@ -11,7 +11,7 @@ const fs = require("fs");
 const path = require("path");
 
 const { makeTempDir, writeFile } = require("../testing/helpers");
-const scope = require("../scripts/lib/repo-scope");
+const scope = require("../skillmeter/scripts/lib/repo-scope");
 const {
   extractGitHubOrgFromRemote,
   extractGitHubRepositoryFromRemote,

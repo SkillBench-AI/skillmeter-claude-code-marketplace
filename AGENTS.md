@@ -34,7 +34,9 @@ concise English for readers who do not know the team's internal history.
   `CLAUDE_PLUGIN_DATA` explicitly. Skill commands must start with `node` to match
   `Bash(node *)`; they derive the data root from the resolved installation path.
   Do not assume skill/monitor subprocesses inherit `CLAUDE_PLUGIN_ROOT`.
-- Use `skillmeter/testing/helpers.js` for synthetic state. It loads bootstrap
+- Tests live in `test/` and fixtures in `testing/` at the repository root,
+  outside the shipped `skillmeter/` directory, so they never reach users.
+- Use `testing/helpers.js` for synthetic state. It loads bootstrap
   before runtime modules and forces a temporary plugin-data root. Tests that
   do not use helpers must load bootstrap themselves. Never test against real
   credential stores or plugin data.

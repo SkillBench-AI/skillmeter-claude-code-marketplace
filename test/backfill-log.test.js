@@ -11,7 +11,7 @@ setTestEnv("CLAUDE_PLUGIN_DATA", makeTempDir("skm-backfill-log-"));
 const {
   BACKFILL_LOG_FILE,
   appendBackfillLog,
-} = require("../scripts/lib/backfill-log");
+} = require("../skillmeter/scripts/lib/backfill-log");
 
 test("structured backfill log is private, append-only NDJSON", () => {
   const record = appendBackfillLog("upload_failed", {

@@ -10,7 +10,7 @@ const {
   telemetryConsentRequiredBanner,
   telemetryRepositoryRequiredBanner,
   telemetryActiveBanner,
-} = require("../scripts/lib/banner");
+} = require("../skillmeter/scripts/lib/banner");
 
 function assertCard(value) {
   // The card opens with a newline so the renderer's "… says: " prefix cannot

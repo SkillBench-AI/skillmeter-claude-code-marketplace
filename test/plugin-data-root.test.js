@@ -13,7 +13,7 @@ const {
 const {
   derivePluginDataRoot,
   resolvePluginDataRoot,
-} = require("../scripts/lib/plugin-data-root");
+} = require("../skillmeter/scripts/lib/plugin-data-root");
 
 // Mirror the layout Claude Code creates:
 //   <config>/plugins/cache/<marketplace>/<plugin>/<version>
@@ -84,7 +84,7 @@ test("an unsubstituted placeholder is never treated as a path", () => {
 
 test("monitor commands pass the data dir through the supported substitution", () => {
   const monitors = JSON.parse(
-    fs.readFileSync(path.resolve(__dirname, "..", "monitors", "monitors.json"), "utf8")
+    fs.readFileSync(path.resolve(__dirname, "..", "skillmeter", "monitors", "monitors.json"), "utf8")
   );
   assert.ok(monitors.length > 0);
   for (const monitor of monitors) {
@@ -101,7 +101,7 @@ test("monitor commands pass the data dir through the supported substitution", ()
 // command would prompt. Skill processes therefore rely on the derivation, and
 // their commands must keep starting with `node`.
 test("skill commands stay shaped for the Bash(node *) grant", () => {
-  const skills = path.resolve(__dirname, "..", "skills");
+  const skills = path.resolve(__dirname, "..", "skillmeter", "skills");
   let checked = 0;
   for (const entry of fs.readdirSync(skills)) {
     const file = path.join(skills, entry, "SKILL.md");
@@ -131,7 +131,7 @@ test("skill commands stay shaped for the Bash(node *) grant", () => {
 // commands may be launched. Verify data-root derivation from the install layout.
 test("a monitor launched with no plugin env at all resolves its queue", () => {
   const { pluginRoot, expected } = makeHostLayout();
-  const source = path.resolve(__dirname, "..", "scripts");
+  const source = path.resolve(__dirname, "..", "skillmeter", "scripts");
   fs.cpSync(source, path.join(pluginRoot, "scripts"), { recursive: true });
   writeFile(
     path.join(pluginRoot, ".claude-plugin", "plugin.json"),

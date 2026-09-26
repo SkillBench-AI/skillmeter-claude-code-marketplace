@@ -15,10 +15,10 @@ const {
   writeJson,
 } = require("../testing/helpers");
 
-const HOOK = path.resolve(__dirname, "../scripts/hook.js");
+const HOOK = path.resolve(__dirname, "../skillmeter/scripts/hook.js");
 const ORG_CONSENT = path.resolve(
   __dirname,
-  "../scripts/org_telemetry_consent.js"
+  "../skillmeter/scripts/org_telemetry_consent.js"
 );
 const SALT = "0123456789abcdef0123456789abcdef";
 
@@ -87,7 +87,7 @@ function makeEnvironment({
 
 function runPrompt(env, cwd, overrides = {}) {
   return runNode(HOOK, ["UserPromptSubmit"], {
-    cwd: cwd || path.resolve(__dirname, "../.."),
+    cwd: cwd || path.resolve(__dirname, ".."),
     env,
     input: JSON.stringify({
       session_id: "exclusion-session",
@@ -242,7 +242,7 @@ test("organization OFF and sign-out delete exclusion audit payloads", () => {
   runPrompt(signout.env, external);
   assert.equal(organizationAuditFiles(signout.dataDir).length, 1);
   const result = runNode(
-    path.resolve(__dirname, "../scripts/signout.js"),
+    path.resolve(__dirname, "../skillmeter/scripts/signout.js"),
     [],
     { env: signout.env }
   );
@@ -265,7 +265,7 @@ test("global OFF pauses an existing audit queue and tenant mismatch deletes it",
     "require('./skillmeter/scripts/lib/organization-audit-queue')",
     ".purgeDisallowedOrganizationAuditQueues();",
   ].join("");
-  const cwd = path.resolve(__dirname, "../..");
+  const cwd = path.resolve(__dirname, "..");
   assert.equal(
     runNode("-e", [purgeProbe], { cwd, env: paused.env }).status,
     0
@@ -294,7 +294,7 @@ test("organization audit transfer uses the existing endpoint with tenant idempot
   const external = makeRepo("outside-org", "upload");
   const fixture = makeEnvironment();
   runPrompt(fixture.env, external);
-  const cwd = path.resolve(__dirname, "../..");
+  const cwd = path.resolve(__dirname, "..");
   const sealProbe = [
     "const t=require('./skillmeter/scripts/lib/transfer');",
     "t.sealOrganizationAuditEventLog();",
@@ -336,7 +336,7 @@ test("organization audit retries preserve the idempotency key", () => {
   const external = makeRepo("outside-org", "retry");
   const fixture = makeEnvironment();
   runPrompt(fixture.env, external);
-  const cwd = path.resolve(__dirname, "../..");
+  const cwd = path.resolve(__dirname, "..");
   const sealProbe = [
     "const t=require('./skillmeter/scripts/lib/transfer');",
     "t.sealOrganizationAuditEventLog();",
@@ -421,7 +421,7 @@ test("session cwd context detects cwd and repository transitions without raw pat
     "process.stdout.write(JSON.stringify({a,b,d,file:c.contextPath('s',salt)}));",
   ].join("");
   const result = runNode("-e", [probe], {
-    cwd: path.resolve(__dirname, "../.."),
+    cwd: path.resolve(__dirname, ".."),
     env: {
       ...process.env,
       CLAUDE_PLUGIN_DATA: dataDir,
@@ -452,7 +452,7 @@ test("SessionEnd removes cwd context and stale cleanup removes old state", () =>
   assert.equal(fs.readdirSync(sessions).length, 1);
   const pluginRoot = makeTempDir("skm-session-end-plugin-root-");
   const ended = runNode(
-    path.resolve(__dirname, "../scripts/session_end.js"),
+    path.resolve(__dirname, "../skillmeter/scripts/session_end.js"),
     [],
     {
       cwd: external,
@@ -484,7 +484,7 @@ test("SessionEnd removes cwd context and stale cleanup removes old state", () =>
     "process.stdout.write(JSON.stringify({deleted,exists:fs.existsSync(file),state:!!state}));",
   ].join("");
   const stale = runNode("-e", [staleProbe], {
-    cwd: path.resolve(__dirname, "../.."),
+    cwd: path.resolve(__dirname, ".."),
     env: {
       ...process.env,
       CLAUDE_PLUGIN_DATA: fixture.dataDir,

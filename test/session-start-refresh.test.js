@@ -14,7 +14,7 @@ const { spawn } = require("child_process");
 
 const { makeTempDir, writeJson, readJson, makeJwt } = require("../testing/helpers");
 
-const SCRIPT = path.resolve(__dirname, "../scripts/session_start.js");
+const SCRIPT = path.resolve(__dirname, "../skillmeter/scripts/session_start.js");
 const DEVICE_ID = "SESSION-START-REFRESH-DEVICE";
 
 function jwt(expiresInSec) {

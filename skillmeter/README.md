@@ -140,7 +140,8 @@ or privacy issues through [SECURITY.md](../SECURITY.md).
 ## Development
 
 Use CommonJS and run `node --test` from the repository root. Tests isolate plugin
-state through `testing/bootstrap.js` and `testing/helpers.js`. See
+state through the repository's `testing/bootstrap.js` and `testing/helpers.js`,
+which stay outside the shipped plugin directory. See
 [AGENTS.md](../AGENTS.md) for contribution conventions and the
 [ADRs](../docs/adr/README.md) for shared policy decisions.
 

@@ -2,7 +2,7 @@
 
 // License refresh status record: backoff math and the record transitions the
 // retry daemon, SessionStart, and the sign-in commands rely on (ADR 001, D2).
-// Run: node --test skillmeter/test/license-status.test.js
+// Run: node --test test/license-status.test.js
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
@@ -15,7 +15,7 @@ const stateDir = makeTempDir("skm-license-status-");
 setTestEnv("SKILLMETER_STATE_DIR", stateDir);
 setTestEnv("SKILLMETER_RETRY_DAEMON_INTERVAL_MS", "120000");
 
-const ls = require("../scripts/lib/license-status");
+const ls = require("../skillmeter/scripts/lib/license-status");
 
 const MIN = 60_000;
 const BASE = 2 * MIN;

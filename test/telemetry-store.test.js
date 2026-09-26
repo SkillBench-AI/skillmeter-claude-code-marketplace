@@ -31,9 +31,9 @@ writeJson(path.join(STATE_DIR, "credentials.json"), {
 });
 writeTelemetryPolicy(STATE_DIR, { orgs: { "skillbench-ai": true } });
 
-const store = require("../scripts/lib/telemetry-store");
-const transfer = require("../scripts/lib/transfer");
-const { REPOSITORIES_LOG_DIR } = require("../scripts/lib/paths");
+const store = require("../skillmeter/scripts/lib/telemetry-store");
+const transfer = require("../skillmeter/scripts/lib/transfer");
+const { REPOSITORIES_LOG_DIR } = require("../skillmeter/scripts/lib/paths");
 
 // Drains send every queued chunk, not only the current test's, so a chunk left
 // by an earlier test would turn a "nothing was sent" assertion into an
