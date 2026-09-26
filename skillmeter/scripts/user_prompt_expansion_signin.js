@@ -79,7 +79,7 @@ async function signedInContext(cwd = process.cwd(), activeSessionId = "") {
     })),
     repositoryTelemetry,
     backfill: {
-      ...publicBackfillState(),
+      ...backfillStateForSignin(),
       activeSessionId:
         /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(
           activeSessionId
@@ -91,12 +91,22 @@ async function signedInContext(cwd = process.cwd(), activeSessionId = "") {
   return `SkillMeter sign-in state JSON:\n${JSON.stringify(state)}`;
 }
 
+// A backfill problem must never block sign-in: report it as unavailable and
+// the skill simply shows no History question.
+function backfillStateForSignin() {
+  try {
+    return publicBackfillState();
+  } catch {
+    return { eligible: false, status: "unavailable", reason: "state_unreadable" };
+  }
+}
+
 async function main() {
   const input = await readStdin();
   if (!isSigninCommand(input)) return;
 
   // Existing and new users receive the same one-time backfill lifecycle.
-  initializeBackfillLifecycle();
+  try { initializeBackfillLifecycle(); } catch {}
 
   // Explicit sign-in clears the signed-out sentinel and resets refresh status.
   credstore.markEngaged();

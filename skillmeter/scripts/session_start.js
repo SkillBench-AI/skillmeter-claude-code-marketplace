@@ -6,7 +6,7 @@ const {
   cleanupStaleFiles,
   initializeTranscriptCursor,
 } = require("./lib/transfer");
-const { refreshLicense } = require("./lib/license-activation");
+const { ensureFreshLicense } = require("./lib/license-activation");
 const { clearTerminal } = require("./lib/license-status");
 const { detectHarness } = require("./harness.js");
 const { PLUGIN_ROOT, PLUGIN_VERSION } = require("./lib/paths");
@@ -35,8 +35,9 @@ const telemetryStore = require("./lib/telemetry-store");
 // reporting startup state. Keep stdout for the single onGate JSON response.
 async function prepareSession() {
   // Materialize the one-time historical-backfill offer before sign-in state is
-  // evaluated. Existing and new users receive the same lifecycle.
-  initializeBackfillLifecycle();
+  // evaluated. Existing and new users receive the same lifecycle. A backfill
+  // problem must not skip the license refresh below.
+  try { initializeBackfillLifecycle(); } catch {}
   const deviceId = credstore.getDeviceId();
   credstore.ensureSigninResultFile();
   ensureBackfillResultFile();
@@ -50,7 +51,11 @@ async function prepareSession() {
   // does not inherit a stale terminal state.
   clearTerminal({ source: "session_start" });
   if (telemetryStore.getGlobalDisabled()) return;
-  try { await refreshLicense(deviceId, { source: "session_start" }); } catch {}
+  // Through the refresh lock, like every other caller: sessions started
+  // together, or a session starting while the daemon or a drain is mid-refresh,
+  // must not POST /refresh with the same token at once. clearTerminal above
+  // already dropped the backoff clock, so the fresh attempt is not blocked.
+  try { await ensureFreshLicense(deviceId, { source: "session_start" }); } catch {}
 }
 
 function runSessionStartHook() {

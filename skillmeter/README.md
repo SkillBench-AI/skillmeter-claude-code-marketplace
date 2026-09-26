@@ -135,14 +135,14 @@ Backfill diagnostics omit transcript text, local paths, JWTs, device IDs and
 backend endpoints, but include repository/session identifiers. Review them
 before sharing; never post real telemetry or credentials in a public issue.
 
-Project `.claude/settings.local.json` contains development overrides, not
-telemetry consent. For problems, see [SUPPORT.md](../SUPPORT.md). Report security
+For problems, see [SUPPORT.md](../SUPPORT.md). Report security
 or privacy issues through [SECURITY.md](../SECURITY.md).
 
 ## Development
 
 Use CommonJS and run `node --test` from the repository root. Tests isolate plugin
-state through `testing/bootstrap.js` and `testing/helpers.js`. See
+state through the repository's `testing/bootstrap.js` and `testing/helpers.js`,
+which stay outside the shipped plugin directory. See
 [AGENTS.md](../AGENTS.md) for contribution conventions and the
 [ADRs](../docs/adr/README.md) for shared policy decisions.
 
@@ -158,7 +158,12 @@ state through `testing/bootstrap.js` and `testing/helpers.js`. See
 | `SKILLMETER_TIMEOUT` | Event upload timeout in seconds; default 10 |
 | `SKILLMETER_RETRY_DAEMON_INTERVAL_MS` | Monitor sweep interval in milliseconds; default 120000 |
 
-Configuration precedence is environment, project string setting, development
-bundle, then production default. Project keys include `activate_url`,
-`broker_url` and `oauth_client_id`. Normal tenant routing comes from the license's
-`aud` claim and needs no endpoint override.
+Configuration precedence is environment, development bundle, then production
+default. Project files such as `.claude/settings.local.json` cannot override an
+endpoint or the OAuth client, because any repository could ship one. The
+activation, broker and backend URLs must use HTTPS (loopback `http` is allowed
+for a local backend). A rejected activation or broker override falls back to
+production, and a rejected backend override falls back to the license's `aud`,
+each with a stderr note.
+Normal tenant routing comes from the license's `aud` claim and needs no endpoint
+override.

@@ -1,0 +1,186 @@
+"use strict";
+
+// Segment-wise path hashing (policy 3.1.0, ADR 002 amendment decision 6):
+// structure, extension and shared vocabulary survive; every other segment is
+// its own HMAC; cwd-type and generic `path` keys stay whole-value hashes;
+// counts.path tallies every path HMAC.
+// Run: node --test test/path-hashing.test.js
+
+const { test } = require("node:test");
+const assert = require("node:assert/strict");
+const os = require("os");
+const fs = require("fs");
+const path = require("path");
+
+const s = require("../skillmeter/scripts/lib/sanitize");
+const VOCAB = JSON.parse(
+  fs.readFileSync(path.join(__dirname, "..", "skillmeter", "scripts", "lib", "path-vocabulary.json"), "utf8")
+);
+
+const SALT = "deadbeefcafe";
+const HOME = os.homedir();
+const HEX = "[0-9a-f]{12}";
+const homeHash = s.hashHmac(HOME, SALT);
+// When the home directory is the filesystem root there is no username to hide
+// and no prefix to hash, so the home-dependent expectations do not apply.
+const HOME_DEPENDENT = HOME === "/" || HOME === "" ? { skip: "home directory is the filesystem root" } : {};
+
+// --- hashPathSegments -------------------------------------------------------
+
+test("vocabulary, version-like and structural segments stay in clear", () => {
+  assert.equal(s.hashPathSegments("src/index.ts", SALT), "src/index.ts");
+  assert.equal(s.hashPathSegments("api/v2/1.2.0/README.md", SALT), "api/v2/1.2.0/README.md");
+  assert.match(s.hashPathSegments("../src/thing.ts", SALT), new RegExp(`^\\.\\./src/${HEX}\\.ts$`));
+  assert.match(s.hashPathSegments("./thing", SALT), new RegExp(`^\\./${HEX}$`));
+  assert.equal(s.hashPathSegments("packages/api/package.json", SALT), "packages/api/package.json");
+});
+
+test("compound extensions and dotfiles", () => {
+  assert.match(s.hashPathSegments("src/App.test.tsx", SALT), new RegExp(`^src/${HEX}\\.test\\.tsx$`));
+  assert.match(s.hashPathSegments("types/foo.d.ts", SALT), new RegExp(`^types/${HEX}\\.d\\.ts$`));
+  assert.equal(s.hashPathSegments("proj/.env", SALT).endsWith("/.env"), true, "well-known dotfile kept");
+  assert.match(s.hashPathSegments("proj/.secretrc", SALT), new RegExp(`^${HEX}/${HEX}$`), "unknown dotfile hashed whole, no extension split");
+  assert.match(s.hashPathSegments("proj/Makefile.local", SALT), new RegExp(`^${HEX}/${HEX}\\.local$`));
+});
+
+test("absolute paths outside home and another user's home", () => {
+  assert.match(s.hashPathSegments("/opt/acme/app.py", SALT), new RegExp(`^/opt/${HEX}/app\\.py$`));
+  // `journal.md` is not a well-known file name (`todo.md` would be kept as vocabulary).
+  const other = s.hashPathSegments("/Users/otheruser/notes/journal.md", SALT);
+  assert.match(other, new RegExp(`^/Users/${HEX}/${HEX}/${HEX}\\.md$`));
+  assert.equal(other.includes("otheruser"), false);
+});
+
+test("Windows paths: drive letter kept, separators normalised, names hashed", () => {
+  const out = s.hashPathSegments("C:\\Users\\jane\\code\\Acme\\report.xlsx", SALT);
+  assert.match(out, new RegExp(`^C:/Users/${HEX}/code/${HEX}/${HEX}\\.xlsx$`));
+  assert.equal(out.includes("jane"), false);
+});
+
+test("the same segment hashes to the same value wherever it appears (directory identity)", () => {
+  const a = s.hashPathSegments("/opt/acme/src/a.ts", SALT).split("/")[2];
+  const b = s.hashPathSegments("/var/acme/lib/b.ts", SALT).split("/")[2];
+  assert.equal(a, b);
+  assert.notEqual(a, s.hashPathSegments("/opt/other/src/a.ts", SALT).split("/")[2]);
+});
+
+test("no salt: fail closed to an empty value, as before", () => {
+  assert.equal(s.hashPathSegments("/Users/me/a.js", ""), "");
+});
+
+
+// --- through sanitizeEventData -----------------------------------------------
+
+test("segment keys are segment-hashed; cwd and generic path stay whole-value hashes", HOME_DEPENDENT, () => {
+  const { value } = s.sanitizeEventData(
+    {
+      cwd: `${HOME}/work/acme`,
+      tool_input: {
+        file_path: `${HOME}/work/acme/src/billing/invoice.ts`,
+        notebook_path: `${HOME}/work/acme/nb/analysis.ipynb`,
+        path: `${HOME}/work/acme/src`,
+        command: `cat ${HOME}/work/acme/src/billing/invoice.ts`,
+      },
+    },
+    SALT
+  );
+  const ti = value.tool_input;
+  assert.match(ti.file_path, new RegExp(`^${homeHash}/work/${HEX}/src/billing/${HEX}\\.ts$`));
+  assert.match(ti.notebook_path, new RegExp(`^${homeHash}/work/${HEX}/${HEX}/${HEX}\\.ipynb$`));
+  assert.match(ti.path, new RegExp(`^${HEX}$`), "generic path key is a whole-value hash");
+  assert.match(value.cwd, new RegExp(`^${HEX}$`), "cwd is a whole-value hash");
+  assert.equal(ti.command, `cat ${homeHash}/work/acme/src/billing/invoice.ts`, "free text: home prefix only, unchanged behaviour");
+  // The file name is gone from every path key; it survives only inside the
+  // command string, which is the accepted free-text asymmetry.
+  const withoutCommand = { ...ti, command: undefined };
+  assert.equal(JSON.stringify(withoutCommand).includes("invoice"), false);
+});
+
+test("counts.path tallies segment hashes, whole-value hashes and home-prefix replacements", HOME_DEPENDENT, () => {
+  const { meta, value } = s.sanitizeEventData(
+    {
+      cwd: `${HOME}/work/acme`, // 1 whole
+      tool_input: {
+        file_path: `${HOME}/work/acme/src/invoice.ts`, // home(1) + work? work is vocabulary → 0; acme(1); src → 0; invoice(1) = 3
+        command: `cd ${HOME}/work && cat ${HOME}/notes.txt`, // 2 home-prefix replacements
+      },
+    },
+    SALT
+  );
+  assert.equal(meta.counts.path, 6, JSON.stringify({ counts: meta.counts, value }));
+  assert.equal(meta.secrets, 0);
+  assert.equal(meta.pii, 0);
+  assert.deepEqual(meta.ids, [], "path hashing is not a detector id");
+  assert.equal(meta.policyVersion, s.POLICY_VERSION);
+});
+
+// --- vocabulary file sanity ---------------------------------------------------
+
+test("vocabulary: lowercase, unique, no whitespace; patterns behave", () => {
+  for (const list of [VOCAB.directories, VOCAB.files, VOCAB.compound_extensions]) {
+    for (const t of list) {
+      assert.equal(t, t.toLowerCase(), `${t} must be lowercase`);
+      assert.equal(/\s/.test(t), false, `${t} must not contain whitespace`);
+    }
+  }
+  assert.equal(new Set(VOCAB.directories).size, VOCAB.directories.length, "directories unique");
+  assert.equal(new Set(VOCAB.files).size, VOCAB.files.length, "files unique");
+  for (const ce of VOCAB.compound_extensions) assert.ok(ce.startsWith("."), ce);
+  const version = new RegExp(VOCAB.version_pattern);
+  for (const ok of ["v1", "v12", "1.2.0", "1.2.3.4", "v2.1"]) assert.ok(version.test(ok), ok);
+  for (const no of ["2", "2026", "123456789", "4111111111111111", "2026-09-11", "v1beta", "1_2", "acme2"]) {
+    assert.equal(version.test(no), false, `bare or non-version numeric ${no} must be hashed`);
+  }
+  const structural = new RegExp(VOCAB.structural_pattern);
+  for (const ok of [".", "..", "~", "C:", "d:"]) assert.ok(structural.test(ok), ok);
+  assert.equal(structural.test("..."), false);
+});
+
+test("vocabulary never contains a person-like or customer-like token", () => {
+  // Guard against accidental additions: tokens must be short technical words.
+  for (const t of [...VOCAB.directories, ...VOCAB.files]) {
+    assert.ok(t.length <= 32, `${t} is suspiciously long`);
+    assert.equal(/@/.test(t), false, t);
+  }
+});
+
+// --- review follow-ups ------------------------------------------------------------
+
+test("bare numeric identifiers in paths are hashed, dotted or v-prefixed versions are kept", () => {
+  const card = s.hashPathSegments("/accounts/4111111111111111/file.txt", SALT);
+  assert.match(card, new RegExp(`^/accounts/${HEX}/${HEX}\\.txt$`));
+  assert.equal(card.includes("4111"), false);
+  const user = s.hashPathSegments("/users/123456789/data/file.json", SALT);
+  assert.match(user, new RegExp(`^/users/${HEX}/data/${HEX}\\.json$`));
+  assert.equal(s.hashPathSegments("api/v2/1.2.0/x", SALT).startsWith("api/v2/1.2.0/"), true);
+  assert.match(s.hashPathSegments("releases/2026/notes.txt", SALT), new RegExp(`^releases/${HEX}/${HEX}\\.txt$`));
+});
+
+test("UNC prefix and trailing separator are preserved; inner repeats collapse", () => {
+  const unc = s.hashPathSegments("\\\\fileserver\\share\\report.xlsx", SALT);
+  assert.match(unc, new RegExp(`^//${HEX}/${HEX}/${HEX}\\.xlsx$`));
+  assert.equal(unc.includes("fileserver"), false);
+  const dir = s.hashPathSegments("/opt/acme/src/", SALT);
+  assert.match(dir, new RegExp(`^/opt/${HEX}/src/$`), "trailing slash kept, last segment treated as a directory");
+  assert.match(s.hashPathSegments("/opt//acme///x.py", SALT), new RegExp(`^/opt/${HEX}/${HEX}\\.py$`));
+  assert.equal(s.hashPathSegments("/", SALT), "/");
+});
+
+test("home-prefix hashes applied to object keys are counted", HOME_DEPENDENT, () => {
+  const { value, meta } = s.sanitizeEventData({ toolUseResult: { [`${HOME}/work/acme/README.md`]: { size: 1 } } }, SALT);
+  const key = Object.keys(value.toolUseResult)[0];
+  assert.ok(key.startsWith(homeHash + "/"));
+  assert.equal(meta.counts.path, 1);
+});
+
+test("a whole-value path key with no salt produces no hash and no count", () => {
+  const { value, meta } = s.sanitizeEventData({ cwd: "/Users/me/x", path: "" }, "");
+  assert.equal(value.cwd, "");
+  assert.equal(meta.counts.path, 0);
+});
+
+test("the home directory itself keeps its trailing separator", HOME_DEPENDENT, () => {
+  assert.equal(s.hashPathSegments(HOME, SALT), homeHash);
+  assert.equal(s.hashPathSegments(`${HOME}/`, SALT), `${homeHash}/`);
+  assert.match(s.hashPathSegments(`${HOME}/work/`, SALT), new RegExp(`^${homeHash}/work/$`));
+});

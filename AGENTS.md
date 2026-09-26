@@ -34,7 +34,9 @@ concise English for readers who do not know the team's internal history.
   `CLAUDE_PLUGIN_DATA` explicitly. Skill commands must start with `node` to match
   `Bash(node *)`; they derive the data root from the resolved installation path.
   Do not assume skill/monitor subprocesses inherit `CLAUDE_PLUGIN_ROOT`.
-- Use `skillmeter/testing/helpers.js` for synthetic state. It loads bootstrap
+- Tests live in `test/` and fixtures in `testing/` at the repository root,
+  outside the shipped `skillmeter/` directory, so they never reach users.
+- Use `testing/helpers.js` for synthetic state. It loads bootstrap
   before runtime modules and forces a temporary plugin-data root. Tests that
   do not use helpers must load bootstrap themselves. Never test against real
   credential stores or plugin data.
@@ -42,6 +44,14 @@ concise English for readers who do not know the team's internal history.
   exercise affected handlers with synthetic stdin and isolated state. Verify
   relevant sanitization and consent behavior; historical snapshots additionally
   exclude tool results and images.
+- Register only events that cannot change Claude Code's behavior. Never
+  register `WorktreeCreate` (the hook replaces git worktree creation) or
+  `PreModelSwitch` (it is synchronous and a timed-out hook blocks the switch);
+  skip `MessageDisplay` (per streamed text delta, message content). Hooks whose
+  stdout reaches Claude, such as `PostModelSwitch`, must print nothing.
+- Claude Code does not enforce `timeout` on `async: true` command hooks, so
+  async hooks carry none; every network call bounds itself with
+  `AbortSignal.timeout`. Synchronous hooks keep an explicit `timeout`.
 - Keep upload, retry and cleanup failures best-effort so hooks can return.
   Preserve existing validation, privacy boundaries and recovery behavior.
 

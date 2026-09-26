@@ -3,7 +3,7 @@
  *
  * This log is local-only and intentionally excludes transcript content, local
  * paths, JWTs, device IDs, and backend endpoints. Each append is one NDJSON
- * record so the plugin monitor can tail it without owning the worker process.
+ * record so `backfill status` can read it back without owning the worker process.
  */
 
 const fs = require("fs");

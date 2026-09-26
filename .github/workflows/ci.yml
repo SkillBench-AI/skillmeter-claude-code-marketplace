@@ -27,7 +27,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-      # Runs skillmeter/test/*.test.js, including the shared secret-fixture
+      # Runs test/*.test.js, including the shared secret-fixture
       # parity suite (sanitize.test.js) fed by test/fixtures/secret-corpus.json.
       # A Tier-1 corpus miss fails here and blocks merge.
       - name: Run unit tests

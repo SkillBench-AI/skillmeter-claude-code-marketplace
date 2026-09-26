@@ -15,6 +15,8 @@ const SCHEMA_VERSION = 1;
 const LOCK_FILE = `${BACKFILL_STATE_FILE}.lock`;
 const LOCK_STALE_MS = 10_000;
 const RUNNING_STALE_MS = 30 * 60_000;
+// Earlier accepted offers whose queued chunks may still be uploading.
+const MAX_PRIOR_OFFERS = 5;
 const VALID_STATUSES = new Set([
   "pending",
   "declined",
@@ -97,11 +99,37 @@ function createLifecycleState() {
   }
 }
 
+// A present-but-unusable file (truncated by a crash, hand-edited) is moved
+// aside and replaced; without this every sign-in and SessionStart fails on it.
+// The replacement is `declined`, not a fresh one-time offer, but the manual
+// backfill can still claim it. A file from a newer schema is left alone.
+function recoverUnreadableState() {
+  const raw = safeReadJson(BACKFILL_STATE_FILE, null);
+  if (raw && Number(raw.schema_version) > SCHEMA_VERSION) {
+    throw new Error("Backfill state was written by a newer SkillMeter version.");
+  }
+  try {
+    fs.renameSync(BACKFILL_STATE_FILE, `${BACKFILL_STATE_FILE}.corrupt-${nowMs()}`);
+  } catch {}
+  const state = {
+    schema_version: SCHEMA_VERSION,
+    lifecycle_id: crypto.randomUUID(),
+    status: "declined",
+    reason: "state_recovered",
+    created_at: nowMs(),
+    updated_at: nowMs(),
+  };
+  atomicWriteJson(BACKFILL_STATE_FILE, state);
+  return state;
+}
+
 function initializeBackfillLifecycle() {
   return withLock(() => {
     let state = normalizeState(safeReadJson(BACKFILL_STATE_FILE, null));
-    if (!state) state = createLifecycleState();
-    if (!state) throw new Error("Unable to initialize backfill lifecycle.");
+    if (state) return state;
+    if (fs.existsSync(BACKFILL_STATE_FILE)) return recoverUnreadableState();
+    state = createLifecycleState();
+    if (!state) return recoverUnreadableState();
     return state;
   });
 }
@@ -125,7 +153,9 @@ function mutateBackfillState(mutator) {
 }
 
 function publicBackfillState() {
-  const state = initializeBackfillLifecycle();
+  initializeBackfillLifecycle();
+  isBackfillRunning(); // demotes a dead or stale run before reporting it
+  const state = readBackfillState() || initializeBackfillLifecycle();
   return {
     eligible: state.status === "pending",
     status: state.status,
@@ -134,8 +164,22 @@ function publicBackfillState() {
   };
 }
 
+function priorOffersOf(state) {
+  const prior = Array.isArray(state.prior_offers) ? state.prior_offers : [];
+  if (!state.upload_authorized || !state.offer_id) return prior;
+  return [
+    {
+      offer_id: state.offer_id,
+      org: state.org,
+      repository_keys: state.repository_keys || [],
+    },
+    ...prior,
+  ].slice(0, MAX_PRIOR_OFFERS);
+}
+
 function claimBackfillOffer(activeSessionId = "", { manual = false } = {}) {
   let claimed = false;
+  isBackfillRunning(); // a dead run must not block the manual retry
   const state = mutateBackfillState((state) => {
     const manuallyRetryable =
       manual &&
@@ -149,6 +193,10 @@ function claimBackfillOffer(activeSessionId = "", { manual = false } = {}) {
       ...state,
       status: "declined",
       reason: "offer_consumed",
+      // Chunks the user already approved keep uploading under their offer;
+      // the new offer is not authorized until it is accepted.
+      prior_offers: priorOffersOf(state),
+      upload_authorized: false,
       offer_id: crypto.randomUUID(),
       cutoff_at: nowMs(),
       active_session_id: SESSION_ID_RE.test(activeSessionId)
@@ -193,6 +241,13 @@ function beginBackfill(offerId, {
       processed_transcripts: 0,
       queued_chunks: 0,
       skipped_transcripts: 0,
+      // Otherwise settle sees the previous run's delivered_at and never
+      // announces this one.
+      completed_at: undefined,
+      delivered_at: undefined,
+      set_aside_chunks: undefined,
+      error: undefined,
+      worker_pid: undefined,
     };
   });
   return { started, state };
@@ -204,13 +259,21 @@ function isBackfillUploadAuthorized({
   repoKey,
 } = {}) {
   const state = readBackfillState();
-  return !!(
-    state &&
+  if (!state || !offerId) return false;
+  const current =
     state.upload_authorized === true &&
     state.offer_id === offerId &&
     state.org === org &&
     Array.isArray(state.repository_keys) &&
-    state.repository_keys.includes(repoKey)
+    state.repository_keys.includes(repoKey);
+  if (current) return true;
+  return (Array.isArray(state.prior_offers) ? state.prior_offers : []).some(
+    (prior) =>
+      prior &&
+      prior.offer_id === offerId &&
+      prior.org === org &&
+      Array.isArray(prior.repository_keys) &&
+      prior.repository_keys.includes(repoKey)
   );
 }
 
@@ -255,12 +318,25 @@ function markBackfillDelivered(offerId, details = {}) {
   return { delivered, state };
 }
 
+// A recorded worker pid that no longer exists means the worker died
+// (OOM, SIGKILL, reboot); waiting out RUNNING_STALE_MS would only delay that.
+function workerIsGone(state) {
+  if (!Number.isInteger(state.worker_pid) || state.worker_pid <= 0) return false;
+  try {
+    process.kill(state.worker_pid, 0);
+    return false;
+  } catch (err) {
+    return err?.code === "ESRCH";
+  }
+}
+
 function isBackfillRunning() {
   const state = readBackfillState();
   if (!state || state.status !== "running") return false;
-  if (nowMs() - state.updated_at <= RUNNING_STALE_MS) return true;
+  const gone = workerIsGone(state);
+  if (!gone && nowMs() - state.updated_at <= RUNNING_STALE_MS) return true;
   finishBackfill(state.offer_id, "failed", {
-    error: "Backfill worker became stale.",
+    error: gone ? "Backfill worker exited." : "Backfill worker became stale.",
   });
   return false;
 }
