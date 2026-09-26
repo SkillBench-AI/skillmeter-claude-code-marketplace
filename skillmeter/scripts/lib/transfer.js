@@ -99,6 +99,41 @@ function acquireQueueDrainLock(name) {
   }
 }
 
+// Uploads run a few at a time: a large historical import would otherwise
+// start every chunk at once, share the bandwidth until they all time out, and
+// spend every chunk's retry budget together.
+const DRAIN_CONCURRENCY = 4;
+
+// Run `fn` over `items` with at most `limit` in flight; results keep input
+// order and have Promise.allSettled's shape. `onEach` runs after every item.
+async function settleWithLimit(items, limit, fn, onEach = () => {}) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const index = next++;
+      try {
+        results[index] = { status: "fulfilled", value: await fn(items[index]) };
+      } catch (reason) {
+        results[index] = { status: "rejected", reason };
+      }
+      onEach();
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, worker)
+  );
+  return results;
+}
+
+// A drain longer than QUEUE_DRAIN_LOCK_STALE_MS would otherwise look
+// abandoned, and a second drain would upload the same chunks again.
+function touchQueueDrainLock(lock) {
+  if (!lock) return;
+  const now = new Date();
+  try { fs.utimesSync(lock.lockPath, now, now); } catch {}
+}
+
 function releaseQueueDrainLock(lock) {
   if (!lock) return;
   try { fs.closeSync(lock.fd); } catch {}
@@ -569,6 +604,17 @@ async function uploadDeltaChunk(bodyPath, deviceId, timeoutMs = TRANSCRIPT_TIMEO
     return { ok: false, error: "invalid_queue_context" };
   }
   const disposition = chunkDisposition(meta, context);
+  if (disposition === "delete" && meta.promptId === "backfill") {
+    // Backfill consent is separate from repository policy: an offer that is
+    // no longer authorized removes only its own chunk. Purging the queue
+    // here would also drop the repository's live telemetry.
+    logBackfillChunk(meta, "upload_failed", {
+      error: "backfill_offer_not_authorized",
+    });
+    try { fs.unlinkSync(bodyPath); } catch {}
+    try { fs.unlinkSync(metaPath); } catch {}
+    return { ok: false, error: "backfill_offer_not_authorized" };
+  }
   if (disposition === "delete") {
     logBackfillChunk(meta, "upload_failed", {
       error: "repository_policy_deleted_queue",
@@ -759,8 +805,11 @@ async function drainDeltaChunks(timeoutMs) {
     console.error(`[skillmeter] Draining ${files.length} transcript chunk(s)`);
     // Best-effort, single-flight refresh once per batch (see drainFailedLogs).
     await ensureFreshLicense(deviceId);
-    const results = await Promise.allSettled(
-      files.map((file) => uploadDeltaChunk(file, deviceId, timeoutMs))
+    const results = await settleWithLimit(
+      files,
+      DRAIN_CONCURRENCY,
+      (file) => uploadDeltaChunk(file, deviceId, timeoutMs),
+      () => touchQueueDrainLock(lock)
     );
     if (backfillEntries.length > 0) {
       const backfillFiles = new Set(
@@ -808,8 +857,14 @@ async function drainDeltaChunks(timeoutMs) {
  */
 function stageTranscriptDelta(transcriptPath, promptId, deviceId, repository) {
   if (!repository?.repoKey) return { chunks: 0 };
-  if (isBackfillRunning()) return { chunks: 0, deferred: true };
   const transcriptId = path.basename(transcriptPath);
+  // The snapshot skips any transcript with a live cursor, so only transcripts
+  // without one (or with a discarded one) can race it and must wait. Deferring
+  // every session would lose the final turns of sessions that end meanwhile.
+  const existingCursor = readCursor(transcriptId, repository);
+  if ((!existingCursor || existingCursor.discarded) && isBackfillRunning()) {
+    return { chunks: 0, deferred: true };
+  }
 
   let raw;
   try {

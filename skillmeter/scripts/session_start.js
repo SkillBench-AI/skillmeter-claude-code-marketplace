@@ -33,8 +33,9 @@ const telemetryStore = require("./lib/telemetry-store");
 // reporting startup state. Keep stdout for the single onGate JSON response.
 async function prepareSession() {
   // Materialize the one-time historical-backfill offer before sign-in state is
-  // evaluated. Existing and new users receive the same lifecycle.
-  initializeBackfillLifecycle();
+  // evaluated. Existing and new users receive the same lifecycle. A backfill
+  // problem must not skip the license refresh below.
+  try { initializeBackfillLifecycle(); } catch {}
   const deviceId = credstore.getDeviceId();
   credstore.ensureSigninResultFile();
   ensureBackfillResultFile();
