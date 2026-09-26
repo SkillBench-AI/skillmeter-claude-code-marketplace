@@ -1,83 +1,86 @@
 "use strict";
 
 const fs = require("fs");
+const path = require("path");
 const crypto = require("crypto");
 
-function alive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return true;
-  try { process.kill(pid, 0); return true; }
-  catch (error) { return error.code !== "ESRCH"; }
-}
-
-// Age backstop for abandoned locks, unreadable owners and reused PIDs.
-// It can reclaim a paused live writer; ownership checks do not fence later writes.
-const STALE_MS = 60_000;
-
-// Respect live or unknown owners until the age backstop is reached.
-function heldByLiveOwner(owner, stat) {
-  if (Date.now() - stat.mtimeMs > STALE_MS) return false;
-  return alive(owner?.pid);
+// ESRCH is the only evidence of a dead owner. EPERM, PID reuse, malformed
+// ownership and unknown formats hold the lock; age alone proves nothing.
+function dead(pid) {
+  try { process.kill(pid, 0); return false; }
+  catch (error) { return error.code === "ESRCH"; }
 }
 
 function readOwner(file) {
-  try { return JSON.parse(fs.readFileSync(file, "utf8")); }
-  catch { return null; }
+  try {
+    const owner = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (!owner || !Number.isSafeInteger(owner.pid) || owner.pid <= 0 ||
+        typeof owner.token !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(owner.token) ||
+        (owner.version !== undefined && owner.version !== 2)) return null;
+    return owner;
+  } catch (error) {
+    if (error.code === "ENOENT") return undefined;
+    return null;
+  }
 }
 
-// Publish the owner atomically and identify it with a per-acquisition token.
-// Inodes can be reused after unlink, so they cannot prove continued ownership.
+function sameOwner(first, second) {
+  return Boolean(first && second && first.pid === second.pid && first.token === second.token);
+}
+
+// Exclusive hard-link publication and per-owner cleanup serialize cooperating
+// writers. No live process is evicted. This assumes one host/PID namespace and
+// clients using this protocol; old clients with an age timeout must be stopped.
 function acquireLock(file, depth = 0) {
   if (depth > 8) return null;
-  const token = crypto.randomUUID();
-  const ownerFile = `${file}.owner-${token}`;
-  const fd = fs.openSync(ownerFile, "wx", 0o600);
+  const owner = { version: 2, pid: process.pid, token: crypto.randomUUID() };
+  const ownerFile = `${file}.owner-${owner.token}`;
+  let fd;
+  let published = false;
   try {
-    fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, token }));
+    fd = fs.openSync(ownerFile, "wx", 0o600);
+    fs.writeFileSync(fd, JSON.stringify(owner));
     fs.fsyncSync(fd);
-  } finally { fs.closeSync(fd); }
+    fs.closeSync(fd);
+    fd = undefined;
+    try { fs.linkSync(ownerFile, file); published = true; }
+    catch (error) { if (error.code !== "EEXIST") throw error; }
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+    try { fs.unlinkSync(ownerFile); }
+    catch (error) { if (error.code !== "ENOENT") throw error; }
+  }
 
-  try { fs.linkSync(ownerFile, file); fs.unlinkSync(ownerFile); }
-  catch (error) {
-    fs.unlinkSync(ownerFile);
-    if (error.code !== "EEXIST") throw error;
+  if (!published) {
+    const observed = readOwner(file);
+    if (observed === undefined) return acquireLock(file, depth + 1);
+    if (!observed || !dead(observed.pid)) return null;
 
-    let stat;
-    try { stat = fs.statSync(file); }
-    catch (err) {
-      if (err.code === "ENOENT") return acquireLock(file, depth + 1);
-      throw err;
-    }
-    if (heldByLiveOwner(readOwner(file), stat)) return null;
-
-    // Coordinate stale cleanup. Normal acquire/release does not take this lock,
-    // so a replacement can still appear between the stale check and unlink.
-    const releaseReaper = acquireLock(`${file}.reap`, depth + 1);
+    // Every remover of this dead incarnation takes the same reaper lock.
+    // A delayed reaper cannot remove a later owner: the dead owner cannot
+    // release, and its other reapers cannot unlink while this guard is held.
+    // Hashing keeps nested recovery paths bounded even after repeated crashes.
+    const key = crypto.createHash("sha256").update(JSON.stringify([path.basename(file), observed.token])).digest("hex");
+    const reaper = path.join(path.dirname(file), `.credential-reap-${key}.lock`);
+    const releaseReaper = acquireLock(reaper, depth + 1);
     if (!releaseReaper) return null;
     try {
-      // Recheck under the reaper lock: another writer may have replaced the owner.
-      let stale;
-      try { stale = !heldByLiveOwner(readOwner(file), fs.statSync(file)); }
-      catch (err) {
-        if (err.code !== "ENOENT") throw err;
-        stale = false; // already gone; just retry the acquire
-      }
-      if (stale) {
+      if (sameOwner(readOwner(file), observed) && dead(observed.pid)) {
         try { fs.unlinkSync(file); }
-        catch (err) { if (err.code !== "ENOENT") throw err; }
+        catch (error) { if (error.code !== "ENOENT") throw error; }
       }
     } finally { releaseReaper(); }
-
     return acquireLock(file, depth + 1);
   }
 
-  // Detect replacement by the age backstop. This check is not atomic with a
-  // caller's write or release's unlink; neither operation is fenced by it.
-  const ownedByUs = () => readOwner(file)?.token === token;
-
+  let released = false;
+  const ownedByUs = () => !released && sameOwner(readOwner(file), owner);
   const release = () => {
     if (!ownedByUs()) return;
+    // Cooperating clients cannot replace this live owner before this unlink.
     try { fs.unlinkSync(file); }
     catch (error) { if (error.code !== "ENOENT") throw error; }
+    released = true;
   };
   release.stillHeld = ownedByUs;
   return release;
