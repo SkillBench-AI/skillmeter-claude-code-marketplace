@@ -133,10 +133,7 @@ function shouldRefresh(
 ) {
   if (tokenFresh) return "return_current";
   const lockAge = lockMtimeMs == null ? Infinity : now - lockMtimeMs;
-  // A lock dated well into the future means the clock moved back after it was
-  // written; honouring it would block refresh until the clock catches up.
-  // Small negative ages are ordinary timestamp jitter on a live lock.
-  if (lockAge > -cooldownMs && lockAge < cooldownMs) return "skip_locked";
+  if (lockAge < cooldownMs) return "skip_locked";
   return "acquire_and_refresh";
 }
 
@@ -167,8 +164,7 @@ function acquireRefreshLock(staleLockPresent, cooldownMs = LICENSE_REFRESH_COOLD
   // Re-check staleness right before claiming: another process may already have
   // replaced the stale lock with a live one.
   try {
-    const age = now - fs.statSync(LICENSE_REFRESH_LOCK_FILE).mtimeMs;
-    if (age > -cooldownMs && age < cooldownMs) return false;
+    if (now - fs.statSync(LICENSE_REFRESH_LOCK_FILE).mtimeMs < cooldownMs) return false;
   } catch {
     // vanished: someone else claimed it; fall through to a final create
   }
@@ -273,6 +269,16 @@ async function ensureFreshLicense(deviceId, { source = "drain", aheadMs = 0 } = 
     lockMtimeMs = fs.statSync(LICENSE_REFRESH_LOCK_FILE).mtimeMs;
   } catch {
     // lock absent
+  }
+  // A lock dated more than a cooldown into the future means the clock moved
+  // back after it was written; left alone it would block refresh until the
+  // clock caught up. Re-date it to now instead of reclaiming it: a refresh
+  // still in flight under it finishes well within the cooldown, and the next
+  // attempt after the cooldown proceeds as usual.
+  if (lockMtimeMs != null && lockMtimeMs - Date.now() > LICENSE_REFRESH_COOLDOWN_MS) {
+    const now = new Date();
+    try { fs.utimesSync(LICENSE_REFRESH_LOCK_FILE, now, now); } catch {}
+    return current;
   }
 
   const action = shouldRefresh(tokenFresh, lockMtimeMs, Date.now());

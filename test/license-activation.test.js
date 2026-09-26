@@ -151,17 +151,27 @@ for (const [label, token] of [
   });
 }
 
-test("a refresh lock dated well into the future is reclaimed", async () => {
+test("a refresh lock dated well into the future blocks for one cooldown, not until the clock catches up", async () => {
   // The clock moved back after another process wrote the lock.
   fs.mkdirSync(path.dirname(LOCK_FILE), { recursive: true });
   fs.writeFileSync(LOCK_FILE, "999 0\n");
   const future = new Date(Date.now() + 3 * 60 * 60_000);
   fs.utimesSync(LOCK_FILE, future, future);
 
+  // First look: the lock is re-dated to now, not reclaimed, so a refresh that
+  // may still be in flight under it is not duplicated.
+  const current = credstore.getLicenseTokenUncached();
+  assert.equal(await ensureFreshLicense(DEVICE_ID, { source: "daemon" }), current);
+  assert.equal(calls.length, 0);
+  assert.ok(Math.abs(Date.now() - fs.statSync(LOCK_FILE).mtimeMs) < 60_000, "lock re-dated to now");
+
+  // One cooldown later the refresh proceeds as usual.
+  const aged = new Date(Date.now() - 120_000);
+  fs.utimesSync(LOCK_FILE, aged, aged);
   const next = FRESH();
   responses = [respond(200, { token: next })];
   assert.equal(await ensureFreshLicense(DEVICE_ID, { source: "daemon" }), next);
-  assert.equal(calls.length, 1, "refresh is not blocked until the clock catches up");
+  assert.equal(calls.length, 1);
 });
 
 test("network error is transient too, and failures accumulate", async () => {

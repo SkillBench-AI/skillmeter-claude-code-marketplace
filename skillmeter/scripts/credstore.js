@@ -60,13 +60,15 @@ function isCorrupt(raw) {
   catch { return true; }
 }
 
-// Keep a corrupt store's bytes before it is replaced, and say so: the device
-// identity and sign-in it held are gone, so the user must sign in again.
-function preserveCorruptStore(raw) {
-  const aside = `${CRED_FILE}.corrupt-${Date.now()}`;
-  try {
-    fs.writeFileSync(aside, raw, { mode: 0o600, flag: "wx" });
-  } catch {}
+// Keep a corrupt store's exact bytes before it is replaced, and say so: the
+// device identity and sign-in it held are gone, so the user must sign in
+// again. Throws when the copy cannot be made, so the caller does not reset a
+// store it failed to preserve. Runs under the credential lock.
+function preserveCorruptStore() {
+  const bytes = fs.readFileSync(CRED_FILE); // a Buffer: invalid UTF-8 survives
+  const aside =
+    `${CRED_FILE}.corrupt-${Date.now()}-${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
+  fs.writeFileSync(aside, bytes, { mode: 0o600, flag: "wx" });
   console.error(
     `[skillmeter] Credential store was unreadable and has been reset; the original is kept at ${aside}. Run /skillmeter:signin to sign in again.`
   );
@@ -82,7 +84,7 @@ function mutateStore(fn, afterCommit) {
       if (result === false) return false;
       // These checks detect visible preemption, not an atomic rename fence.
       if (!release.stillHeld() || readRaw() !== baseline) return PREEMPTED;
-      if (isCorrupt(baseline)) preserveCorruptStore(baseline);
+      if (isCorrupt(baseline)) preserveCorruptStore();
       atomicWriteJson(CRED_FILE, store);
       if (afterCommit) afterCommit();
       return result === undefined ? true : result;

@@ -56,6 +56,40 @@ test("a truncated store is kept aside, reported, and then reset", () => {
   assert.equal((fs.statSync(path.join(stateDir, aside[0])).mode & 0o777), 0o600);
 });
 
+test("the kept copy is byte-for-byte, including invalid UTF-8", () => {
+  const original = Buffer.from([0x7b, 0x22, 0x64, 0xff, 0xfe, 0x80, 0x22]); // {"d<bad bytes>"
+  fs.writeFileSync(CRED_FILE, original, { mode: 0o600 });
+  captureStderr(() => credstore.getDeviceId());
+  const aside = asideFiles();
+  assert.equal(aside.length, 1);
+  assert.deepEqual(fs.readFileSync(path.join(stateDir, aside[0])), original);
+});
+
+test("a store that cannot be kept aside is not reset", () => {
+  const original = '{"device_id":"ORIG-DEVICE","license_jwt":"x.y';
+  fs.writeFileSync(CRED_FILE, original, { mode: 0o600 });
+  // Fail only the copy (a full disk, a name collision): the lock and the
+  // reset itself would work, so this isolates "copy failed, do not reset".
+  const realWrite = fs.writeFileSync;
+  fs.writeFileSync = (file, ...rest) => {
+    if (String(file).includes(".corrupt-")) {
+      throw Object.assign(new Error("no space left"), { code: "ENOSPC" });
+    }
+    return realWrite(file, ...rest);
+  };
+  let stderr;
+  try {
+    stderr = captureStderr(() => {
+      assert.throws(() => credstore.getDeviceId(), /no space left/);
+    });
+  } finally {
+    fs.writeFileSync = realWrite;
+  }
+  assert.doesNotMatch(stderr, /has been reset/, "no claim that the original was kept");
+  assert.equal(fs.readFileSync(CRED_FILE, "utf8"), original, "the corrupt store is untouched");
+  assert.equal(asideFiles().length, 0);
+});
+
 for (const root of ["null", "[]", '"text"']) {
   test(`a store whose root is ${root} reads as empty instead of crashing`, () => {
     fs.writeFileSync(CRED_FILE, root, { mode: 0o600 });
