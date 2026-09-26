@@ -28,10 +28,14 @@ const { TERMINAL_REASONS } = licenseStatus;
  *                                               longer be rotated; re-activate
  *   { outcome: "revoked",   status: 402 }       org license cancelled
  *   { outcome: "transient", status?, message }  network, 404, 5xx, bad body
+ *   { outcome: "superseded" }                  authentication changed
  */
-async function refreshExpiredJwt(jwt, deviceId) {
+async function refreshExpiredJwt(jwt, deviceId, expected) {
   if (!jwt || !deviceId) return { outcome: "transient", message: "missing token or device id" };
 
+  if (expected.deviceId !== deviceId || !credstore.isRecoveryCurrent(expected)) {
+    return { outcome: "superseded" };
+  }
   const url = getRefreshUrl();
 
   let res;
@@ -81,7 +85,7 @@ async function refreshExpiredJwt(jwt, deviceId) {
     return { outcome: "transient", status: res.status, message: "response missing token" };
   }
 
-  credstore.setLicenseToken(newJwt);
+  if (!credstore.commitRefresh(newJwt, expected)) return { outcome: "superseded" };
   console.error("[skillmeter] license refresh: rotated successfully");
   return { outcome: "rotated", token: newJwt };
 }
@@ -185,44 +189,51 @@ function acquireRefreshLock(staleLockPresent, cooldownMs = LICENSE_REFRESH_COOLD
  *   expiry threshold (see renewSkewSeconds)
  */
 async function refreshLicense(deviceId, { source = "unknown", aheadMs = 0 } = {}) {
-  const current = credstore.getLicenseTokenUncached();
+  const expected = credstore.recoverySnapshot();
+  if (expected.signedOut || expected.deviceId !== deviceId) return null;
+  const current = expected.token;
   if (current && !credstore.isLicenseTokenExpired(current, renewSkewSeconds(aheadMs))) return current;
   // Refresh requires an existing sign-in. A missing license requires
   // the user to invoke /skillmeter:signin.
   if (!current || !deviceId) return null;
   if (credstore.getSignedOut()) return null;
 
-  const rotation = await refreshExpiredJwt(current, deviceId);
-  switch (rotation.outcome) {
-    case "rotated":
-      licenseStatus.recordRefreshSuccess({ source, outcome: "rotated" });
-      return rotation.token;
-    case "revoked":
-      licenseStatus.recordTerminal({ source, reason: TERMINAL_REASONS.REVOKED, status: 402 });
-      return null;
-    case "transient":
-      licenseStatus.recordRefreshFailure({
-        source,
-        kind: "refresh",
-        status: rotation.status ?? null,
-        message: rotation.message,
-      });
-      return null;
-    case "rejected":
-      break; // record that interactive sign-in is required
-    default:
-      return null;
-  }
+  const rotation = await refreshExpiredJwt(current, deviceId, expected);
+  const completed = rotation.outcome === "rotated" ? { ...expected, token: rotation.token } : expected;
+  let result = null;
+  credstore.withRecoveryCurrent(completed, () => {
+    switch (rotation.outcome) {
+      case "rotated":
+        licenseStatus.recordRefreshSuccess({ source, outcome: "rotated" });
+        result = rotation.token;
+        return;
+      case "revoked":
+        licenseStatus.recordTerminal({ source, reason: TERMINAL_REASONS.REVOKED, status: 402 });
+        return null;
+      case "transient":
+        licenseStatus.recordRefreshFailure({
+          source,
+          kind: "refresh",
+          status: rotation.status ?? null,
+          message: rotation.message,
+        });
+        return null;
+      case "rejected":
+        break; // record that interactive sign-in is required
+      default:
+        return null;
+    }
 
-  // Refresh 401/410 requires a new browser-approved sign-in. Record a terminal
-  // state so background callers do not keep retrying this token.
-  licenseStatus.recordTerminal({
-    source,
-    reason: TERMINAL_REASONS.REACTIVATION_REQUIRED,
-    status: rotation.status ?? null,
-    message: "licence can no longer be refreshed — run /skillmeter:signin",
+    // Refresh 401/410 requires a new browser-approved sign-in. Record a terminal
+    // state so background callers do not keep retrying this token.
+    licenseStatus.recordTerminal({
+      source,
+      reason: TERMINAL_REASONS.REACTIVATION_REQUIRED,
+      status: rotation.status ?? null,
+      message: "licence can no longer be refreshed — run /skillmeter:signin",
+    });
   });
-  return null;
+  return result;
 }
 
 /**
@@ -266,10 +277,12 @@ async function ensureFreshLicense(deviceId, { source = "drain", aheadMs = 0 } = 
   if (!acquireRefreshLock(lockMtimeMs != null, LICENSE_REFRESH_COOLDOWN_MS, Date.now())) return current;
 
   try {
-    return (await refreshLicense(deviceId, { source, aheadMs })) || current;
+    await refreshLicense(deviceId, { source, aheadMs });
   } catch {
-    return current;
+    // A failed exchange or busy writer must not return the pre-await token.
   }
+  const latest = credstore.recoverySnapshot();
+  return latest.signedOut || latest.deviceId !== deviceId ? null : latest.token;
 }
 
 module.exports = {

@@ -351,3 +351,26 @@ moved to ADR 004 as decisions 4 to 6 and its acceptance table, and is
 withdrawn here in its favour. A token change never changes consent, and a
 consent change never mints or revokes a token; anything that touches both is
 decided in ADR 004 and mirrored in each client's ADR set.
+
+## Amendment: authentication intent across shared clients
+
+Credential writers coordinate on `credentials.json.lock`, preserving fields
+owned by other clients. Explicit sign-in, successful issuance, direct token
+replacement and sign-out rotate `auth_generation`. Refresh preserves that
+generation and commits only while the token, generation, device and sign-out
+state match its pre-request snapshot. This rejects delayed responses even when
+a new sign-in reuses the same token. Browser issuance carries the initiating
+generation and device through foreground and detached polling.
+
+Refresh status writes run under the same credential lock and recheck the
+exchange snapshot. New status records contain a hash of that authentication
+context, so a different client's sign-in invalidates stale backoff and terminal
+state without persisting another token copy. Older unbound status records remain
+readable. Refresh callers re-read credentials after an awaited exchange.
+
+The shared lock uses the Codex owner-token protocol. It protects cooperating
+writers during ordinary acquisition and release; its age-based stale takeover
+has check-to-write and check-to-unlink races. Older Claude processes that do not
+participate in the protocol remain unsupported for concurrent credential
+writes. Restart those processes before mixing clients. This amendment does not
+authorize telemetry, change consent policy, or establish a release support window.
