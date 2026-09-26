@@ -1,4 +1,4 @@
-const { makeTempDir, writeJson, setTestEnv } = require("../testing/helpers");
+const { makeTempDir, writeJson, setTestEnv, makeJwt } = require("../testing/helpers");
 
 const assert = require("node:assert/strict");
 const test = require("node:test");
@@ -10,7 +10,9 @@ const {
   getDeviceCodeUrl,
   getTokenUrl,
   getOAuthClientId,
+  getBackendUrlOverride,
 } = require("../scripts/lib/config");
+const { getEndpointFromTokenAllowExpired } = require("../scripts/lib/jwt");
 
 const PROD_ACTIVATE_HOST = "api.skillbench.ai";
 const PROD_BROKER_HOST = "id.skillbench.ai";
@@ -93,4 +95,30 @@ test("a malformed override degrades to the prod default", () => {
 
   assert.equal(new URL(getActivateUrl()).hostname, PROD_ACTIVATE_HOST);
   assert.equal(new URL(getDeviceCodeUrl()).hostname, PROD_BROKER_HOST);
+});
+
+test("the backend override must use HTTPS, or loopback http", () => {
+  // Uploads carry the license JWT as a bearer token.
+  setTestEnv("SKILLMETER_BACKEND_URL", "https://collector.staging.example");
+  assert.equal(getBackendUrlOverride(), "https://collector.staging.example");
+
+  setTestEnv("SKILLMETER_BACKEND_URL", "http://127.0.0.1:9");
+  assert.equal(getBackendUrlOverride(), "http://127.0.0.1:9");
+
+  // A rejected override falls back to `aud` routing, not to a guessed host.
+  setTestEnv("SKILLMETER_BACKEND_URL", "http://evil.example");
+  assert.equal(getBackendUrlOverride(), null);
+
+  setTestEnv("SKILLMETER_BACKEND_URL", "not-a-url");
+  assert.equal(getBackendUrlOverride(), null);
+
+  setTestEnv("SKILLMETER_BACKEND_URL", undefined);
+  assert.equal(getBackendUrlOverride(), null);
+});
+
+test("a rejected backend override routes by the license audience", () => {
+  const token = makeJwt({ aud: "https://acme.meter.skillbench.example" });
+
+  setTestEnv("SKILLMETER_BACKEND_URL", "http://evil.example");
+  assert.equal(getEndpointFromTokenAllowExpired(token), "https://acme.meter.skillbench.example");
 });

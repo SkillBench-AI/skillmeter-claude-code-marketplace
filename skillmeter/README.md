@@ -159,7 +159,9 @@ state through `testing/bootstrap.js` and `testing/helpers.js`. See
 Configuration precedence is environment, development bundle, then production
 default. Project files such as `.claude/settings.local.json` cannot override an
 endpoint or the OAuth client, because any repository could ship one. The
-activation and broker URLs must use HTTPS (loopback `http` is allowed for a local
-backend); a rejected override falls back to production with a stderr note.
+activation, broker and backend URLs must use HTTPS (loopback `http` is allowed
+for a local backend). A rejected activation or broker override falls back to
+production, and a rejected backend override falls back to the license's `aud`,
+each with a stderr note.
 Normal tenant routing comes from the license's `aud` claim and needs no endpoint
 override.

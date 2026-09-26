@@ -121,9 +121,13 @@ function getOAuthClientId() {
 
 // Hard bypass of the JWT's `aud` endpoint claim (see jwt.js). Explicit-only:
 // NOT bundled into the dev switch, because dev keeps the real sign-in flow and
-// the dev-minted JWT already carries a dev endpoint in `aud`.
+// the dev-minted JWT already carries a dev endpoint in `aud`. Uploads send the
+// license as a bearer token, so the override gets the same HTTPS rule as the
+// sign-in endpoints; a rejected one falls back to `aud` routing (null).
 function getBackendUrlOverride() {
-  return process.env.SKILLMETER_BACKEND_URL || null;
+  const url = process.env.SKILLMETER_BACKEND_URL;
+  if (!url) return null;
+  return trustedEndpoint(url, null, "backend");
 }
 
 // --- Eager path config (env + os only, matching former paths.js) ---
