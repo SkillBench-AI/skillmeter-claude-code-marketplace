@@ -276,8 +276,9 @@ async function ensureFreshLicense(deviceId, { source = "drain", aheadMs = 0 } = 
   // still in flight under it finishes well within the cooldown, and the next
   // attempt after the cooldown proceeds as usual.
   if (lockMtimeMs != null && lockMtimeMs - Date.now() > LICENSE_REFRESH_COOLDOWN_MS) {
-    const now = new Date();
-    try { fs.utimesSync(LICENSE_REFRESH_LOCK_FILE, now, now); } catch {}
+    // Same clock as every other lock-age comparison here.
+    const nowSec = Date.now() / 1000;
+    try { fs.utimesSync(LICENSE_REFRESH_LOCK_FILE, nowSec, nowSec); } catch {}
     return current;
   }
 
