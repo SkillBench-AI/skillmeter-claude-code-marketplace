@@ -20,8 +20,8 @@ function readStore() {
   return safeReadJson(CRED_FILE, {});
 }
 
-// This lock protocol is shared with Codex. It coordinates cooperating writers;
-// older clients that ignore it and age-based stale takeover remain limitations.
+// This dead-owner-only lock protocol is shared with Codex. Older clients
+// that ignore it or reclaim live locks by age must be stopped before use.
 function withCredentialLock(fn) {
   fs.mkdirSync(path.dirname(CRED_FILE), { recursive: true, mode: 0o700 });
   const { acquireLock } = require("./lib/credential-lock");

@@ -321,9 +321,19 @@ test("FileChanged sign-in success immediately shows every discovered repository"
     ts: Date.now(),
   });
 
+  // The CLI discovers both project transcripts and .claude.json. Isolate both;
+  // CLAUDE_CONFIG_DIR alone does not redirect the machine-local state file.
+  const stateFile = path.join(claudeConfigDir, "fixture-claude-state.json");
+  writeJson(stateFile, { projects: { [repo]: {} } });
+  const probe = `
+    const inventory = require(${JSON.stringify(path.resolve(__dirname, "../scripts/lib/repository-telemetry"))});
+    const load = inventory.loadRepositoryTelemetryState;
+    inventory.loadRepositoryTelemetryState = () => load({ claudeStateFile: ${JSON.stringify(stateFile)} });
+    require(${JSON.stringify(path.resolve(__dirname, "../scripts/on_signin_result.js"))});
+  `;
   const result = runNode(
-    path.resolve(__dirname, "../scripts/on_signin_result.js"),
-    [],
+    "-e",
+    [probe],
     {
       cwd: repo,
       env: {
