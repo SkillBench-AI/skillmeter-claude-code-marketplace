@@ -134,12 +134,44 @@ function blockedError(reason) {
 // Classify the policy file without normalizing it into permission. A blocked
 // state keeps the file's bytes, holds queues and refuses the ordinary
 // enable/disable controls; only a readable policy or an explicit repair ends it.
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+// Shape check before any normalization: a well-formed JSON file with the
+// wrong structure (a null `global`, a record that is not an object, a
+// non-boolean `enabled`) is malformed, not a set of defaults to fill in.
+function isWellFormedPolicy(parsed) {
+  if (parsed.revision !== undefined &&
+      !(Number.isSafeInteger(parsed.revision) && parsed.revision >= 0)) return false;
+  if (parsed.global !== undefined) {
+    if (!isPlainObject(parsed.global)) return false;
+    if (parsed.global.enabled !== undefined && typeof parsed.global.enabled !== "boolean") return false;
+  }
+  for (const section of ["organizations", "repositories"]) {
+    const records = parsed[section];
+    if (records === undefined) continue;
+    if (!isPlainObject(records)) return false;
+    for (const record of Object.values(records)) {
+      if (!isPlainObject(record)) return false;
+      if (record.enabled !== undefined && typeof record.enabled !== "boolean") return false;
+    }
+  }
+  return true;
+}
+
 function classifyPolicyFile() {
   let raw;
   try {
     raw = fs.readFileSync(TELEMETRY_POLICY_FILE, "utf8");
   } catch (err) {
-    if (err && err.code === "ENOENT") return { status: "absent" };
+    if (err && err.code === "ENOENT") {
+      // A link whose target is gone is a configured path, not first use.
+      try {
+        if (fs.lstatSync(TELEMETRY_POLICY_FILE).isSymbolicLink()) return { status: "dangling_path" };
+      } catch {}
+      return { status: "absent" };
+    }
     return { status: "unreadable" };
   }
   let parsed;
@@ -148,10 +180,9 @@ function classifyPolicyFile() {
   } catch {
     return { status: "malformed" };
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return { status: "malformed" };
-  }
+  if (!isPlainObject(parsed)) return { status: "malformed" };
   if (parsed.schema_version !== SCHEMA_VERSION) return { status: "unsupported_schema" };
+  if (!isWellFormedPolicy(parsed)) return { status: "malformed" };
   return { status: "valid", raw: parsed };
 }
 

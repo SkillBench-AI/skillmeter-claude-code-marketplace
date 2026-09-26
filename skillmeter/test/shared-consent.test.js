@@ -185,6 +185,67 @@ test("a malformed policy file blocks capture and controls and keeps its bytes", 
   assert.equal(store.getPolicyBlockedReason(), null);
 });
 
+test("well-formed JSON with the wrong structure is malformed, never normalized", () => {
+  const original = fs.readFileSync(POLICY_FILE, "utf8");
+  const broken = JSON.stringify({
+    schema_version: 1,
+    revision: 1,
+    global: null,
+    organizations: { acme: { enabled: true, consent_version: 2 } },
+    repositories: { "github.com/acme/widgets": { enabled: true, consent_version: 2 } },
+  });
+  writeFile(POLICY_FILE, broken);
+  try {
+    assert.equal(store.getPolicyBlockedReason(), "malformed");
+    assert.equal(
+      repositoryQueue.queueDisposition(
+        repositoryQueue.queueContextForRepository("github.com/acme/widgets", "acme")
+      ),
+      "pause"
+    );
+    assert.throws(() => store.setGlobalEnabled(true), (err) => err?.code === "POLICY_BLOCKED");
+    assert.equal(fs.readFileSync(POLICY_FILE, "utf8"), broken);
+  } finally {
+    writeFile(POLICY_FILE, original);
+  }
+  for (const wrong of [
+    { schema_version: 1, organizations: [] },
+    { schema_version: 1, repositories: { "github.com/acme/x": "on" } },
+    { schema_version: 1, global: { enabled: "yes" } },
+    { schema_version: 1, revision: -1 },
+  ]) {
+    writeJson(POLICY_FILE, wrong);
+    try {
+      assert.equal(store.getPolicyBlockedReason(), "malformed", JSON.stringify(wrong));
+    } finally {
+      writeFile(POLICY_FILE, original);
+    }
+  }
+});
+
+test("a dangling policy link is a hold, not first use, even without a marker", () => {
+  const original = fs.readFileSync(POLICY_FILE, "utf8");
+  const parkedMarker = `${store.OBSERVED_FILE}.parked`;
+  fs.unlinkSync(POLICY_FILE);
+  fs.renameSync(store.OBSERVED_FILE, parkedMarker);
+  fs.symlinkSync(path.join(STATE_DIR, "policy-target-that-does-not-exist.json"), POLICY_FILE);
+  try {
+    assert.equal(store.getPolicyBlockedReason(), "dangling_path");
+    assert.equal(store.readPolicy().blocked, "dangling_path");
+    assert.throws(
+      () => store.setRepositoryOverride("github.com/skillbench-ai/dangling", true),
+      (err) => err?.code === "POLICY_BLOCKED"
+    );
+    assert.equal(fs.lstatSync(POLICY_FILE).isSymbolicLink(), true, "the link is preserved");
+    assert.equal(fs.existsSync(store.OBSERVED_FILE), false, "no observation was recorded");
+  } finally {
+    fs.unlinkSync(POLICY_FILE);
+    writeFile(POLICY_FILE, original);
+    fs.renameSync(parkedMarker, store.OBSERVED_FILE);
+  }
+  assert.equal(store.getPolicyBlockedReason(), null);
+});
+
 test("an unsupported schema version blocks without being rewritten", () => {
   const original = fs.readFileSync(POLICY_FILE, "utf8");
   const future = { ...JSON.parse(original), schema_version: 99, future_field: true };
