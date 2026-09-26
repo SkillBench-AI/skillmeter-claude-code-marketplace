@@ -1,9 +1,9 @@
 "use strict";
 
-// SessionStart refreshes through the same single-flight lock as the daemon and
-// the drains (ADR 001: the lock-file cooldown is the single-flight mechanism
-// across concurrent sessions). Runs the real hook as a child process against a
-// loopback /refresh endpoint and counts the requests it makes.
+// SessionStart makes no license request of its own: recording does not wait
+// for a fresh token, and the drains refresh just before they send. Runs the
+// real hook as a child process against a loopback /refresh endpoint and counts
+// the requests it makes.
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
@@ -83,40 +83,13 @@ function runSessionStart({ port, lockAgeMs }) {
   });
 }
 
-test("SessionStart refreshes an expired license when no refresh is in flight", async () => {
+test("SessionStart makes no license request, even with an expired token", async () => {
   const { requests, server, port } = await startRefreshServer();
   try {
     const run = await runSessionStart({ port, lockAgeMs: null });
     assert.equal(run.status, 0, run.stderr);
-    assert.deepEqual(requests, ["/refresh"]);
-    assert.equal(run.rotated, true, "the rotated token is stored");
-  } finally {
-    server.close();
-  }
-});
-
-test("SessionStart skips the refresh while another process holds the lock", async () => {
-  // A lock younger than the 60 s cooldown means a daemon, drain or another
-  // session is refreshing (or just did); a second POST with the same token
-  // is exactly what the single-flight exists to prevent.
-  const { requests, server, port } = await startRefreshServer();
-  try {
-    const run = await runSessionStart({ port, lockAgeMs: 5_000 });
-    assert.equal(run.status, 0, run.stderr);
     assert.deepEqual(requests, []);
     assert.equal(run.rotated, false);
-  } finally {
-    server.close();
-  }
-});
-
-test("SessionStart reclaims a stale lock and refreshes", async () => {
-  const { requests, server, port } = await startRefreshServer();
-  try {
-    const run = await runSessionStart({ port, lockAgeMs: 120_000 });
-    assert.equal(run.status, 0, run.stderr);
-    assert.deepEqual(requests, ["/refresh"]);
-    assert.equal(run.rotated, true);
   } finally {
     server.close();
   }

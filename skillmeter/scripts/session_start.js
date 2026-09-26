@@ -1,12 +1,10 @@
 #!/usr/bin/env node
 const { runHook } = require("./logger.js");
 const {
-  retryFailedLogs,
-  retryFailedTranscripts,
+  spawnDetachedDrain,
   cleanupStaleFiles,
   initializeTranscriptCursor,
 } = require("./lib/transfer");
-const { ensureFreshLicense } = require("./lib/license-activation");
 const {
   clearTerminal,
   readLicenseStatus,
@@ -16,8 +14,12 @@ const {
 // Recording continues while a license waits out an outage, so the sign-in
 // banner is for states only a new sign-in can fix: the refresh chain ended
 // (410/401) or the organization license was revoked (402).
+// SessionStart clears the terminal state to give the new session one attempt,
+// so the banner decision uses the state as the session found it.
+let terminalAtStart = null;
+
 function signInRequiredToRecover() {
-  const reason = readLicenseStatus()?.terminal?.reason;
+  const reason = (terminalAtStart || readLicenseStatus()?.terminal)?.reason;
   return (
     reason === TERMINAL_REASONS.REACTIVATION_REQUIRED ||
     reason === TERMINAL_REASONS.REVOKED
@@ -44,12 +46,12 @@ const {
 const credstore = require("./credstore.js");
 const telemetryStore = require("./lib/telemetry-store");
 
-// Refresh the stored license and create the sign-in result sentinel before
-// reporting startup state. Keep stdout for the single onGate JSON response.
+// Create the sign-in result sentinel and re-arm refresh before reporting
+// startup state. Keep stdout for the single onGate JSON response.
 async function prepareSession() {
   // Materialize the one-time historical-backfill offer before sign-in state is
   // evaluated. Existing and new users receive the same lifecycle. A backfill
-  // problem must not skip the license refresh below.
+  // problem must not skip the session setup below.
   try { initializeBackfillLifecycle(); } catch {}
   const deviceId = credstore.getDeviceId();
   credstore.ensureSigninResultFile();
@@ -62,13 +64,8 @@ async function prepareSession() {
   // (ADR 001, decision 2: SessionStart clears the terminal state). Done before
   // the global gate so a session that starts paused and is re-enabled later
   // does not inherit a stale terminal state.
+  terminalAtStart = readLicenseStatus()?.terminal || null;
   clearTerminal({ source: "session_start" });
-  if (telemetryStore.getGlobalDisabled()) return;
-  // Through the refresh lock, like every other caller: sessions started
-  // together, or a session starting while the daemon or a drain is mid-refresh,
-  // must not POST /refresh with the same token at once. clearTerminal above
-  // already dropped the backoff clock, so the fresh attempt is not blocked.
-  try { await ensureFreshLicense(deviceId, { source: "session_start" }); } catch {}
 }
 
 function runSessionStartHook() {
@@ -158,13 +155,14 @@ function runSessionStartHook() {
       process.stdout.write(JSON.stringify(out) + "\n");
 
       // Organization-authorized audit and repository queues can be drained
-      // independently of the repository this new session starts in.
+      // independently of the repository this new session starts in. The drain
+      // runs detached, refreshes the license itself if needed, and so never
+      // holds session start on the network.
       if (
-        credstore.hasValidLicense() &&
+        credstore.isSignedIn() &&
         credstore.isTelemetryTransmissionAllowed("")
       ) {
-        retryFailedLogs();
-        retryFailedTranscripts();
+        spawnDetachedDrain();
       }
       // Local-only; runs even without a usable license so unsent data still
       // ages out for a device that can no longer sign in.

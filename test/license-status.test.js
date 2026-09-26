@@ -27,13 +27,6 @@ test("backoffDelayMs doubles from the base and stops at the cap", () => {
   assert.equal(ls.backoffDelayMs(0, BASE, CAP), 0);
 });
 
-test("backoffExhausted flips only after a full cap-length wait has failed", () => {
-  assert.deepEqual(
-    [1, 2, 3, 4, 5, 6, 7].map((n) => ls.backoffExhausted(n, BASE, CAP)),
-    [false, false, false, false, false, true, true]
-  );
-});
-
 test("refreshBlockedReason: null, backoff, terminal", () => {
   const now = 1_000_000;
   assert.equal(ls.refreshBlockedReason(null, now), null);
@@ -57,7 +50,7 @@ test("record lives next to credentials.json and starts empty", () => {
   assert.equal(s.updated_by, "signin");
 });
 
-test("failures advance the backoff and the sixth failure at the cap is terminal", () => {
+test("failures advance the backoff and keep retrying at the cap; an outage is never terminal", () => {
   ls.clearLicenseStatus();
   const t0 = 10_000_000;
   let s;
@@ -80,12 +73,22 @@ test("failures advance the backoff and the sixth failure at the cap is terminal"
   assert.equal(ls.refreshBlockedReason(s, t0 + 5 + CAP - 1), "backoff");
   assert.equal(ls.refreshBlockedReason(s, t0 + 5 + CAP), null);
 
-  s = ls.recordRefreshFailure({ source: "daemon", now: t0 + 6, baseMs: BASE, capMs: CAP });
-  assert.equal(s.consecutive_failures, 6);
-  assert.equal(s.terminal.reason, ls.TERMINAL_REASONS.BACKOFF_EXHAUSTED);
-  assert.equal(s.next_retry_at, null);
-  assert.equal(s.last_outcome, "terminal");
-  assert.equal(ls.refreshBlockedReason(s, t0 + 7), "terminal");
+  for (let i = 6; i <= 20; i++) {
+    s = ls.recordRefreshFailure({ source: "daemon", now: t0 + i, baseMs: BASE, capMs: CAP });
+    assert.equal(s.terminal, null, `failure ${i} must not be terminal`);
+    assert.equal(s.next_retry_at, t0 + i + CAP, "retries continue at the cap");
+  }
+  assert.equal(ls.refreshBlockedReason(s, t0 + 20 + CAP), null, "recovers on its own");
+});
+
+test("a backoff_exhausted record left by an older version does not block refresh", () => {
+  const legacy = {
+    terminal: { reason: ls.TERMINAL_REASONS.BACKOFF_EXHAUSTED, at: 1 },
+    next_retry_at: null,
+  };
+  assert.equal(ls.refreshBlockedReason(legacy, 2), null);
+  const revoked = { terminal: { reason: ls.TERMINAL_REASONS.REVOKED, at: 1 } };
+  assert.equal(ls.refreshBlockedReason(revoked, 2), "terminal");
 });
 
 test("success resets the counters and clears terminal", () => {

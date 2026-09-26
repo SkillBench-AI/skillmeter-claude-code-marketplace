@@ -165,20 +165,23 @@ test("a revoked license (402) removes its organization's unsent data", async () 
   assert.equal(f.queuedEventLogs().length, 0);
 });
 
-for (const [status, expectBanner] of [[503, false], [410, true]]) {
-  test(`SessionStart asks to sign in only when that is what fixes it (refresh ${status})`, async () => {
+for (const [label, record, expectBanner] of [
+  ["waiting out an outage", "recordRefreshFailure({ source: 'test', status: 503, message: 'HTTP 503' })", false],
+  ["refresh chain ended (410)", "recordTerminal({ source: 'test', reason: ls.TERMINAL_REASONS.REACTIVATION_REQUIRED, status: 410 })", true],
+  ["license revoked (402)", "recordTerminal({ source: 'test', reason: ls.TERMINAL_REASONS.REVOKED, status: 402 })", true],
+]) {
+  test(`SessionStart asks to sign in only when that is what fixes it: ${label}`, () => {
     const f = fixture();
-    const { server, url } = await refreshServer(status);
-    let result;
-    try {
-      result = await runAsync(path.join(SCRIPTS, "session_start.js"), [], {
-        env: { ...f.env, SKILLMETER_ACTIVATE_URL: url },
-        cwd: f.repo,
-        input: JSON.stringify({ session_id: "decoupled-ss", cwd: f.repo, source: "startup" }),
-      });
-    } finally {
-      server.close();
-    }
+    const seeded = runNode("-e", [
+      `const ls = require(${JSON.stringify(path.join(SCRIPTS, "lib/license-status.js"))}); ls.${record};`,
+    ], { env: f.env });
+    assert.equal(seeded.status, 0, seeded.stderr);
+
+    const result = runNode(path.join(SCRIPTS, "session_start.js"), [], {
+      cwd: f.repo,
+      env: f.env,
+      input: JSON.stringify({ session_id: "decoupled-ss", cwd: f.repo, source: "startup" }),
+    });
     assert.equal(result.status, 0, result.stderr);
     const message = JSON.parse(result.stdout).systemMessage || "";
     if (expectBanner) assert.match(message, /ACTION REQUIRED/);

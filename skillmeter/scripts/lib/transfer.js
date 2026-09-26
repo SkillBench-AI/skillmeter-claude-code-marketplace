@@ -156,7 +156,7 @@ function idempotencyKey(repoKey, body) {
 /**
  * Upload an event log file to the backend via fetch + gzip.
  * On success (2xx), renames the file to `.sent`; on failure, leaves it for
- * the next SessionStart's retryFailedLogs sweep.
+ * the next drain.
  * @returns {Promise<void>}
  */
 // Returns { ok } on success, { ok:false, error } on a real transmission failure
@@ -196,10 +196,9 @@ async function transferEventLog(logFile, timeoutMs = EVENT_TIMEOUT) {
   }
 
   // A valid (non-expired) license JWT is REQUIRED — the backend does not accept
-  // unauthenticated telemetry. No valid token → leave the file for retry (the
-  // drain batch calls ensureFreshLicense first, and SessionStart / the monitor
-  // retry once a fresh license is available). Uncached read so the long-lived
-  // daemon sees a token refreshed by another process.
+  // unauthenticated telemetry. No valid token → leave the file for retry; the
+  // drain refreshes before each batch, the one place refresh happens. Uncached
+  // read so the long-lived daemon sees a token refreshed by another process.
   const token = credstore.getLicenseTokenUncached();
   if (!token || isJwtExpired(token)) {
     console.error(`[skillmeter] Event log: no valid license JWT — leaving for retry`);
@@ -259,6 +258,7 @@ async function transferEventLog(logFile, timeoutMs = EVENT_TIMEOUT) {
       return { ok: true };
     }
     console.error(`[skillmeter] Event log transfer failed: HTTP ${res.status}`);
+    if (res.status === 401) return { ok: false, unauthorized: true, error: "HTTP 401" };
     return { ok: false, error: `HTTP ${res.status}` };
   } catch (err) {
     console.error(`[skillmeter] Event log transfer error: ${err.message}`);
@@ -268,7 +268,7 @@ async function transferEventLog(logFile, timeoutMs = EVENT_TIMEOUT) {
 
 /**
  * Seal the active event log into a retryable batch. This is a local durable
- * queue transition only; network upload is handled by retryFailedLogs().
+ * queue transition only; network upload is handled by drainFailedLogs().
  * @returns {string|null} sealed file path when a log was rotated.
  */
 function sealEventLog(repository) {
@@ -718,6 +718,13 @@ async function uploadDeltaChunk(bodyPath, deviceId, timeoutMs = TRANSCRIPT_TIMEO
       removeChunk();
       return { ok: true };
     }
+    if (res.status === 401) {
+      // The token, not the chunk: no retry budget is spent. The drain refreshes
+      // once and resends.
+      console.error("[skillmeter] Transcript chunk rejected: license not accepted (HTTP 401) — kept for retry");
+      logBackfillChunk(meta, "upload_deferred", { reason: "license_rejected", httpStatus: 401 });
+      return { ok: false, unauthorized: true, error: "HTTP 401" };
+    }
     const budget = noteChunkUploadFailure(
       bodyPath,
       metaPath,
@@ -817,12 +824,13 @@ async function drainDeltaChunks(timeoutMs) {
     console.error(`[skillmeter] Draining ${files.length} transcript chunk(s)`);
     // Best-effort, single-flight refresh once per batch (see drainFailedLogs).
     await ensureFreshLicense(deviceId);
-    const results = await settleWithLimit(
-      files,
+    const upload = (batch) => settleWithLimit(
+      batch,
       DRAIN_CONCURRENCY,
       (file) => uploadDeltaChunk(file, deviceId, timeoutMs),
       () => touchQueueDrainLock(lock)
     );
+    const results = await retryUnauthorizedOnce(files, await upload(files), upload);
     if (backfillEntries.length > 0) {
       const backfillFiles = new Set(
         backfillEntries.map((entry) => entry.file)
@@ -1142,13 +1150,31 @@ async function drainFailedLogs(timeoutMs) {
     // Best-effort, single-flight refresh once per batch so every file in this
     // drain sends with the freshest token. Non-blocking and never throws.
     await ensureFreshLicense(credstore.getDeviceId());
-    const results = await Promise.allSettled(
-      files.map((filePath) => transferEventLog(filePath, timeoutMs))
+    const upload = (batch) => Promise.allSettled(
+      batch.map((filePath) => transferEventLog(filePath, timeoutMs))
     );
+    const results = await retryUnauthorizedOnce(files, await upload(files), upload);
     return tally(results);
   } finally {
     releaseQueueDrainLock(lock);
   }
+}
+
+// A 401 means the server rejected the token even though it looked fresh here
+// (a clock that runs ahead, a key rotation). Refresh once, bypassing the local
+// expiry check, and resend only the rejected files. Results keep input order.
+async function retryUnauthorizedOnce(files, results, upload) {
+  const rejected = files
+    .map((file, index) => ({ file, index }))
+    .filter(({ index }) => results[index]?.value?.unauthorized);
+  if (rejected.length === 0) return results;
+  const before = credstore.getLicenseTokenUncached();
+  const after = await ensureFreshLicense(credstore.getDeviceId(), { force: true });
+  if (!after || after === before) return results;
+  const retried = await upload(rejected.map(({ file }) => file));
+  const merged = results.slice();
+  rejected.forEach(({ index }, i) => { merged[index] = retried[i]; });
+  return merged;
 }
 
 // Drain both queues once. Record an upload-result sentinel so the next
@@ -1168,25 +1194,6 @@ async function drainQueuesOnce(timeoutMs) {
     credstore.writeUploadResult({ error: errors[0] });
   }
   return { events, transcripts, errors };
-}
-
-/**
- * Retry failed event log transfers. Matches files under LOG_DIR named
- * `events.jsonl.<timestamp>` (the pre-`.sent` state) and fires
- * transferEventLog for each.
- */
-function retryFailedLogs() {
-  void drainFailedLogs();
-}
-
-/**
- * Retry failed transcript uploads. Scans the delta chunk queue and fires an
- * upload for every chunk left behind by a previous session. Each upload is
- * fire-and-forget; on 2xx the chunk is removed, otherwise it stays for the
- * next session.
- */
-function retryFailedTranscripts() {
-  void drainDeltaChunks();
 }
 
 /**
@@ -1307,8 +1314,6 @@ module.exports = {
   drainDeltaChunks,
   drainQueuesOnce,
   queuedFileCount,
-  retryFailedLogs,
-  retryFailedTranscripts,
   cleanupStaleFiles,
   purgeRepositoryQueue,
   purgeOrganizationQueues,

@@ -228,7 +228,7 @@ checked against it and against the VS Code extension's auth service (A6).
 | Decision | Issue |
 | --- | --- |
 | 1 | A5 (server TTL), with a linked ADR in `skillmeter-license-activation` |
-| 2 | A2 (background refresh) |
+| 2 | A2 (background refresh); superseded, see the 2026-09-27 single-refresh-path amendment |
 | 3 | A3 (recording while the token is expired); implemented, see the 2026-09-27 amendment |
 | 4 | A4 (recovery without a stored token) |
 | 5 | A6 (Codex plugin and VS Code extension) |
@@ -412,3 +412,32 @@ The removals decision 3 lists are in place:
 The SessionStart sign-in banner now appears when the user is signed out or the
 refresh chain needs a new sign-in (401, 410 or 402). A license waiting out an
 outage keeps recording, so it no longer shows that telemetry is off.
+
+## Amendment 2026-09-27: one refresh path
+
+**Status:** Accepted. Supersedes decision 2 and the Stop-triggered recovery
+amendment.
+
+Decision 2 and the Stop recovery existed so that no hook would meet an expired
+token: capture was gated on freshness, so every gap lost data. With decision 3
+implemented, capture no longer depends on the token, and refreshing ahead of
+need buys nothing. The license is now refreshed in one place: the upload drain,
+just before it sends a batch, and once more with the local expiry check
+bypassed when the server answers 401. Removed:
+
+- the retry-daemon's per-sweep refresh and its look-ahead window; the daemon
+  only drains;
+- the SessionStart refresh; SessionStart now spawns a detached drain, so it
+  never waits on the network;
+- the Stop-triggered recovery worker (`lib/hook-license-recovery.js`);
+- the `backoff_exhausted` terminal state. A transient failure keeps retrying
+  at the 30-minute cap, so an outage recovers without a new session. A record
+  written by an older version is ignored.
+
+Kept: the single-flight refresh lock and cooldown, backoff, the 401/410
+(re-activation) and 402 (revoked) terminal states, and SessionStart clearing a
+terminal state to give a new session one attempt. The sign-in banner decides
+from the state the session found, before that clear.
+
+An upload rejected with 401 is not charged against the chunk's retry budget:
+the token, not the chunk, was refused.
