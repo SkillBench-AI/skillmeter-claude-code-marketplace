@@ -42,10 +42,10 @@ writeJson(path.join(STATE_DIR, "credentials.json"), {
 });
 writeTelemetryPolicy(STATE_DIR, { orgs: { [ORG]: true } });
 
-const backfillState = require("../scripts/lib/backfill-state");
-const store = require("../scripts/lib/telemetry-store");
-const transfer = require("../scripts/lib/transfer");
-const { REPOSITORIES_LOG_DIR } = require("../scripts/lib/paths");
+const backfillState = require("../skillmeter/scripts/lib/backfill-state");
+const store = require("../skillmeter/scripts/lib/telemetry-store");
+const transfer = require("../skillmeter/scripts/lib/transfer");
+const { REPOSITORIES_LOG_DIR } = require("../skillmeter/scripts/lib/paths");
 
 const realFetch = global.fetch;
 process.on("exit", () => { global.fetch = realFetch; });
