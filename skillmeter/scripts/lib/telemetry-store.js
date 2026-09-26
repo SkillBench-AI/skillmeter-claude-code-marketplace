@@ -155,6 +155,8 @@ function isWellFormedPolicy(parsed) {
     for (const record of Object.values(records)) {
       if (!isPlainObject(record)) return false;
       if (record.enabled !== undefined && typeof record.enabled !== "boolean") return false;
+      if (record.revocations !== undefined &&
+          !(Number.isSafeInteger(record.revocations) && record.revocations >= 0)) return false;
     }
   }
   return true;
@@ -306,6 +308,7 @@ function setOrganizationConsent(org, enabled) {
       consent_version: CONSENT_VERSION,
       decided_at: Date.now(),
       source: "user",
+      revocations: nextRevocations(policy.organizations[normalized], enabled),
     };
   }).policy.organizations[normalized];
 }
@@ -329,6 +332,7 @@ function setRepositoryOverride(repoKey, enabled, expectedRevision = null) {
       consent_version: CONSENT_VERSION,
       decided_at: Date.now(),
       source: "user",
+      revocations: nextRevocations(policy.repositories[normalized], enabled),
     };
   }, expectedRevision).policy.repositories[normalized];
 }
@@ -359,6 +363,7 @@ function authorizeOrganizationRepositories(
       consent_version: CONSENT_VERSION,
       decided_at: decidedAt,
       source: "user",
+      revocations: nextRevocations(policy.organizations[normalizedOrg], true),
     };
     for (const repoKey of normalizedKeys) {
       policy.repositories[repoKey] = {
@@ -366,6 +371,7 @@ function authorizeOrganizationRepositories(
         consent_version: CONSENT_VERSION,
         decided_at: decidedAt,
         source: "user",
+        revocations: nextRevocations(policy.repositories[repoKey], enabled),
       };
     }
   }, expectedRevision).policy;
@@ -414,6 +420,18 @@ function acknowledgeConsentStatement(expectedRevision = null) {
   return { revision: policy.revision, acknowledged };
 }
 
+// ADR 004 decisions 3 and 6: count OFF writes per record so a client that did
+// not observe an OFF/ON cycle can still tell it happened. Never lowered.
+function revocationCount(record) {
+  return Number.isSafeInteger(record?.revocations) && record.revocations >= 0
+    ? record.revocations
+    : 0;
+}
+
+function nextRevocations(previous, enabled) {
+  return revocationCount(previous) + (enabled ? 0 : 1);
+}
+
 function getPolicyRevision() {
   return readPolicy().revision;
 }
@@ -422,6 +440,7 @@ module.exports = {
   SCHEMA_VERSION,
   CONSENT_VERSION,
   CONSENT_STATEMENT,
+  revocationCount,
   TELEMETRY_POLICY_FILE,
   OBSERVED_FILE,
   normalizeOrg,

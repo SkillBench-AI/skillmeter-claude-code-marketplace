@@ -39,15 +39,15 @@ writeTelemetryPolicy(STATE_DIR, {
   repositories: { "github.com/skillbench-ai/legacy": true },
 });
 
-const store = require("../scripts/lib/telemetry-store");
-const transfer = require("../scripts/lib/transfer");
-const repositoryQueue = require("../scripts/lib/repository-queue");
-const auditQueue = require("../scripts/lib/organization-audit-queue");
-const { resolveTelemetryGate } = require("../scripts/lib/telemetry-policy");
+const store = require("../skillmeter/scripts/lib/telemetry-store");
+const transfer = require("../skillmeter/scripts/lib/transfer");
+const repositoryQueue = require("../skillmeter/scripts/lib/repository-queue");
+const auditQueue = require("../skillmeter/scripts/lib/organization-audit-queue");
+const { resolveTelemetryGate } = require("../skillmeter/scripts/lib/telemetry-policy");
 
 const REPOSITORY_TELEMETRY_SCRIPT = path.resolve(
   __dirname,
-  "../scripts/repository_telemetry.js"
+  "../skillmeter/scripts/repository_telemetry.js"
 );
 const POLICY_FILE = path.join(STATE_DIR, "telemetry-policy.json");
 
@@ -315,4 +315,87 @@ test("the acknowledge command stamps legacy choices and rejects a stale revision
   assert.equal(result.acknowledged, 2);
   assert.equal(result.stale, false);
   assert.equal(JSON.parse(runNode(REPOSITORY_TELEMETRY_SCRIPT, ["list"]).stdout).acknowledgementRequired, false);
+});
+
+// ADR 004 decision 6: the revocations counter replaces the timestamp hold.
+function editRepositoryRecord(repoKey, change) {
+  const policy = readJson(POLICY_FILE);
+  policy.repositories[repoKey] = { ...policy.repositories[repoKey], ...change };
+  policy.revision++;
+  writeJson(POLICY_FILE, policy);
+}
+
+function queuedContext(repoKey) {
+  return repositoryQueue.listRepositoryQueueContexts().find((c) => c.repoKey === repoKey);
+}
+
+function sealChunk(repoKey, name) {
+  return transfer.sealDeltaChunk(
+    `${name}.jsonl`,
+    [JSON.stringify({ uuid: `${name}-1` })],
+    { seq: 1, reset: false, resetBaselineSeq: null },
+    { repoKey, org: "skillbench-ai" }
+  );
+}
+
+test("writers count OFF decisions and never lower the counter", () => {
+  const key = "github.com/skillbench-ai/counter";
+  assert.equal(store.setRepositoryOverride(key, true).revocations, 0);
+  assert.equal(store.setRepositoryOverride(key, false).revocations, 1);
+  assert.equal(store.setRepositoryOverride(key, true).revocations, 1);
+  assert.equal(store.setRepositoryOverride(key, false).revocations, 2);
+  store.setOrganizationConsent("skillbench-ai", true);
+  const before = store.revocationCount(readJson(POLICY_FILE).organizations["skillbench-ai"]);
+  assert.equal(store.setOrganizationConsent("skillbench-ai", false).revocations, before + 1);
+  assert.equal(store.setOrganizationConsent("skillbench-ai", true).revocations, before + 1);
+});
+
+test("an OFF/ON cycle this client never observed purges earlier queued data", () => {
+  const key = "github.com/skillbench-ai/unobserved-cycle";
+  store.setOrganizationConsent("skillbench-ai", true);
+  store.setRepositoryOverride(key, true);
+  const body = sealChunk(key, "cycle");
+  assert.equal(repositoryQueue.queueDisposition(queuedContext(key)), "send");
+
+  // Another client wrote OFF then ON while this one was not running.
+  const record = readJson(POLICY_FILE).repositories[key];
+  editRepositoryRecord(key, { enabled: true, decided_at: Date.now() + 1000, revocations: record.revocations + 1 });
+  assert.equal(repositoryQueue.queueDisposition(queuedContext(key)), "delete");
+  transfer.purgeDisallowedQueues();
+  assert.equal(fs.existsSync(body), false);
+
+  // The new counter is recorded, so capture after the cycle delivers.
+  assert.equal(repositoryQueue.queueDisposition(queuedContext(key)), "send");
+  const later = sealChunk(key, "after-cycle");
+  assert.equal(fs.existsSync(later), true);
+  assert.equal(repositoryQueue.queueDisposition(queuedContext(key)), "send");
+});
+
+test("a timestamp change with an equal counter delivers; a lower counter holds", () => {
+  const key = "github.com/skillbench-ai/reaffirmed";
+  store.setOrganizationConsent("skillbench-ai", true);
+  store.setRepositoryOverride(key, false);
+  store.setRepositoryOverride(key, true);
+  const body = sealChunk(key, "reaffirmed");
+  const record = readJson(POLICY_FILE).repositories[key];
+  editRepositoryRecord(key, { decided_at: Date.now() + 5000 });
+  assert.equal(repositoryQueue.queueDisposition(queuedContext(key)), "send");
+  assert.equal(fs.existsSync(body), true);
+
+  editRepositoryRecord(key, { revocations: record.revocations - 1 });
+  assert.equal(repositoryQueue.queueDisposition(queuedContext(key)), "pause");
+  assert.equal(fs.existsSync(body), true);
+});
+
+test("a malformed revocations counter is a malformed policy", () => {
+  const key = "github.com/skillbench-ai/malformed-counter";
+  store.setRepositoryOverride(key, true);
+  const original = fs.readFileSync(POLICY_FILE);
+  try {
+    editRepositoryRecord(key, { revocations: -1 });
+    assert.equal(store.readPolicyState().status, "blocked");
+  } finally {
+    fs.writeFileSync(POLICY_FILE, original);
+  }
+  assert.equal(store.readPolicyState().status, "valid");
 });
