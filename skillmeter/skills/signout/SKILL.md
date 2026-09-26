@@ -7,7 +7,7 @@ allowed-tools: Bash(node *)
 Run the SkillMeter sign-out script:
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/signout.js
+node "${CLAUDE_PLUGIN_ROOT}/scripts/signout.js"
 ```
 
 Report the result to the user.

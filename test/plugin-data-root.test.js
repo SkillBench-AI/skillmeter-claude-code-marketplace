@@ -117,7 +117,9 @@ test("skill commands stay shaped for the Bash(node *) grant", () => {
       checked++;
       assert.match(
         line.trim(),
-        /^node \$\{CLAUDE_PLUGIN_ROOT\}\/scripts\//,
+        // The path may be quoted (it can contain spaces); the command itself
+        // must still start with `node`.
+        /^node "?\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\//,
         `${entry}/SKILL.md must invoke node directly: ${line.trim()}`
       );
     }

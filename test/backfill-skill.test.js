@@ -229,10 +229,10 @@ test("manual backfill skill and expansion hook are registered", () => {
   );
   const hooks = readJson(path.resolve(__dirname, "../skillmeter/hooks/hooks.json"));
   assert.match(skill, /^description:[ \t]*\S/m);
-  assert.match(skill, /backfill\.js status LIFECYCLE_ID/);
+  assert.match(skill, /backfill\.js"? status LIFECYCLE_ID/);
   assert.match(
     skill,
-    /backfill\.js accept LIFECYCLE_ID OFFER_ID REVISION "ORG" ID\.\.\./
+    /backfill\.js"? accept LIFECYCLE_ID OFFER_ID REVISION "ORG" ID\.\.\./
   );
   assert.ok(
     hooks.hooks.UserPromptExpansion.some(

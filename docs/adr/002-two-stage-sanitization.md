@@ -1,7 +1,7 @@
 # Two-Stage Sanitization and Typed PII Placeholders
 
 **Date:** 2026-09-11
-**Status:** Accepted (PR #107, merged 2026-09-11). Amended 2026-09-26 for the remaining directory fields (policy 3.1.2), 2026-09-23 for colliding object keys (policy 3.1.1, PR #121) and 2026-09-11 for path
+**Status:** Accepted (PR #107, merged 2026-09-11). Amended 2026-09-26 for the remaining directory fields (policy 3.1.2, PR #133), 2026-09-23 for colliding object keys (policy 3.1.1, PR #121) and 2026-09-11 for path
 handling, repository identity and the file-name policy; see the
 [amendment](#amendment-2026-09-11-path-handling-repository-identity-and-file-name-policy)
 at the end.
@@ -522,7 +522,7 @@ refresh the pin to the merged commit.
 
 ## Amendment 2026-09-26: hash the remaining directory fields
 
-**Status:** Proposed. Policy `3.1.2`.
+**Status:** Accepted (PR #133). Policy `3.1.2`.
 
 Policy `3.1.2` adds `directory`, `worktree_path` and `scratchpad_dir` to the
 wholesale-hashed directory keys, next to `cwd`, `old_cwd` and `new_cwd`.
