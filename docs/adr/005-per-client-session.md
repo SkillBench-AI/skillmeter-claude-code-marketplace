@@ -90,7 +90,7 @@ window ends, then signs in to Codex.
 | Outcome | Result |
 |---|---|
 | Hydra `invalid_grant`; legacy `/refresh` 401 or 410 | Drop the session; terminal `reactivation_required` |
-| `/activate` 402, or 404 `membership_removed` for the pinned tenant | Drop the session and purge that organization's unsent data (the 402 rule of ADR 001's 2026-09-27 amendment); terminal `revoked` |
+| `/activate` 402, or 404 `workspace_not_found` for the pinned tenant | Drop the session and purge that organization's unsent data (the 402 rule of ADR 001's 2026-09-27 amendment); terminal `revoked` |
 | Network error or 5xx | Transient; the existing backoff. Recording continues (ADR 001 decision 3) |
 
 ### 3. Revocation belongs to Hydra and to the exchange
