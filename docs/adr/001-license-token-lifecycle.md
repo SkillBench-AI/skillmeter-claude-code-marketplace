@@ -404,7 +404,12 @@ The removals decision 3 lists are in place:
   repository purge: backfill consent is separate from repository telemetry,
   and whether sign-out should also withdraw it is left open.
 - A 402 from `/refresh` purges the repository queues of the license's
-  organizations and the organization-audit queue.
+  organizations and the organization-audit queue. It also drops the license
+  token (without setting `signed_out`), so recording stops rather than
+  refilling the queues until the seven-day sweep. The server returns 402 when
+  the organization license is cancelled and when the user leaves or is removed
+  from the workspace, so both stop telemetry at the next refresh. (Amended
+  2026-09-27.)
 - Unsent event logs and transcript chunks older than seven days are deleted.
   The sweep runs at every SessionStart, including when no usable license is
   held, so the bound holds for exactly the devices that can no longer sign in.

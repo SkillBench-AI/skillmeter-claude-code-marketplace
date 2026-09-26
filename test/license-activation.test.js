@@ -190,6 +190,12 @@ test("402 on /refresh is terminal (revoked)", async () => {
   const s = licenseStatus.readLicenseStatus();
   assert.equal(s.terminal.reason, licenseStatus.TERMINAL_REASONS.REVOKED);
   assert.equal(s.terminal.status, 402);
+  // The token is dropped so recording stops, but this is not a sign-out: a
+  // new sign-in into a workspace that still licenses the user resumes.
+  assert.equal(credstore.getLicenseTokenUncached(), null);
+  assert.equal(credstore.isSignedIn(), false);
+  assert.equal(credstore.getSignedOut(), false);
+  assert.ok(credstore.getDeviceId(), "machine identity survives");
 });
 
 // 410 and 401 both mean "this token can never be rotated again". There used

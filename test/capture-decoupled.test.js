@@ -147,7 +147,7 @@ function runAsync(script, args, { env, cwd, input }) {
   });
 }
 
-test("a revoked license (402) removes its organization's unsent data", async () => {
+test("a revoked license (402) removes its organization's unsent data and stops recording", async () => {
   const f = fixture();
   assert.match(f.prompt().stderr, /logged/);
   assert.equal(f.queuedEventLogs().length, 1);
@@ -162,6 +162,11 @@ test("a revoked license (402) removes its organization's unsent data", async () 
   } finally {
     server.close();
   }
+  assert.equal(f.queuedEventLogs().length, 0);
+
+  // Removed from the workspace or the license cancelled: nothing new is
+  // recorded under it, rather than piling up until the 7-day cleanup.
+  f.prompt();
   assert.equal(f.queuedEventLogs().length, 0);
 });
 

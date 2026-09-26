@@ -122,6 +122,21 @@ function commitRefresh(jwt, expected) {
   });
 }
 
+// 402: the organization no longer licenses this user (license cancelled, or
+// the user left or was removed from the workspace). Drop the token so
+// isSignedIn() turns false and recording stops at its one gate. Unlike
+// signOut() this sets no signed_out flag: nothing was chosen, and a new
+// sign-in into a workspace that still licenses the user simply resumes.
+// onCommit runs under the lock, so it must be synchronous and must not
+// acquire the credential lock again.
+function dropRevokedLicense(expected, onCommit) {
+  return mutateStore((store) => {
+    if (!snapshotMatches(store, expected)) return false;
+    delete store.license_jwt;
+    store.auth_generation = crypto.randomUUID();
+  }, onCommit);
+}
+
 // Serialize a refresh status update against sign-in/sign-out too. fn must be
 // synchronous and must not acquire the credential lock again.
 function withRecoveryCurrent(expected, fn) {
@@ -348,6 +363,7 @@ module.exports = {
   recoverySnapshot,
   isRecoveryCurrent,
   commitRefresh,
+  dropRevokedLicense,
   withRecoveryCurrent,
   getDeviceId,
   getOrCreateHashSalt,

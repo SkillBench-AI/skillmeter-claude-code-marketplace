@@ -1,6 +1,7 @@
 /**
  * License refresh and retry orchestration, following ADR001.
- * Refresh 401/410 requires interactive sign-in; 402 marks the license revoked.
+ * Refresh 401/410 requires interactive sign-in; 402 marks the license revoked
+ * and drops the token, so recording stops until a new sign-in.
  * Other failures retain the token and use the shared status record for backoff.
  * SessionStart or explicit sign-in can reset terminal retry state.
  * No background path starts a new broker device grant.
@@ -174,8 +175,9 @@ function acquireRefreshLock(staleLockPresent, cooldownMs = LICENSE_REFRESH_COOLD
   return tryCreate() !== "exists";
 }
 
-// 402: the organization license was cancelled. What was recorded under it
-// and not yet sent is removed (ADR 001, decision 3). Runs outside the
+// 402: the organization no longer licenses this user (license cancelled, or
+// the user left or was removed from the workspace). What was recorded under
+// it and not yet sent is removed (ADR 001, decision 3). Runs outside the
 // credential lock because the purge helpers may take it.
 function purgeRevokedLicenseData(token) {
   try {
@@ -210,19 +212,21 @@ async function refreshLicense(deviceId, { source = "unknown", force = false } = 
   if (credstore.getSignedOut()) return null;
 
   const rotation = await refreshExpiredJwt(current, deviceId, expected);
+  if (rotation.outcome === "revoked") {
+    const dropped = credstore.dropRevokedLicense(expected, () =>
+      licenseStatus.recordTerminal({ source, reason: TERMINAL_REASONS.REVOKED, status: 402 })
+    );
+    if (dropped === true) purgeRevokedLicenseData(current);
+    return null;
+  }
   const completed = rotation.outcome === "rotated" ? { ...expected, token: rotation.token } : expected;
   let result = null;
-  let revoked = false;
   credstore.withRecoveryCurrent(completed, () => {
     switch (rotation.outcome) {
       case "rotated":
         licenseStatus.recordRefreshSuccess({ source, outcome: "rotated" });
         result = rotation.token;
         return;
-      case "revoked":
-        licenseStatus.recordTerminal({ source, reason: TERMINAL_REASONS.REVOKED, status: 402 });
-        revoked = true;
-        return null;
       case "transient":
         licenseStatus.recordRefreshFailure({
           source,
@@ -246,7 +250,6 @@ async function refreshLicense(deviceId, { source = "unknown", force = false } = 
       message: "licence can no longer be refreshed — run /skillmeter:signin",
     });
   });
-  if (revoked) purgeRevokedLicenseData(current);
   return result;
 }
 
