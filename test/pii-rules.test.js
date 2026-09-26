@@ -2,15 +2,15 @@
 
 // Stage-1 PII policy (3.0.0, ADR 002): typed placeholders, idempotency,
 // identifier-only key heuristic, path features, per-record reporting.
-// Run: node --test skillmeter/test/pii-rules.test.js
+// Run: node --test test/pii-rules.test.js
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
 
-const s = require("../scripts/lib/sanitize");
-const rules = require("../scripts/lib/rules");
+const s = require("../skillmeter/scripts/lib/sanitize");
+const rules = require("../skillmeter/scripts/lib/rules");
 
 const SALT = "deadbeefcafe";
 

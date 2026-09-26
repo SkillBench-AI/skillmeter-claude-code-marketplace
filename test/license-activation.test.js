@@ -17,10 +17,10 @@ setTestEnv("SKILLMETER_RETRY_DAEMON_INTERVAL_MS", "1000");
 setTestEnv("SKILLMETER_ACTIVATE_URL", "https://activation.test/activate");
 setTestEnv("SKILLMETER_BACKEND_URL", undefined);
 
-const credstore = require("../scripts/credstore");
-const licenseStatus = require("../scripts/lib/license-status");
-const { refreshLicense, ensureFreshLicense, _acquireRefreshLock: acquireRefreshLock } = require("../scripts/lib/license-activation");
-const { LOG_DIR } = require("../scripts/lib/paths");
+const credstore = require("../skillmeter/scripts/credstore");
+const licenseStatus = require("../skillmeter/scripts/lib/license-status");
+const { refreshLicense, ensureFreshLicense, _acquireRefreshLock: acquireRefreshLock } = require("../skillmeter/scripts/lib/license-activation");
+const { LOG_DIR } = require("../skillmeter/scripts/lib/paths");
 
 const DEVICE_ID = "11111111-2222-4333-8444-555555555555";
 const LOCK_FILE = path.join(LOG_DIR, ".license-refresh.lock");

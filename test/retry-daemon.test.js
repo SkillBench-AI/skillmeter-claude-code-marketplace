@@ -2,7 +2,7 @@
 
 // Retry daemon scheduling: the drain backoff stays adaptive while the license
 // refresh check runs every tick and respects the status record (ADR 001, D2).
-// Run: node --test skillmeter/test/retry-daemon.test.js
+// Run: node --test test/retry-daemon.test.js
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
@@ -16,8 +16,8 @@ setTestEnv("SKILLMETER_RETRY_DAEMON_INTERVAL_MS", "120000");
 setTestEnv("SKILLMETER_BACKEND_URL", undefined);
 setTestEnv("SKILLMETER_ACTIVATE_URL", "https://activation.test/activate");
 
-const daemon = require("../scripts/monitors/retry_daemon");
-const licenseStatus = require("../scripts/lib/license-status");
+const daemon = require("../skillmeter/scripts/monitors/retry_daemon");
+const licenseStatus = require("../skillmeter/scripts/lib/license-status");
 
 test("nextDrainInterval doubles on no progress, caps, and resets on progress", () => {
   const base = 120_000;
@@ -80,7 +80,7 @@ test("maybeRefreshLicense clears a stale terminal record once the token is valid
 
 test("maybeRefreshLicense renews a token that hooks still accept but that expires within one sweep", async () => {
   const fs = require("fs");
-  const { LOG_DIR } = require("../scripts/lib/paths");
+  const { LOG_DIR } = require("../skillmeter/scripts/lib/paths");
   try { fs.unlinkSync(path.join(LOG_DIR, ".license-refresh.lock")); } catch {}
   licenseStatus.clearLicenseStatus({ source: "test" });
   // Expires in 6 minutes: outside the hooks' 5-minute skew, inside the daemon's

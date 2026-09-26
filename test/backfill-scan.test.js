@@ -6,7 +6,7 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 
 const { makeTempDir, writeFile } = require("../testing/helpers");
-const { scanHistoricalSessions } = require("../scripts/lib/backfill-scan");
+const { scanHistoricalSessions } = require("../skillmeter/scripts/lib/backfill-scan");
 
 const TENANT_SESSION = "11111111-1111-4111-8111-111111111111.jsonl";
 const TENANT_SESSION_2 = "22222222-2222-4222-8222-222222222222.jsonl";

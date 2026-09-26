@@ -6,7 +6,7 @@ const fs = require("fs");
 const path = require("path");
 const { makeTempDir, writeJson, writeFile, writeTelemetryPolicy, makeJwt, runNode } = require("../testing/helpers");
 
-const scripts = path.resolve(__dirname, "../scripts");
+const scripts = path.resolve(__dirname, "../skillmeter/scripts");
 
 // Exercise real hook/refresh/queue code in separate processes. Only the clock,
 // network are substituted; most cases also stub launch. No monitor or real token is used.

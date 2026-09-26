@@ -18,7 +18,7 @@ const {
 const DATA_DIR = makeTempDir("skm-backfill-delivery-");
 setTestEnv("CLAUDE_PLUGIN_DATA", DATA_DIR);
 
-const backfillState = require("../scripts/lib/backfill-state");
+const backfillState = require("../skillmeter/scripts/lib/backfill-state");
 const {
   BACKFILL_RESULT_FILE,
   announceBackfillFailure,
@@ -28,7 +28,7 @@ const {
   formatBackfillNotice,
   settleBackfillDelivery,
   takeBackfillNotice,
-} = require("../scripts/lib/backfill-delivery");
+} = require("../skillmeter/scripts/lib/backfill-delivery");
 
 const OFFER = "offer-current";
 const CHUNKS = path.join(
@@ -238,7 +238,7 @@ test("FileChanged hook announces a finished import once, with a desktop notifica
     setAsideChunks: 0,
     ts: Date.now(),
   });
-  const script = path.resolve(__dirname, "../scripts/on_backfill_result.js");
+  const script = path.resolve(__dirname, "../skillmeter/scripts/on_backfill_result.js");
 
   const first = runNode(script, [], { env });
   assert.equal(first.status, 0, first.stderr);
@@ -271,7 +271,7 @@ test("SessionStart watches the sentinel and announces an import that finished of
     updated_at: Date.now(),
   });
   const cwd = makeTempDir("skm-backfill-hook-cwd-");
-  const script = path.resolve(__dirname, "../scripts/session_start.js");
+  const script = path.resolve(__dirname, "../skillmeter/scripts/session_start.js");
   const start = () => runNode(script, [], {
     cwd,
     env,

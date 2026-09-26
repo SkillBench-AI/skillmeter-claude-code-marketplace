@@ -34,13 +34,13 @@ writeJson(path.join(STATE_DIR, "credentials.json"), {
   }),
 });
 
-const backfillState = require("../scripts/lib/backfill-state");
-const { prepareHistoricalRecords } = require("../scripts/lib/backfill-snapshot");
+const backfillState = require("../skillmeter/scripts/lib/backfill-state");
+const { prepareHistoricalRecords } = require("../skillmeter/scripts/lib/backfill-snapshot");
 const {
   BACKFILL_RESULT_FILE,
   settleBackfillDelivery,
-} = require("../scripts/lib/backfill-delivery");
-const transfer = require("../scripts/lib/transfer");
+} = require("../skillmeter/scripts/lib/backfill-delivery");
+const transfer = require("../skillmeter/scripts/lib/transfer");
 
 const REPOSITORY = {
   repoKey: "github.com/skillbench-ai/drain",

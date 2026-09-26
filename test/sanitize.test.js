@@ -1,7 +1,7 @@
 "use strict";
 
 // Unit coverage for the unified secret/PII sanitizer.
-// Run: node --test skillmeter/test/sanitize.test.js
+// Run: node --test test/sanitize.test.js
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
@@ -9,8 +9,8 @@ const os = require("os");
 const fs = require("fs");
 const path = require("path");
 
-const s = require("../scripts/lib/sanitize");
-const { RULES } = require("../scripts/lib/rules");
+const s = require("../skillmeter/scripts/lib/sanitize");
+const { RULES } = require("../skillmeter/scripts/lib/rules");
 
 const SALT = "deadbeefcafe";
 

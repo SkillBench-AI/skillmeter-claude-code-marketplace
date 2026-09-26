@@ -1,4 +1,4 @@
-// Run: node --test skillmeter/test/chunk-retry.test.js
+// Run: node --test test/chunk-retry.test.js
 //
 // Pure-core coverage for the per-chunk upload retry budget: the thing that
 // stops a chunk the backend rejects every time from being re-uploaded forever.
@@ -19,7 +19,7 @@ const {
   quarantinePathFor,
   recordUploadFailure,
   retryDelayMs,
-} = require("../scripts/lib/chunk-retry");
+} = require("../skillmeter/scripts/lib/chunk-retry");
 
 // ---- retryDelayMs ----------------------------------------------------------
 test("retryDelayMs: doubles per attempt from the base, capped", () => {

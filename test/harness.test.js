@@ -17,8 +17,8 @@ const {
   detectHarness,
   sizeBucket,
   HARNESS_SCHEMA_VERSION,
-} = require("../scripts/harness");
-const sanitizer = require("../scripts/lib/sanitize");
+} = require("../skillmeter/scripts/harness");
+const sanitizer = require("../skillmeter/scripts/lib/sanitize");
 
 // --- helpers ---------------------------------------------------------------
 
