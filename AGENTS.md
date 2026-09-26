@@ -58,18 +58,25 @@ concise English for readers who do not know the team's internal history.
 ## Release notes
 
 Release notes are public. They say what changed for the user; the PR holds the
-rest. Read the latest published release before writing one.
+rest. Read the latest published release before writing one;
+[0.38.0](https://github.com/SkillBench-AI/skillmeter-claude-code-marketplace/releases/tag/v0.38.0)
+is the model for length and tone.
 
 - Title `SkillMeter X.Y.Z`, then `### What changed`, `### After updating`,
   `### Known limitations`, and a final `Details: #PR, #PR` line.
-- **What changed**: the user-visible outcome, one sentence per bullet, at most
-  three bullets. No retry counts, line counts, algorithms or internal names.
+- **What changed**: the user-visible outcome, at most three bullets, one change
+  each. Each bullet is one short sentence, about 20 words or fewer, in the
+  present tense. No semicolons, no second clause after a colon, no "and"
+  joining two changes. No retry counts, line counts, algorithms, file or
+  module names, policy or schema versions, or ADR references.
 - **After updating**: always `1. claude plugin update skillmeter@skillbench`
   and `2. Quit and reopen Claude Code` (hooks and monitors load per session).
   Add a sign-in step only when the release requires one. Do not add sentences
   about what is not needed.
-- **Known limitations**: only what this release adds or changes. Otherwise
-  `Unchanged from X.Y.Z.`, naming the release that lists them.
+- **Known limitations**: only what this release adds or changes, under the
+  same sentence rule, each saying what the user will see. End with
+  `Otherwise unchanged from X.Y.Z.`, or use only `Unchanged from X.Y.Z.`,
+  naming the release that lists them.
 - **Details**: PR numbers only. ADRs and privacy documents are reachable from
   the PRs.
 - Cut the release on the commit that bumps `skillmeter/.claude-plugin/plugin.json`,
