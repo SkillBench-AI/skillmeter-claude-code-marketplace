@@ -285,10 +285,10 @@ function getRemoteUrlsForRepo(repoRoot) {
  * outside that — including non-git directories and non-GitHub remotes — is
  * blocked.
  *
- * Result always contains `allowed` (boolean) and `classification` (string);
- * other fields (`scope`, `repoRoot`, `remoteOrg`) are included when
- * meaningful so callers / downstream logs have enough context to audit
- * decisions after the fact.
+ * Result always contains `allowed` (boolean), `scope` and `classification`
+ * (strings); other fields (`repoRoot`, `remoteOrg`, `repoKey`, `repoName`)
+ * are included when meaningful so callers / downstream logs have enough
+ * context to audit decisions after the fact.
  */
 function getRepoScopeDecision(cwd) {
   // Validated org(s) from the license JWT (already normalized to lowercase).
