@@ -2,7 +2,7 @@
 
 // Representative payloads based on the official Claude Code hooks reference:
 // https://code.claude.com/docs/en/hooks
-// Verified 2026-07-26. Keep the input shape aligned with the documented event
+// Verified 2026-09-26. Keep the input shape aligned with the documented event
 // schemas; expected contains only the fields SkillMeter intentionally records.
 
 const common = {
@@ -114,6 +114,32 @@ const hookPayloadFixtures = [
     expected: {
       old_cwd: "/Users/example/project",
       new_cwd: "/Users/example/project/src",
+    },
+  },
+  {
+    event: "DirectoryAdded",
+    input: {
+      ...common,
+      hook_event_name: "DirectoryAdded",
+      directory: "/Users/example/other-repo",
+      source: "slash_command",
+    },
+    expected: {
+      directory: "/Users/example/other-repo",
+      source: "slash_command",
+    },
+  },
+  {
+    event: "PostModelSwitch",
+    input: {
+      ...common,
+      hook_event_name: "PostModelSwitch",
+      from_model: "claude-sonnet-5",
+      to_model: "claude-opus-5-5",
+    },
+    expected: {
+      from_model: "claude-sonnet-5",
+      to_model: "claude-opus-5-5",
     },
   },
   {
