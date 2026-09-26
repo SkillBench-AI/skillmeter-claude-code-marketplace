@@ -68,7 +68,7 @@ function effectiveLine() {
     : null;
   const gate = resolveTelemetryGate({
     globalDisabled: telemetryStore.getGlobalDisabled(),
-    hasValidLicense: credstore.hasValidLicense(),
+    signedIn: credstore.isSignedIn(),
     repoOrgOwned: repoScopeDecision.allowed,
     orgConsent,
     projectOptIn: repoScopeDecision.repoKey

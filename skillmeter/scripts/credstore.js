@@ -253,6 +253,14 @@ function isLicenseTokenExpired(token, skewSeconds = LICENSE_EXPIRY_SKEW_SECONDS)
 // token just refreshed by this process (or another terminal) is observed — the
 // canonical "am I signed in" check, replacing inlined
 // `t && !isLicenseTokenExpired(t)` at call sites.
+// Signed in: a license is held and the user has not signed out. Freshness is
+// not part of it. Capture keys off this; transmission separately requires an
+// unexpired token (ADR 001, decision 3), so an expired or unrefreshable token
+// never drops what the user already chose to record.
+function isSignedIn() {
+  return !!getLicenseToken();
+}
+
 function hasValidLicense() {
   const t = getLicenseTokenUncached();
   return !!t && !isLicenseTokenExpired(t);
@@ -344,6 +352,7 @@ function getAllowedGitHubOrgs() {
 }
 
 module.exports = {
+  isSignedIn,
   recoverySnapshot,
   isRecoveryCurrent,
   commitRefresh,

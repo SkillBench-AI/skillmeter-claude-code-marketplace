@@ -229,7 +229,7 @@ checked against it and against the VS Code extension's auth service (A6).
 | --- | --- |
 | 1 | A5 (server TTL), with a linked ADR in `skillmeter-license-activation` |
 | 2 | A2 (background refresh) |
-| 3 | A3 (recording while the token is expired) |
+| 3 | A3 (recording while the token is expired); implemented, see the 2026-09-27 amendment |
 | 4 | A4 (recovery without a stored token) |
 | 5 | A6 (Codex plugin and VS Code extension) |
 
@@ -387,3 +387,28 @@ clients that ignore the lock cannot inherit this guarantee from a shared file.
 The candidate tests for surviving released processes cover their listed auth
 transitions only, not arbitrary overlapping writes. This amendment does not
 authorize telemetry, change consent, or establish a release support window.
+
+## Amendment 2026-09-27: decision 3 implemented
+
+**Status:** Accepted.
+
+The capture gate now uses `credstore.isSignedIn()`: a license is held and the
+user has not signed out. Freshness is enforced only at transmission, as before.
+An expired or unrefreshable token no longer drops events or advances the
+transcript cursor past turns the user chose to record.
+
+The removals decision 3 lists are in place:
+
+- Sign-out purges every repository queue and the organization-audit queue.
+  Chunks of an accepted historical import are kept, as in every other
+  repository purge: backfill consent is separate from repository telemetry,
+  and whether sign-out should also withdraw it is left open.
+- A 402 from `/refresh` purges the repository queues of the license's
+  organizations and the organization-audit queue.
+- Unsent event logs and transcript chunks older than seven days are deleted.
+  The sweep runs at every SessionStart, including when no usable license is
+  held, so the bound holds for exactly the devices that can no longer sign in.
+
+The SessionStart sign-in banner now appears when the user is signed out or the
+refresh chain needs a new sign-in (401, 410 or 402). A license waiting out an
+outage keeps recording, so it no longer shows that telemetry is off.
