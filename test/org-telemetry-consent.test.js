@@ -14,6 +14,8 @@ const {
   writeFile,
   writeJson,
   writeTelemetryPolicy,
+  writeCredentials,
+  accountDir,
 } = require("../testing/helpers");
 const credstore = require("../skillmeter/scripts/credstore");
 const { resolveTelemetryGate } = require("../skillmeter/scripts/lib/telemetry-policy");
@@ -297,12 +299,12 @@ test("FileChanged sign-in success immediately shows every discovered repository"
     path.join(repo, ".git", "config"),
     '[remote "origin"]\n\turl = https://github.com/SkillBench-AI/visible.git\n'
   );
-  writeJson(path.join(stateDir, "credentials.json"), {
+  writeCredentials(stateDir, {
     device_id: "TEST-DEVICE",
     hash_salt: "0123456789abcdef0123456789abcdef",
     license_jwt: licenseJwt(),
   });
-  writeJson(path.join(stateDir, "signin-result.json"), {
+  writeJson(path.join(accountDir(stateDir), "signin-result.json"), {
     status: "success",
     ts: Date.now(),
   });

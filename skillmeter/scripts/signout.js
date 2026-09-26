@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Remove the shared license and mark the device signed out. Preserve device ID,
+ * Remove this plugin's license and mark its session signed out. Preserve device ID,
  * hash salt and telemetry policy. Explicit sign-in clears the sentinel.
  */
 

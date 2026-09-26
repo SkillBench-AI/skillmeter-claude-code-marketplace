@@ -21,7 +21,8 @@ const telemetryStore = require("./lib/telemetry-store");
 
 // Dedupe marker: FileChanged can fire more than once per change, and re-fires
 // on unrelated writes. We notify once per result `ts`. Kept next to the sentinel
-// (in STATE_DIR) and never itself watched, so writing it can't re-trigger us.
+// (in this client's account directory) and never itself watched, so writing it
+// can't re-trigger us.
 const NOTIFIED_MARKER = path.join(
   path.dirname(credstore.SIGNIN_RESULT_FILE),
   ".signin-notified"

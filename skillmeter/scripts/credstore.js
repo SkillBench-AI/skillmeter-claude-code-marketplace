@@ -2,9 +2,14 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 
-// Resolved centrally in lib/config.js so SKILLMETER_STATE_DIR can isolate a dev
-// environment's credentials/identity from prod.
+// Two stores (ADR 005). The shared one, CRED_FILE, holds the device identity
+// every client on the machine agrees on (device_id, hash_salt) and fields
+// other clients own, which are preserved. The session, SESSION_FILE, is this
+// client's alone: its license, sign-in intent and sign-out. SKILLMETER_STATE_DIR
+// still isolates a dev environment's state from prod; the account directory is
+// keyed by it (lib/paths).
 const { CRED_FILE } = require("./lib/config");
+const { ACCOUNT_DIR } = require("./lib/paths");
 // Canonical JWT helpers. The org(s) validated for telemetry come straight from
 // the license JWT (the activator's decision); the client keeps no list of its own.
 const { isJwtExpired, getLicenseOrgs } = require("./lib/jwt");
@@ -12,30 +17,34 @@ const { isJwtExpired, getLicenseOrgs } = require("./lib/jwt");
 const { safeReadJson, atomicWriteJson } = require("./lib/io");
 const telemetryStore = require("./lib/telemetry-store");
 
+const SESSION_FILE = path.join(ACCOUNT_DIR, "session.json");
+
 // ---------------------------------------------------------------------------
-// Low-level file helpers
+// Low-level file helpers, one implementation for both stores
 // ---------------------------------------------------------------------------
 
 // A store that exists but is not a JSON object (truncated, emptied, a foreign
 // non-atomic writer caught mid-write) reads as empty, so the next write
-// re-creates the identity. The original bytes are kept first; see mutateStore.
+// re-creates it. The original bytes are kept first; see mutateFile.
 function isStoreObject(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-function readStore() {
-  const store = safeReadJson(CRED_FILE, null);
+function readObject(file) {
+  const store = safeReadJson(file, null);
   return isStoreObject(store) ? store : {};
 }
 
-// This dead-owner-only lock protocol is shared with Codex. Older clients
-// that ignore it or reclaim live locks by age must be stopped before use.
-function withCredentialLock(fn) {
-  fs.mkdirSync(path.dirname(CRED_FILE), { recursive: true, mode: 0o700 });
+// This dead-owner-only lock protocol is shared with Codex for CRED_FILE.
+// Older clients that ignore it or reclaim live locks by age must be stopped
+// before use. The session file is ours alone, but takes the same lock so every
+// process of this client serializes on it.
+function withFileLock(file, fn) {
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const { acquireLock } = require("./lib/credential-lock");
   const deadline = Date.now() + 1000;
   let release;
-  while (!(release = acquireLock(`${CRED_FILE}.lock`))) {
+  while (!(release = acquireLock(`${file}.lock`))) {
     if (Date.now() >= deadline) throw new Error("credential-store-busy");
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
   }
@@ -44,10 +53,10 @@ function withCredentialLock(fn) {
 }
 
 // null when the file does not exist. A file that exists but cannot be read
-// throws: writing over it would replace a device identity and license this
+// throws: writing over it would replace a device identity or session this
 // process simply could not see.
-function readRaw() {
-  try { return fs.readFileSync(CRED_FILE, "utf8"); }
+function readRaw(file) {
+  try { return fs.readFileSync(file, "utf8"); }
   catch (err) {
     if (err?.code === "ENOENT") return null;
     throw new Error(`credential store unreadable (${err?.code || "error"})`);
@@ -60,14 +69,14 @@ function isCorrupt(raw) {
   catch { return true; }
 }
 
-// Keep a corrupt store's exact bytes before it is replaced, and say so: the
-// device identity and sign-in it held are gone, so the user must sign in
-// again. Throws when the copy cannot be made, so the caller does not reset a
-// store it failed to preserve. Runs under the credential lock.
-function preserveCorruptStore() {
-  const bytes = fs.readFileSync(CRED_FILE); // a Buffer: invalid UTF-8 survives
+// Keep a corrupt store's exact bytes before it is replaced, and say so: what
+// it held is gone, so the user must sign in again. Throws when the copy cannot
+// be made, so the caller does not reset a store it failed to preserve. Runs
+// under the file's lock.
+function preserveCorrupt(file) {
+  const bytes = fs.readFileSync(file); // a Buffer: invalid UTF-8 survives
   const aside =
-    `${CRED_FILE}.corrupt-${Date.now()}-${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
+    `${file}.corrupt-${Date.now()}-${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
   fs.writeFileSync(aside, bytes, { mode: 0o600, flag: "wx" });
   console.error(
     `[skillmeter] Credential store was unreadable and has been reset; the original is kept at ${aside}. Run /skillmeter:signin to sign in again.`
@@ -75,17 +84,17 @@ function preserveCorruptStore() {
 }
 
 const PREEMPTED = Symbol("credential-store-preempted");
-function mutateStore(fn, afterCommit) {
+function mutateFile(file, fn, afterCommit) {
   for (let attempt = 0; attempt < 3; attempt++) {
-    const result = withCredentialLock((release) => {
-      const baseline = readRaw();
-      const store = readStore();
+    const result = withFileLock(file, (release) => {
+      const baseline = readRaw(file);
+      const store = readObject(file);
       const result = fn(store);
       if (result === false) return false;
       // These checks detect visible preemption, not an atomic rename fence.
-      if (!release.stillHeld() || readRaw() !== baseline) return PREEMPTED;
-      if (isCorrupt(baseline)) preserveCorruptStore();
-      atomicWriteJson(CRED_FILE, store);
+      if (!release.stillHeld() || readRaw(file) !== baseline) return PREEMPTED;
+      if (isCorrupt(baseline)) preserveCorrupt(file);
+      atomicWriteJson(file, store);
       if (afterCommit) afterCommit();
       return result === undefined ? true : result;
     });
@@ -94,31 +103,81 @@ function mutateStore(fn, afterCommit) {
   throw new Error("credential-store-busy");
 }
 
+// The shared store: identity plus other clients' fields.
+function readStore() {
+  return readObject(CRED_FILE);
+}
+
+function mutateStore(fn) {
+  return mutateFile(CRED_FILE, fn);
+}
+
+// The session. Before ADR 005 it lived in the shared store, so the first read
+// without a session file copies it from there, once: the license, sign-out and
+// sign-in intent. The shared store is left as it is, because other clients
+// still read it. From then on nothing another client writes there reaches this
+// session.
+const SESSION_FIELDS = ["license_jwt", "signed_out", "auth_generation"];
+
+function ensureSession() {
+  if (fs.existsSync(SESSION_FILE)) return;
+  try {
+    withFileLock(SESSION_FILE, () => {
+      if (fs.existsSync(SESSION_FILE)) return;
+      const shared = readStore();
+      const seed = {};
+      for (const key of SESSION_FIELDS) {
+        if (shared[key] !== undefined) seed[key] = shared[key];
+      }
+      atomicWriteJson(SESSION_FILE, seed);
+    });
+  } catch {
+    // Unwritable: readSession() returns an empty session, which reads as signed
+    // out, and the next write tries again.
+  }
+}
+
+function readSession() {
+  ensureSession();
+  return readObject(SESSION_FILE);
+}
+
+function mutateSession(fn, afterCommit) {
+  ensureSession();
+  return mutateFile(SESSION_FILE, fn, afterCommit);
+}
+
+// The device identity is shared and write-once, so it can be read outside the
+// session lock and still compared under it.
+function currentDeviceId() {
+  return readStore().device_id || null;
+}
+
 function recoverySnapshot() {
-  const store = readStore();
+  const session = readSession();
   return {
-    token: store.license_jwt || null,
-    generation: store.auth_generation || null,
-    deviceId: store.device_id || null,
-    signedOut: store.signed_out === true,
+    token: session.license_jwt || null,
+    generation: session.auth_generation || null,
+    deviceId: currentDeviceId(),
+    signedOut: session.signed_out === true,
   };
 }
 
-function snapshotMatches(store, expected) {
-  return expected && !expected.signedOut && store.signed_out !== true &&
-    (store.license_jwt || null) === expected.token &&
-    (store.auth_generation || null) === expected.generation &&
-    (store.device_id || null) === expected.deviceId;
+function snapshotMatches(session, expected) {
+  return expected && !expected.signedOut && session.signed_out !== true &&
+    (session.license_jwt || null) === expected.token &&
+    (session.auth_generation || null) === expected.generation &&
+    currentDeviceId() === expected.deviceId;
 }
 
 function isRecoveryCurrent(expected) {
-  return snapshotMatches(readStore(), expected);
+  return snapshotMatches(readSession(), expected);
 }
 
 function commitRefresh(jwt, expected) {
-  return mutateStore((store) => {
-    if (!snapshotMatches(store, expected)) return false;
-    store.license_jwt = jwt;
+  return mutateSession((session) => {
+    if (!snapshotMatches(session, expected)) return false;
+    session.license_jwt = jwt;
   });
 }
 
@@ -128,19 +187,20 @@ function commitRefresh(jwt, expected) {
 // signOut() this sets no signed_out flag: nothing was chosen, and a new
 // sign-in into a workspace that still licenses the user simply resumes.
 // onCommit runs under the lock, so it must be synchronous and must not
-// acquire the credential lock again.
+// acquire the session lock again.
 function dropRevokedLicense(expected, onCommit) {
-  return mutateStore((store) => {
-    if (!snapshotMatches(store, expected)) return false;
-    delete store.license_jwt;
-    store.auth_generation = crypto.randomUUID();
+  return mutateSession((session) => {
+    if (!snapshotMatches(session, expected)) return false;
+    delete session.license_jwt;
+    session.auth_generation = crypto.randomUUID();
   }, onCommit);
 }
 
 // Serialize a refresh status update against sign-in/sign-out too. fn must be
-// synchronous and must not acquire the credential lock again.
+// synchronous and must not acquire the session lock again.
 function withRecoveryCurrent(expected, fn) {
-  return withCredentialLock((release) => {
+  ensureSession();
+  return withFileLock(SESSION_FILE, (release) => {
     if (!release.stillHeld() || !isRecoveryCurrent(expected)) return false;
     fn();
     return true;
@@ -148,16 +208,17 @@ function withRecoveryCurrent(expected, fn) {
 }
 
 // Sign-in result sentinel: FileChanged reports completion of detached sign-in.
-// Keep it separate from credentials so routine refreshes do not trigger notices.
+// Keep it separate from the session so routine refreshes do not trigger notices.
 
-const SIGNIN_RESULT_FILE = path.join(path.dirname(CRED_FILE), "signin-result.json");
+const SIGNIN_RESULT_FILE = path.join(ACCOUNT_DIR, "signin-result.json");
 
 function writeSigninResult(result, expected) {
   try {
     const write = () => atomicWriteJson(SIGNIN_RESULT_FILE, { ...result, ts: Date.now() });
     if (expected) {
-      withCredentialLock(() => {
-        if (signinMatches(readStore(), expected)) write();
+      ensureSession();
+      withFileLock(SESSION_FILE, () => {
+        if (signinMatches(readObject(SESSION_FILE), expected)) write();
       });
     } else write();
   } catch {
@@ -182,7 +243,7 @@ function ensureSigninResultFile() {
 // Upload result sentinel: detached drains record successful uploads here.
 // SessionStart shows the notice once and marks it notified.
 
-const UPLOAD_RESULT_FILE = path.join(path.dirname(CRED_FILE), "upload-result.json");
+const UPLOAD_RESULT_FILE = path.join(ACCOUNT_DIR, "upload-result.json");
 
 // Record a drain outcome — success counts (events/transcripts) or a transmission
 // `error`. `notified:false` so the next SessionStart surfaces it exactly once.
@@ -233,8 +294,8 @@ function getHashSalt() {
 }
 
 function getLicenseToken() {
-  const store = readStore();
-  return store.signed_out === true ? null : store.license_jwt || null;
+  const session = readSession();
+  return session.signed_out === true ? null : session.license_jwt || null;
 }
 
 // Kept as an explicit API for transfer call sites that require a fresh token.
@@ -256,14 +317,10 @@ function isLicenseTokenExpired(token, skewSeconds = LICENSE_EXPIRY_SKEW_SECONDS)
   return isJwtExpired(token, { skewSeconds, treatMissingAsExpired: true });
 }
 
-// True when a non-expired license JWT is present on disk. Reads uncached so a
-// token just refreshed by this process (or another terminal) is observed — the
-// canonical "am I signed in" check, replacing inlined
-// `t && !isLicenseTokenExpired(t)` at call sites.
-// Signed in: a license is held and the user has not signed out. Freshness is
-// not part of it. Capture keys off this; transmission separately requires an
-// unexpired token (ADR 001, decision 3), so an expired or unrefreshable token
-// never drops what the user already chose to record.
+// Signed in: this client's session holds a license and the user has not signed
+// out. Freshness is not part of it. Capture keys off this; transmission
+// separately requires an unexpired token (ADR 001, decision 3), so an expired
+// or unrefreshable token never drops what the user already chose to record.
 function isSignedIn() {
   return !!getLicenseToken();
 }
@@ -276,7 +333,7 @@ function hasValidLicense() {
 // Sign-out blocks background refresh and in-flight sign-in commits.
 // Read from disk so other processes observe it. Explicit sign-in clears it.
 function getSignedOut() {
-  return readStore().signed_out === true;
+  return readSession().signed_out === true;
 }
 
 function normalizeOrg(org) {
@@ -291,9 +348,9 @@ function normalizeOrg(org) {
 function isTelemetryTransmissionAllowed(repoKey = "") {
   const policy = telemetryStore.readPolicy();
   if (policy.global.enabled === false) return false;
-  const store = readStore();
-  if (store.signed_out === true) return false;
-  const orgs = store.license_jwt ? getLicenseOrgs(store.license_jwt) : [];
+  const session = readSession();
+  if (session.signed_out === true) return false;
+  const orgs = session.license_jwt ? getLicenseOrgs(session.license_jwt) : [];
   if (orgs.length === 0) return false;
   if (!orgs.every((org) => policy.organizations[normalizeOrg(org)]?.enabled === true)) {
     return false;
@@ -309,41 +366,41 @@ function isTelemetryTransmissionAllowed(repoKey = "") {
 }
 
 // Drop the license JWT atomically (the validated org lives in the JWT, so
-// nothing else needs clearing). Preserves device_id and hash_salt so the
-// machine identity survives a sign-out / sign-in cycle.
+// nothing else needs clearing). The device identity is in the shared store and
+// survives a sign-out / sign-in cycle; other clients' sessions are untouched.
 function signOut() {
-  return mutateStore((store) => {
-    delete store.license_jwt;
-    store.signed_out = true;
-    store.auth_generation = crypto.randomUUID();
+  return mutateSession((session) => {
+    delete session.license_jwt;
+    session.signed_out = true;
+    session.auth_generation = crypto.randomUUID();
   });
 }
 
 // Explicit sign-in starts a new intent even if the server reuses the same JWT.
 function markEngaged() {
-  return mutateStore((store) => {
-    delete store.signed_out;
-    store.auth_generation = crypto.randomUUID();
-    return store.auth_generation;
+  return mutateSession((session) => {
+    delete session.signed_out;
+    session.auth_generation = crypto.randomUUID();
+    return session.auth_generation;
   });
 }
 
 // Explicit issuance is bound to its originating intent. A refresh in that
 // same intent may rotate the token while browser approval is pending.
-function signinMatches(store, expected) {
-  return !expected.signedOut && store.signed_out !== true &&
-    (store.auth_generation || null) === expected.generation &&
-    (store.device_id || null) === expected.deviceId;
+function signinMatches(session, expected) {
+  return !expected.signedOut && session.signed_out !== true &&
+    (session.auth_generation || null) === expected.generation &&
+    currentDeviceId() === expected.deviceId;
 }
 
 // onCommit publishes local status/notifications before another intent can win.
-// It must be synchronous and must not acquire the credential lock again.
+// It must be synchronous and must not acquire the session lock again.
 function commitSignin({ jwt, expected, onCommit }) {
-  return mutateStore((store) => {
-    if (store.signed_out === true) return false;
-    if (expected && !signinMatches(store, expected)) return false;
-    store.license_jwt = jwt;
-    store.auth_generation = crypto.randomUUID();
+  return mutateSession((session) => {
+    if (session.signed_out === true) return false;
+    if (expected && !signinMatches(session, expected)) return false;
+    session.license_jwt = jwt;
+    session.auth_generation = crypto.randomUUID();
   }, onCommit);
 }
 
@@ -359,6 +416,7 @@ function getAllowedGitHubOrgs() {
 }
 
 module.exports = {
+  SESSION_FILE,
   isSignedIn,
   recoverySnapshot,
   isRecoveryCurrent,

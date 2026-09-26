@@ -115,7 +115,41 @@ function runNode(script, args = [], options = {}) {
   });
 }
 
+// ADR 005: the device identity (and other clients' fields) lives in the shared
+// credentials.json, this client's session in its account directory. Mirrors
+// ACCOUNT_DIR in lib/paths.
+const SESSION_FIELDS = ["license_jwt", "signed_out", "auth_generation"];
+
+function accountDir(stateDir, dataDir = process.env.CLAUDE_PLUGIN_DATA) {
+  const key = require("crypto").createHash("sha256").update(path.resolve(stateDir)).digest("hex").slice(0, 12);
+  return path.join(dataDir, "account", key);
+}
+
+function sessionPath(stateDir, dataDir) {
+  return path.join(accountDir(stateDir, dataDir), "session.json");
+}
+
+// Write a signed-in (or signed-out) device the way the plugin stores it. The
+// session file is always written, so nothing is migrated from the shared file.
+function writeCredentials(stateDir, fields, { dataDir } = {}) {
+  const identity = {};
+  const session = {};
+  for (const [key, value] of Object.entries(fields)) {
+    (SESSION_FIELDS.includes(key) ? session : identity)[key] = value;
+  }
+  writeJson(path.join(stateDir, "credentials.json"), identity);
+  writeJson(sessionPath(stateDir, dataDir), session);
+}
+
+function readSession(stateDir, { dataDir } = {}) {
+  return readJson(sessionPath(stateDir, dataDir));
+}
+
 module.exports = {
+  accountDir,
+  sessionPath,
+  writeCredentials,
+  readSession,
   makeTempDir,
   writeFile,
   writeJson,
