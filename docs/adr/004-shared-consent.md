@@ -6,6 +6,10 @@ Juho Kim. Decisions 4 to 6 restate the amendment Juho proposed on ADR 001 in
 PR #128; this ADR replaces that amendment, and ADR 001 keeps a pointer here.
 Acceptance covers the contract; implementation and the open items are gated
 separately.
+**Amended 2026-09-27:** decision 3 adds the `revocations` counter to
+organization and repository records; decision 6 replaces the timestamp hold
+with that counter and bounds every hold by retention; decision 4 states which
+client may keep using a legacy ON; acceptance cases C3, C5 and C7 follow.
 **Related:** ADR 001 (the license is already shared), ADR 002 (sanitization),
 `skillmeter-codex-marketplace` `docs/adr/004-shared-consent.md` (adopts this
 ADR), `skillmeter-vscode-extension`, the ChatGPT Work extension (its per-task
@@ -126,7 +130,12 @@ clone or worktree of that repository on the machine. The control says so
 before the choice is recorded. Organization records already carry
 `consent_version: 1`; repository records get the same field. The statement
 that names every client and every clone is `consent_version: 2`; a record at
-1 or without the field is a legacy choice. `normalizePolicy()` passes
+1 or without the field is a legacy choice. Organization and repository records
+also carry `revocations`, a non-negative integer counting the OFF writes made
+to that record; a record without the field reads as 0. Every writer increments
+it on OFF, keeps it on ON and on reaffirmation, and never lowers it. A record
+whose `revocations` is present but not a non-negative integer is malformed
+(decision 5). `normalizePolicy()` passes
 organization and repository records through unchanged, and the writers
 replace a record only when its choice changes, so a reader that predates
 version 2 keeps the field and a record it rewrites reads as legacy again,
@@ -140,10 +149,13 @@ choice.
 A local ON is never promoted to a shared ON automatically. A local OFF stays
 a restriction until the user resolves it. Migration shows the conflicts,
 writes through the shared store's lock with an expected revision, and
-reloads on a stale revision instead of overwriting a concurrent OFF. A
-client that finds a shared ON without `consent_version: 2` asks for the
-one-time acknowledgement of decision 3 before using it. Until then the Codex plugin
-keeps its local opt-in requirement.
+reloads on a stale revision instead of overwriting a concurrent OFF. A shared
+ON without `consent_version: 2` is a legacy choice: the client that recorded
+it keeps capturing under it, because stopping would silence every existing
+installation on upgrade, and it asks for the one-time acknowledgement of
+decision 3 at its next opportunity. Any other client treats a legacy ON as
+consent required until that acknowledgement is recorded. Until then the Codex
+plugin keeps its local opt-in requirement.
 
 ### 5. A missing, unreadable or unsupported record blocks (PR #128, decision B)
 
@@ -168,10 +180,24 @@ unset organization or repository choice holds that scope's queued data; only
 an explicit OFF purges it. An organization or repository OFF takes precedence
 over the global pause: the purge happens even while the pause holds
 everything else. Both change this plugin: `queueDisposition()` in
-`repository-queue.js` deletes on an unset record and, like
-`organizationAuditDisposition()` in `organization-audit-queue.js`, returns
-pause before it looks at the organization. A positive decision whose timestamp changed
-without an observed OFF is held, not sent and not deleted. A retry
+`repository-queue.js` today deletes on an unset record, and it and
+`organizationAuditDisposition()` in `organization-audit-queue.js` return
+pause before they look at the organization.
+
+An OFF that a client did not observe is detected by the `revocations` counter
+of decision 3, not by timestamps. Each client records, per queue, the
+counters it last observed, at capture and again at send. A higher counter at
+send means an OFF happened in between: the client purges that scope's known
+unsent payloads exactly as an observed OFF would, then records the new
+counter. An equal counter delivers, whatever the timestamp says: first
+adoption of the shared record, a reaffirmation and a timestamp change are not
+revocations. A lower counter means the record was restored from an older
+copy; the client holds that scope until the counter is at least the one it
+observed. No user confirmation is involved; the record carries the fact.
+
+Every hold (an unset choice, a lower counter, a blocked or missing policy) is
+bounded by the client's queue retention: held data expires on the same
+schedule as any other queued data and is never kept past it. A retry
 re-evaluates consent before sending. Data already transmitted or in flight is
 outside local revocation.
 
@@ -224,7 +250,7 @@ on its own.
 | 3 | `consent_version: 2` in `telemetry-store.js`; wording in `skills/telemetry`, `skills/signin` | acknowledgement in the `telemetry.js` CLI |
 | 4 | none | migration command, conflict preview |
 | 5 | reader change in `telemetry-store.js`; status wording per ADR 003 (PR #111, proposed) | already fail-closed in #55 and #56 |
-| 6 | `queueDisposition()` (`repository-queue.js`), `organizationAuditDisposition()` (`organization-audit-queue.js`) | `repository-queue.js` (#52, #56) |
+| 6 | `revocations` written by `telemetry-store.js`; `revocationsSeen` in queue metadata compared by `queueDisposition()` (`repository-queue.js`) and `organizationAuditDisposition()` (`organization-audit-queue.js`) | `revocations` written by `shared-policy-store.js`; `synchronize()` in `repository-queue.js` rotates the delivery token only when the counter increased (#52, #56); retention bound for held rows and groups |
 | 7 | `backfill-state.js` unchanged | none |
 | 8 | privacy cursors | consent journal (#49) |
 | 9 | this file | `docs/adr/004-shared-consent.md` |
@@ -248,10 +274,11 @@ generation; those stay separate gates.
 | B3 | Missing choice versus explicit OFF | A missing choice holds; an applicable valid OFF revokes known payloads. |
 | C1 | A and B queued; shared A OFF, then ON | A's backlog deleted; B's bytes and privacy cursors retained; old A content cannot reappear on reset. |
 | C2 | Global OFF, then ON | Queues retained, nothing transmitted during the pause, paused transcript growth excluded. |
-| C3 | ON timestamp changes without an observed OFF; old policy restored | Earlier payloads stay held; no inferred deletion, no restored authorization. |
+| C3 | ON timestamp changes with an equal `revocations` counter; then an older policy copy with a lower counter is restored | The timestamp change delivers earlier payloads; the restored copy holds that scope until its counter catches up, with no inferred deletion. |
 | C4 | Consent changes between a failed upload and its retry | The retry re-checks consent; no newly revoked payload is sent. |
-| C5 | Reaffirmation or an edit to another repository | An unrelated edit preserves authorization; a reaffirmation follows C3 until a stronger contract exists. |
+| C5 | Reaffirmation or an edit to another repository | Both preserve authorization and deliver; neither changes `revocations`. |
 | C6 | Global OFF and repository or organization A OFF together | A's payloads revoked despite the pause; B's queues and all privacy cursors retained. |
+| C7 | A OFF then ON written by another client, or while this client was not running, so the OFF was never observed but `revocations` increased | Payloads captured before the increase are purged at the next capture or send; later capture delivers; a hold older than the retention bound has expired. |
 
 ## Open items
 
@@ -262,6 +289,6 @@ generation; those stay separate gates.
 - Disposition of legacy queue entries that carry no repository attribution.
 - ChatGPT Work per-task consent, duration and revocation are outside this
   ADR; the VS Code extension follows when it captures.
-- A durable revocation generation that distinguishes reaffirmation from an
-  OFF/ON cycle would replace the hold in decision 6; its schema is a separate
-  decision.
+- Rows queued before either writer recorded `revocations` carry no counter.
+  A client treats them as observed at counter 0; a later OFF still purges
+  them through the counter, and their retention bound still applies.
