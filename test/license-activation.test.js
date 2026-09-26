@@ -243,3 +243,28 @@ test("refresh lock: exclusive create, live lock refused, stale lock claimed and 
   assert.ok(now - fs.statSync(LOCK_FILE).mtimeMs < 60_000, "the replacement lock is fresh");
   assert.equal(fs.readdirSync(LOG_DIR).filter((f) => f.endsWith(".stale")).length, 0, "claim file cleaned up");
 });
+
+for (const status of [200, 401, 402, 500]) {
+  test(`late refresh ${status} cannot cross a same-token sign-out/sign-in cycle`, async () => {
+    const token = credstore.getLicenseTokenUncached();
+    responses = [respond(status, { token: FRESH() })];
+    const pending = refreshLicense(DEVICE_ID, { source: "old-process" });
+    // The network response resolves on the next microtask, after the new intent.
+    credstore.signOut();
+    credstore.markEngaged();
+    credstore.commitSignin({ jwt: token });
+    licenseStatus.clearLicenseStatus({ source: "new-signin" });
+    const before = fs.readFileSync(licenseStatus.LICENSE_STATUS_FILE, "utf8");
+    assert.equal(await pending, null);
+    assert.equal(credstore.getLicenseTokenUncached(), token);
+    assert.equal(fs.readFileSync(licenseStatus.LICENSE_STATUS_FILE, "utf8"), before);
+  });
+}
+
+test("ensureFreshLicense does not return a pre-signout token after an awaited refresh", async () => {
+  responses = [respond(200, { token: FRESH() })];
+  const pending = ensureFreshLicense(DEVICE_ID);
+  credstore.signOut();
+  assert.equal(await pending, null);
+  assert.equal(credstore.getLicenseTokenUncached(), null);
+});

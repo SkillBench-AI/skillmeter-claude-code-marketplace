@@ -20,8 +20,81 @@ function readStore() {
   return safeReadJson(CRED_FILE, {});
 }
 
-function writeStore(data) {
-  atomicWriteJson(CRED_FILE, data);
+// This lock protocol is shared with Codex. It coordinates cooperating writers;
+// older clients that ignore it and age-based stale takeover remain limitations.
+function withCredentialLock(fn) {
+  fs.mkdirSync(path.dirname(CRED_FILE), { recursive: true, mode: 0o700 });
+  const { acquireLock } = require("./lib/credential-lock");
+  const deadline = Date.now() + 1000;
+  let release;
+  while (!(release = acquireLock(`${CRED_FILE}.lock`))) {
+    if (Date.now() >= deadline) throw new Error("credential-store-busy");
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+  }
+  try { return fn(release); }
+  finally { release(); }
+}
+
+function readRaw() {
+  try { return fs.readFileSync(CRED_FILE, "utf8"); }
+  catch { return null; }
+}
+
+const PREEMPTED = Symbol("credential-store-preempted");
+function mutateStore(fn, afterCommit) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const result = withCredentialLock((release) => {
+      const baseline = readRaw();
+      const store = readStore();
+      const result = fn(store);
+      if (result === false) return false;
+      // These checks detect visible preemption, not an atomic rename fence.
+      if (!release.stillHeld() || readRaw() !== baseline) return PREEMPTED;
+      atomicWriteJson(CRED_FILE, store);
+      if (afterCommit) afterCommit();
+      return result === undefined ? true : result;
+    });
+    if (result !== PREEMPTED) return result;
+  }
+  throw new Error("credential-store-busy");
+}
+
+function recoverySnapshot() {
+  const store = readStore();
+  return {
+    token: store.license_jwt || null,
+    generation: store.auth_generation || null,
+    deviceId: store.device_id || null,
+    signedOut: store.signed_out === true,
+  };
+}
+
+function snapshotMatches(store, expected) {
+  return expected && !expected.signedOut && store.signed_out !== true &&
+    (store.license_jwt || null) === expected.token &&
+    (store.auth_generation || null) === expected.generation &&
+    (store.device_id || null) === expected.deviceId;
+}
+
+function isRecoveryCurrent(expected) {
+  return snapshotMatches(readStore(), expected);
+}
+
+function commitRefresh(jwt, expected) {
+  return mutateStore((store) => {
+    if (!snapshotMatches(store, expected)) return false;
+    store.license_jwt = jwt;
+  });
+}
+
+// Serialize a refresh status update against sign-in/sign-out too. fn must be
+// synchronous and must not acquire the credential lock again.
+function withRecoveryCurrent(expected, fn) {
+  return withCredentialLock((release) => {
+    if (!release.stillHeld() || !isRecoveryCurrent(expected)) return false;
+    fn();
+    return true;
+  });
 }
 
 // Sign-in result sentinel: FileChanged reports completion of detached sign-in.
@@ -29,9 +102,14 @@ function writeStore(data) {
 
 const SIGNIN_RESULT_FILE = path.join(path.dirname(CRED_FILE), "signin-result.json");
 
-function writeSigninResult(result) {
+function writeSigninResult(result, expected) {
   try {
-    atomicWriteJson(SIGNIN_RESULT_FILE, { ...result, ts: Date.now() });
+    const write = () => atomicWriteJson(SIGNIN_RESULT_FILE, { ...result, ts: Date.now() });
+    if (expected) {
+      withCredentialLock(() => {
+        if (signinMatches(readStore(), expected)) write();
+      });
+    } else write();
   } catch {
     // Best-effort: a missing sentinel only degrades to the re-run UX.
   }
@@ -81,26 +159,23 @@ function markUploadNotified() {
 // Public API
 // ---------------------------------------------------------------------------
 
-function getDeviceId() {
-  const store = readStore();
-  if (store.device_id) return store.device_id;
+function ensureIdentityField(key, create) {
+  const existing = readStore()[key];
+  if (existing) return existing;
+  let value;
+  mutateStore((store) => {
+    if (!store[key]) store[key] = create();
+    value = store[key];
+  });
+  return value;
+}
 
-  const newId = crypto.randomUUID().toUpperCase();
-  store.device_id = newId;
-  writeStore(store);
-  console.error("[skillmeter] New device ID created");
-  return newId;
+function getDeviceId() {
+  return ensureIdentityField("device_id", () => crypto.randomUUID().toUpperCase());
 }
 
 function getOrCreateHashSalt() {
-  const store = readStore();
-  if (store.hash_salt) return store.hash_salt;
-
-  const newSalt = crypto.randomBytes(16).toString("hex");
-  store.hash_salt = newSalt;
-  writeStore(store);
-  console.error("[skillmeter] New hash salt created");
-  return newSalt;
+  return ensureIdentityField("hash_salt", () => crypto.randomBytes(16).toString("hex"));
 }
 
 function getHashSalt() {
@@ -109,18 +184,20 @@ function getHashSalt() {
 
 function getLicenseToken() {
   const store = readStore();
-  return store.license_jwt || null;
+  return store.signed_out === true ? null : store.license_jwt || null;
 }
 
 // Kept as an explicit API for transfer call sites that require a fresh token.
 function getLicenseTokenUncached() {
-  return readStore().license_jwt || null;
+  return getLicenseToken();
 }
 
 function setLicenseToken(jwt) {
-  const store = readStore();
-  store.license_jwt = jwt;
-  writeStore(store);
+  return mutateStore((store) => {
+    if (jwt) store.license_jwt = jwt;
+    else delete store.license_jwt;
+    store.auth_generation = crypto.randomUUID();
+  });
 }
 
 // Matches the VS Code extension's TOKEN_EXPIRY_SKEW_MS (5 min). Refresh
@@ -165,6 +242,7 @@ function isTelemetryTransmissionAllowed(repoKey = "") {
   const policy = telemetryStore.readPolicy();
   if (policy.global.enabled === false) return false;
   const store = readStore();
+  if (store.signed_out === true) return false;
   const orgs = store.license_jwt ? getLicenseOrgs(store.license_jwt) : [];
   if (orgs.length === 0) return false;
   if (!orgs.every((org) => policy.organizations[normalizeOrg(org)]?.enabled === true)) {
@@ -184,30 +262,39 @@ function isTelemetryTransmissionAllowed(repoKey = "") {
 // nothing else needs clearing). Preserves device_id and hash_salt so the
 // machine identity survives a sign-out / sign-in cycle.
 function signOut() {
-  const store = readStore();
-  delete store.license_jwt;
-  store.signed_out = true;
-  writeStore(store);
+  return mutateStore((store) => {
+    delete store.license_jwt;
+    store.signed_out = true;
+    store.auth_generation = crypto.randomUUID();
+  });
 }
 
-// Explicit sign-in clears the signed-out sentinel.
+// Explicit sign-in starts a new intent even if the server reuses the same JWT.
 function markEngaged() {
-  const store = readStore();
-  delete store.signed_out;
-  writeStore(store);
+  return mutateStore((store) => {
+    delete store.signed_out;
+    store.auth_generation = crypto.randomUUID();
+    return store.auth_generation;
+  });
 }
 
-// Persist a freshly-issued license atomically. Re-reads the store at write
-// time and aborts if /skillmeter:signout fired while the license issuance
-// was in flight — the user's most recent intent wins. Returns true when
-// the license was written, false when it was discarded. The validated org
-// lives in the JWT itself, so nothing else is stored.
-function commitSignin({ jwt }) {
-  const store = readStore();
-  if (store.signed_out === true) return false;
-  store.license_jwt = jwt;
-  writeStore(store);
-  return true;
+// Explicit issuance is bound to its originating intent. A refresh in that
+// same intent may rotate the token while browser approval is pending.
+function signinMatches(store, expected) {
+  return !expected.signedOut && store.signed_out !== true &&
+    (store.auth_generation || null) === expected.generation &&
+    (store.device_id || null) === expected.deviceId;
+}
+
+// onCommit publishes local status/notifications before another intent can win.
+// It must be synchronous and must not acquire the credential lock again.
+function commitSignin({ jwt, expected, onCommit }) {
+  return mutateStore((store) => {
+    if (store.signed_out === true) return false;
+    if (expected && !signinMatches(store, expected)) return false;
+    store.license_jwt = jwt;
+    store.auth_generation = crypto.randomUUID();
+  }, onCommit);
 }
 
 /**
@@ -222,6 +309,10 @@ function getAllowedGitHubOrgs() {
 }
 
 module.exports = {
+  recoverySnapshot,
+  isRecoveryCurrent,
+  commitRefresh,
+  withRecoveryCurrent,
   getDeviceId,
   getOrCreateHashSalt,
   getHashSalt,
