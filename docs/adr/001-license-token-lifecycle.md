@@ -368,9 +368,22 @@ context, so a different client's sign-in invalidates stale backoff and terminal
 state without persisting another token copy. Older unbound status records remain
 readable. Refresh callers re-read credentials after an awaited exchange.
 
-The shared lock uses the Codex owner-token protocol. It protects cooperating
-writers during ordinary acquisition and release; its age-based stale takeover
-has check-to-write and check-to-unlink races. Older Claude processes that do not
-participate in the protocol remain unsupported for concurrent credential
-writes. Restart those processes before mixing clients. This amendment does not
-authorize telemetry, change consent policy, or establish a release support window.
+The shared owner-token lock never expires a live writer by age. A contender
+reclaims only a valid owner whose PID check reports `ESRCH`. Cleanup takes a
+lock specific to the observed owner token, then rechecks that owner before
+unlinking. Every cleanup process for that incarnation uses the same guard,
+including through directory aliases. Dead cleanup owners use the same bounded
+recovery procedure. Unknown formats, unreadable ownership, permission-denied
+PID checks and potentially reused live PIDs hold the lock.
+
+This is a single-host, cooperating-client protocol on a local filesystem with
+atomic hard-link publication. It prefers a recoverable hold over simultaneous
+credential writers. Repeated crashes beyond the recovery depth also hold;
+`credential-store-busy` does not authorize deleting the lock while clients run.
+
+Both plugins must use the updated protocol, and old processes must exit after
+updating. Released clients that reclaim live locks by age and older Claude
+clients that ignore the lock cannot inherit this guarantee from a shared file.
+The candidate tests for surviving released processes cover their listed auth
+transitions only, not arbitrary overlapping writes. This amendment does not
+authorize telemetry, change consent, or establish a release support window.
