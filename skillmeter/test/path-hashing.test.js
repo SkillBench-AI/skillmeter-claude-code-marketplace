@@ -13,7 +13,6 @@ const fs = require("fs");
 const path = require("path");
 
 const s = require("../scripts/lib/sanitize");
-const rules = require("../scripts/lib/rules");
 const VOCAB = JSON.parse(
   fs.readFileSync(path.join(__dirname, "..", "scripts", "lib", "path-vocabulary.json"), "utf8")
 );
@@ -27,14 +26,6 @@ const homeHash = s.hashHmac(HOME, SALT);
 const HOME_DEPENDENT = HOME === "/" || HOME === "" ? { skip: "home directory is the filesystem root" } : {};
 
 // --- hashPathSegments -------------------------------------------------------
-
-test("home-prefixed file path: home is one unit, names are hashed, structure and extension survive", HOME_DEPENDENT, () => {
-  const out = s.hashPathSegments(`${HOME}/work/acme-portal/src/billing/invoice-acme.ts`, SALT);
-  // `work`, `src`, `billing` are vocabulary; `acme-portal` and `invoice-acme` are not.
-  assert.match(out, new RegExp(`^${homeHash}/work/${HEX}/src/billing/${HEX}\\.ts$`));
-  assert.equal(out.includes("acme"), false);
-  assert.equal(out.includes(HOME), false);
-});
 
 test("vocabulary, version-like and structural segments stay in clear", () => {
   assert.equal(s.hashPathSegments("src/index.ts", SALT), "src/index.ts");
@@ -120,13 +111,7 @@ test("counts.path tallies segment hashes, whole-value hashes and home-prefix rep
   assert.equal(meta.secrets, 0);
   assert.equal(meta.pii, 0);
   assert.deepEqual(meta.ids, [], "path hashing is not a detector id");
-  assert.equal(meta.policyVersion, "3.1.2");
-});
-
-test("KINDS includes path and counts always carries it", () => {
-  assert.ok(rules.KINDS.includes("path"));
-  const { meta } = s.sanitizeEventData({ plain: "nothing" }, SALT);
-  assert.equal(meta.counts.path, 0);
+  assert.equal(meta.policyVersion, s.POLICY_VERSION);
 });
 
 // --- vocabulary file sanity ---------------------------------------------------

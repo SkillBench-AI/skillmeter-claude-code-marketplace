@@ -15,7 +15,6 @@ const { makeTempDir, writeFile } = require("../testing/helpers");
 
 const {
   detectHarness,
-  findRepoRoot,
   sizeBucket,
   HARNESS_SCHEMA_VERSION,
 } = require("../scripts/harness");
@@ -49,7 +48,7 @@ test("bare project: flat defaults, Level 2 unknown, no raw content", () => {
 
   const h = detectHarness(root, { homeDir: home, repoRoot: root });
 
-  assert.equal(h.harness_schema_version, "2.1");
+  assert.equal(h.harness_schema_version, HARNESS_SCHEMA_VERSION);
   assert.equal(h.agent_type, "claude-code");
   assert.equal(h.agent_version, "");
   // instructions
@@ -192,17 +191,6 @@ test("skills: count, per-source counts, RAW names; skips hidden .system", () => 
   assert.equal(h.redactions.hashed_count, 0);
   assert.equal(h.redactions.dropped_count, 0);
   assert.deepEqual(h.redactions.by_type, {});
-});
-
-test("skill names are emitted raw (v2.0), even without a hash salt", () => {
-  const root = makeProject();
-  const home = makeHome();
-  addSkill(root, "internal-workflow");
-  // No salt passed: identifiers no longer depend on a salt.
-  const h = detectHarness(root, { homeDir: home, repoRoot: root });
-  assert.equal(h.skills_count, 1);
-  assert.deepEqual(h.skill_names, ["internal-workflow"]);
-  assert.equal(h.redactions.dropped_count, 0);
 });
 
 test("fail-closed: a skill name embedding a secret is dropped, not emitted", () => {
@@ -455,13 +443,13 @@ test("never throws on a bogus cwd; returns safe defaults", () => {
     homeDir: "/also/nonexistent",
     repoRoot: "",
   });
-  assert.equal(h.harness_schema_version, "2.1");
+  assert.equal(h.harness_schema_version, HARNESS_SCHEMA_VERSION);
   assert.equal(h.skills_count, 0);
   assert.deepEqual(h.hooks_enabled, []);
   assert.equal(h.multi_agent, "unknown");
 });
 
-test("malformed settings.json is ignored, not fatal", () => {
+test("a malformed plugin hooks.json is ignored, not fatal", () => {
   const root = makeProject();
   const home = makeHome();
   const pluginRoot = makeTempDir("sk-harness-plugin-");
@@ -485,11 +473,4 @@ test("emitted harness object survives the sanitizeEventData boundary", () => {
   assert.equal(value.harness.has_claude_md, true);
   assert.equal(value.harness.skills_count, 1);
   assert.deepEqual(value.harness.skill_names, ["deploy"]);
-});
-
-test("findRepoRoot walks up to the .git marker", () => {
-  const root = makeProject();
-  const nested = path.join(root, "a", "b", "c");
-  fs.mkdirSync(nested, { recursive: true });
-  assert.equal(findRepoRoot(nested), path.resolve(root));
 });

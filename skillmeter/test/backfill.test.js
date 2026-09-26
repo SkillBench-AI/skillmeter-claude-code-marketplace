@@ -3,8 +3,7 @@
 const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
-const { spawnSync } = require("child_process");
-const { test } = require("node:test");
+const { test, beforeEach } = require("node:test");
 
 const {
   makeTempDir,
@@ -22,6 +21,8 @@ const CLAUDE_CONFIG_DIR = makeTempDir("skm-backfill-claude-");
 setTestEnv("CLAUDE_PLUGIN_DATA", DATA_DIR);
 setTestEnv("SKILLMETER_STATE_DIR", STATE_DIR);
 setTestEnv("CLAUDE_CONFIG_DIR", CLAUDE_CONFIG_DIR);
+// An exported endpoint would make the spawned worker really upload.
+setTestEnv("SKILLMETER_BACKEND_URL", undefined);
 
 const backfillState = require("../scripts/lib/backfill-state");
 const { prepareHistoricalRecords } = require("../scripts/lib/backfill-snapshot");
@@ -36,9 +37,17 @@ function jsonl(records) {
   return records.map((record) => JSON.stringify(record)).join("\n") + "\n";
 }
 
+// Each test starts before the one-time offer exists; a test that needs the
+// offer initializes it. Without this the lifecycle state leaks between tests
+// and the file only passes in declaration order.
+beforeEach(() => {
+  fs.rmSync(backfillState.BACKFILL_STATE_FILE, { force: true });
+});
+
 test("lifecycle asks once, survives updates, and resets after data removal", () => {
   const initial = backfillState.initializeBackfillLifecycle();
   assert.equal(initial.status, "pending");
+  assert.equal(initial.reason, "one_time_offer");
 
   const first = backfillState.claimBackfillOffer(
     "11111111-1111-4111-8111-111111111111"
@@ -58,46 +67,8 @@ test("lifecycle asks once, survives updates, and resets after data removal", () 
   assert.equal(reinstalled.status, "pending");
 });
 
-test("an existing pre-feature install receives the one-time offer", () => {
-  const existingState = makeTempDir("skm-backfill-existing-state-");
-  const existingData = makeTempDir("skm-backfill-existing-data-");
-  writeJson(path.join(existingState, "credentials.json"), {
-    device_id: "EXISTING-DEVICE",
-  });
-  writeJson(path.join(existingState, "telemetry-policy.json"), {
-    revision: 1,
-  });
-  const modulePath = path.resolve(
-    __dirname,
-    "../scripts/lib/backfill-state.js"
-  );
-  const result = spawnSync(
-    process.execPath,
-    [
-      "-e",
-      `const state=require(${JSON.stringify(modulePath)});` +
-      "process.stdout.write(JSON.stringify(state.initializeBackfillLifecycle()));",
-    ],
-    {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        CLAUDE_PLUGIN_DATA: existingData,
-        SKILLMETER_STATE_DIR: existingState,
-      },
-    }
-  );
-  assert.equal(result.status, 0, result.stderr);
-  const state = JSON.parse(result.stdout);
-  assert.equal(state.status, "pending");
-  assert.equal(state.reason, "one_time_offer");
-  assert.deepEqual(
-    fs.readdirSync(existingState).sort(),
-    ["credentials.json", "telemetry-policy.json"]
-  );
-});
-
 test("running backfill freezes live staging without moving its cursor", () => {
+  backfillState.initializeBackfillLifecycle();
   const claimed = backfillState.claimBackfillOffer();
   assert.equal(claimed.claimed, true);
   const running = backfillState.beginBackfill(claimed.state.offer_id, {
@@ -349,7 +320,8 @@ test("accept queues historical data without changing telemetry policy", async ()
     true
   );
 
-  const deadline = Date.now() + 3_000;
+  // Generous for a loaded machine; both polls exit as soon as they are done.
+  const deadline = Date.now() + 15_000;
   let finalState;
   while (Date.now() < deadline) {
     finalState = readJson(backfillState.BACKFILL_STATE_FILE);

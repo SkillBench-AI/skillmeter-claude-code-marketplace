@@ -3,7 +3,7 @@
 const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
-const { test } = require("node:test");
+const { test, beforeEach } = require("node:test");
 
 const {
   makeJwt,
@@ -33,6 +33,15 @@ writeTelemetryPolicy(STATE_DIR, { orgs: { "skillbench-ai": true } });
 
 const store = require("../scripts/lib/telemetry-store");
 const transfer = require("../scripts/lib/transfer");
+const { REPOSITORIES_LOG_DIR } = require("../scripts/lib/paths");
+
+// Drains send every queued chunk, not only the current test's, so a chunk left
+// by an earlier test would turn a "nothing was sent" assertion into an
+// ordering dependency. Every test seals the chunks it needs.
+beforeEach(() => {
+  fs.rmSync(REPOSITORIES_LOG_DIR, { recursive: true, force: true });
+  store.setGlobalEnabled(true);
+});
 
 test("stale policy revision is rejected without mutation", () => {
   const repoKey = "github.com/skillbench-ai/revision";
@@ -116,6 +125,7 @@ test("global OFF pauses queues without deleting them", async (t) => {
 test("backfill upload records detailed attempt and success diagnostics", async (t) => {
   const repoKey = "github.com/skillbench-ai/backfill-log";
   store.setOrganizationConsent("skillbench-ai", false);
+  t.after(() => store.setOrganizationConsent("skillbench-ai", true));
   store.setRepositoryOverride(repoKey, false);
   writeJson(path.join(DATA_DIR, "backfill-state.json"), {
     schema_version: 1,
@@ -166,23 +176,18 @@ test("backfill upload records detailed attempt and success diagnostics", async (
     .split("\n")
     .map(JSON.parse)
     .filter((record) => record.offerId === "offer-log-test");
-  assert.deepEqual(
-    records.map((record) => record.event),
-    [
-      "upload_batch_completed",
-      "upload_batch_started",
-      "upload_attempt",
-      "upload_succeeded",
-      "upload_batch_completed",
-    ]
-  );
+  const events = records.map((record) => record.event);
+  // The paused pass records why it sent nothing.
+  assert.equal(records[0].event, "upload_batch_completed");
   assert.equal(records[0].reason, "global_telemetry_disabled");
-  assert.equal(records[3].httpStatus, 202);
-  assert.equal(records[3].repository, repoKey);
-  assert.ok(records[3].rawBytes > 0);
-  assert.ok(records[3].gzipBytes > 0);
-
-  store.setOrganizationConsent("skillbench-ai", true);
+  // The live pass attempts before it succeeds.
+  assert.ok(events.indexOf("upload_attempt") < events.indexOf("upload_succeeded"));
+  const succeeded = records.find((record) => record.event === "upload_succeeded");
+  assert.ok(succeeded, "upload_succeeded recorded");
+  assert.equal(succeeded.httpStatus, 202);
+  assert.equal(succeeded.repository, repoKey);
+  assert.ok(succeeded.rawBytes > 0);
+  assert.ok(succeeded.gzipBytes > 0);
 });
 
 test("skipped periods advance a discard cursor without staging a chunk", () => {

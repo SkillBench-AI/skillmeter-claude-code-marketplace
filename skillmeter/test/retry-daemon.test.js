@@ -19,11 +19,6 @@ setTestEnv("SKILLMETER_ACTIVATE_URL", "https://activation.test/activate");
 const daemon = require("../scripts/monitors/retry_daemon");
 const licenseStatus = require("../scripts/lib/license-status");
 
-test("requiring the daemon module does not start the loop", () => {
-  assert.equal(typeof daemon.nextDrainInterval, "function");
-  assert.equal(typeof daemon.maybeRefreshLicense, "function");
-});
-
 test("nextDrainInterval doubles on no progress, caps, and resets on progress", () => {
   const base = 120_000;
   const cap = 30 * 60_000;

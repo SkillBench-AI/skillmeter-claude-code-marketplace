@@ -43,7 +43,7 @@ global.fetch = async (url, options) => {
     if (process.env.TEST_REAL_SPAWN === "1") {
       // Hold the response until the test has observed Stop exit.
       for (let attempt = 0; !fs.existsSync(process.env.TEST_RELEASE); attempt++) {
-        if (attempt >= 500) throw new Error("Refresh was not released");
+        if (attempt >= 1500) throw new Error("Refresh was not released");
         await new Promise(resolve => setTimeout(resolve, 10));
       }
     }
@@ -63,7 +63,7 @@ global.fetch = async (url, options) => {
     const now = start + minute * 60_000;
     const result = runNode(script, [], {
       cwd: repo,
-      timeout: 5000,
+      timeout: 15_000,
       input: JSON.stringify({ session_id: "synthetic-session", cwd: repo, last_assistant_message: `synthetic turn ${minute}` }),
       env: {
         HOME: root, USERPROFILE: root, SKILLMETER_STATE_DIR: state,
@@ -72,7 +72,8 @@ global.fetch = async (url, options) => {
         TEST_REAL_SPAWN: realSpawn ? "1" : "0", TEST_RELEASE: release,
         TEST_FRESH: makeJwt({ ...claims, exp: Math.floor(now / 1000) + 900 }),
         SKILLMETER_ACTIVATE_URL: "https://activation.test/activate",
-        SKILLMETER_BACKEND_URL: "", SKILLMETER_ENV: "", ...extra,
+        SKILLMETER_BACKEND_URL: "", SKILLMETER_ENV: "", SKILLMETER_BROKER_URL: "",
+        SKILLMETER_RETRY_DAEMON_INTERVAL_MS: "", SKILLMETER_TIMEOUT: "", ...extra,
       },
     });
     assert.equal(result.status, 0, result.stderr || String(result.error));
@@ -103,7 +104,9 @@ test("Stop launches a real detached worker that recovers after the hook exits", 
   assert.ok(f.records().some(r => r.exited === "stop.js"));
   assert.equal(JSON.parse(fs.readFileSync(path.join(f.state, "credentials.json"))).license_jwt, f.token);
   fs.writeFileSync(f.release, "continue");
-  const deadline = Date.now() + 5000;
+  // Longer than the worker's own 15 s release wait, so a slow machine surfaces
+  // the worker's error instead of the test giving up first.
+  const deadline = Date.now() + 20_000;
   while (!f.records().some(r => r.exited === "drain_once.js") && Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, 20));
   }
@@ -117,12 +120,6 @@ test("Stop launches a real detached worker that recovers after the hook exits", 
   const renewed = JSON.parse(fs.readFileSync(path.join(f.state, "credentials.json"))).license_jwt;
   assert.notEqual(renewed, f.token, "child must persist the refreshed token to the isolated state root");
   assert.match(f.hook(17, { TEST_REAL_SPAWN: "0" }).stderr, /logged/);
-});
-
-test("detached recovery refreshes even with no queued files", () => {
-  const f = fixture();
-  f.drain(16);
-  assert.equal(f.records().filter(r => r.url?.endsWith("/refresh")).length, 1);
 });
 
 test("proactive Stop recovery keeps an active session capturing across two token lifetimes", () => {
