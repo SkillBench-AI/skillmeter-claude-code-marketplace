@@ -17,7 +17,7 @@ organization and make no changes.
 When `$ARGUMENTS` is exactly `status`, run:
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/backfill.js status LIFECYCLE_ID
+node "${CLAUDE_PLUGIN_ROOT}/scripts/backfill.js" status LIFECYCLE_ID
 ```
 
 Use the exact `backfill.lifecycleId`. Report the lifecycle status and every
@@ -44,7 +44,7 @@ supported.
 Run a fresh repository inventory:
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/repository_telemetry.js list
+node "${CLAUDE_PLUGIN_ROOT}/scripts/repository_telemetry.js" list
 ```
 
 Retain only repositories whose `org` exactly matches the licensed organization,
@@ -55,7 +55,7 @@ Claim the snapshot cutoff with the exact lifecycle ID. Include the active
 session UUID only when non-empty:
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/backfill.js claim LIFECYCLE_ID ACTIVE_SESSION_ID
+node "${CLAUDE_PLUGIN_ROOT}/scripts/backfill.js" claim LIFECYCLE_ID ACTIVE_SESSION_ID
 ```
 
 For a `declined` or `failed` lifecycle, replace `claim` with `manual-claim`.
@@ -77,14 +77,14 @@ Ask exactly one single-select question:
 On Cancel or question cancellation, run:
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/backfill.js decline LIFECYCLE_ID OFFER_ID
+node "${CLAUDE_PLUGIN_ROOT}/scripts/backfill.js" decline LIFECYCLE_ID OFFER_ID
 ```
 
 On `Send history`, map the displayed repositories to exact IDs from the same
 inventory and run:
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/scripts/backfill.js accept LIFECYCLE_ID OFFER_ID REVISION "ORG" ID...
+node "${CLAUDE_PLUGIN_ROOT}/scripts/backfill.js" accept LIFECYCLE_ID OFFER_ID REVISION "ORG" ID...
 ```
 
 Never pass paths, labels, custom input, inferred IDs, or repositories from
