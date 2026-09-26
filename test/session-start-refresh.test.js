@@ -7,7 +7,6 @@
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("fs");
 const http = require("http");
 const path = require("path");
 const { spawn } = require("child_process");
@@ -41,7 +40,7 @@ async function startRefreshServer() {
   return { requests, server, port: server.address().port };
 }
 
-function runSessionStart({ port, lockAgeMs }) {
+function runSessionStart({ port }) {
   const stateDir = makeTempDir("skm-ss-refresh-state-");
   const dataDir = makeTempDir("skm-ss-refresh-data-");
   const expired = jwt(-60);
@@ -50,13 +49,6 @@ function runSessionStart({ port, lockAgeMs }) {
     hash_salt: "0123456789abcdef0123456789abcdef",
     license_jwt: expired,
   });
-  if (lockAgeMs != null) {
-    const lock = path.join(dataDir, "logs", ".license-refresh.lock");
-    fs.mkdirSync(path.dirname(lock), { recursive: true });
-    fs.writeFileSync(lock, "");
-    const t = (Date.now() - lockAgeMs) / 1000;
-    fs.utimesSync(lock, t, t);
-  }
   const cwd = makeTempDir("skm-ss-refresh-cwd-");
   const child = spawn(process.execPath, [SCRIPT], {
     cwd,
@@ -86,7 +78,7 @@ function runSessionStart({ port, lockAgeMs }) {
 test("SessionStart makes no license request, even with an expired token", async () => {
   const { requests, server, port } = await startRefreshServer();
   try {
-    const run = await runSessionStart({ port, lockAgeMs: null });
+    const run = await runSessionStart({ port });
     assert.equal(run.status, 0, run.stderr);
     assert.deepEqual(requests, []);
     assert.equal(run.rotated, false);

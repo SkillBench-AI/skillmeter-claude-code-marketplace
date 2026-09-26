@@ -3,9 +3,10 @@
  * retries, policy revalidation, and delivered-artifact cleanup.
  *
  * The filesystem is the source of truth. Hooks append to the active
- * `events.jsonl`, final-session hooks seal it to `events.jsonl.<ts>`, and the
- * SessionStart hook / retry monitor drain sealed event logs plus queued
- * transcript delta chunks in the background.
+ * `events.jsonl`, final-session hooks seal it to `events.jsonl.<ts>`, and a
+ * detached drain (spawned by Stop, SessionEnd and SessionStart) or the retry
+ * monitor uploads sealed event logs plus queued transcript delta chunks,
+ * refreshing the license just before it sends.
  */
 
 const fs = require("fs");
@@ -1058,8 +1059,8 @@ function discardSkippedSessionArtifacts(input, deviceId, repository) {
 }
 
 /**
- * Seal final-session artifacts into durable queues. Network upload is left to
- * SessionStart retry and the plugin monitor, keeping async hooks short.
+ * Seal final-session artifacts into durable queues and, when anything was
+ * queued, spawn a detached drain for the upload, keeping async hooks short.
  */
 function sealFinalSessionArtifacts(input, deviceId, repository) {
   const sealedEventLog = sealEventLog(repository);

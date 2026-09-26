@@ -227,14 +227,6 @@ function getLicenseTokenUncached() {
   return getLicenseToken();
 }
 
-function setLicenseToken(jwt) {
-  return mutateStore((store) => {
-    if (jwt) store.license_jwt = jwt;
-    else delete store.license_jwt;
-    store.auth_generation = crypto.randomUUID();
-  });
-}
-
 // Matches the VS Code extension's TOKEN_EXPIRY_SKEW_MS (5 min). Refresh
 // fires proactively while the JWT is still technically valid so requests
 // in flight don't cross the expiry boundary.
@@ -362,9 +354,7 @@ module.exports = {
   getHashSalt,
   getLicenseToken,
   getLicenseTokenUncached,
-  setLicenseToken,
   isLicenseTokenExpired,
-  LICENSE_EXPIRY_SKEW_SECONDS,
   hasValidLicense,
   getAllowedGitHubOrgs,
   isTelemetryTransmissionAllowed,

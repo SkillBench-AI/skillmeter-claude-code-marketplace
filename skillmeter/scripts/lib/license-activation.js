@@ -97,8 +97,9 @@ async function refreshExpiredJwt(jwt, deviceId, expected) {
   return { outcome: "rotated", token: newJwt };
 }
 
-// SessionStart, queue drains and the retry monitor share refresh coordination.
-// The status record supplies backoff and terminal state across processes.
+// Upload drains refresh, in whichever process runs them (a detached drain,
+// the monitor). The lock coordinates them; the status record supplies backoff
+// and terminal state across processes.
 
 const LICENSE_REFRESH_LOCK_FILE = path.join(LOG_DIR, ".license-refresh.lock");
 // Don't retry a refresh within this window of the last attempt. Also serves as
@@ -107,9 +108,9 @@ const LICENSE_REFRESH_LOCK_FILE = path.join(LOG_DIR, ".license-refresh.lock");
 const LICENSE_REFRESH_COOLDOWN_MS = 60_000;
 
 /**
- * Pure single-flight + cooldown decision (no I/O — unit-testable). All callers
- * are best-effort/proactive (there's no reactive force path), so a lock younger
- * than the cooldown simply means "someone else has it / just refreshed" → skip.
+ * Pure single-flight + cooldown decision (no I/O — unit-testable). A lock
+ * younger than the cooldown means "someone else has it / just refreshed", so
+ * every caller skips, including a forced refresh after a 401.
  * @param {boolean} tokenFresh   - current token exists and is not near expiry
  * @param {number|null} lockMtimeMs - mtime of the lock file, or null if absent
  * @param {number} now           - Date.now()
@@ -268,7 +269,7 @@ async function ensureFreshLicense(deviceId, { source = "drain", force = false } 
   if (tokenFresh) return current;
 
   // Backoff / terminal decisions are shared across processes through the
-  // status record, so a daemon and a drain never fight over the same failure.
+  // status record, so concurrent drains never fight over the same failure.
   if (licenseStatus.refreshBlockedReason(licenseStatus.readLicenseStatus(), Date.now())) {
     return current;
   }

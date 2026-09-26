@@ -48,7 +48,7 @@ test("terminal status from a previous authentication context cannot block a new 
   status.recordTerminal({ reason: "revoked", status: 402 });
   assert.ok(status.readLicenseStatus().terminal);
   // Simulate the other client changing credentials without clearing Claude status.
-  store.setLicenseToken("other-client-signin");
+  store.commitSignin({ jwt: "other-client-signin" });
   assert.equal(status.readLicenseStatus().terminal, null);
   status.recordRefreshFailure({ status: 500 });
   assert.equal(status.readLicenseStatus().consecutive_failures, 1);
