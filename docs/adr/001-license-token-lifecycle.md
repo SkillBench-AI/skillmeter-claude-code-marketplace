@@ -9,6 +9,9 @@ Shared consent across clients is decided in
 [ADR 004](004-shared-consent.md), not here; see the
 [2026-09-25 note](#amendment-2026-09-25-shared-consent-is-decided-in-adr-004)
 at the end.
+[ADR 005](005-per-client-session.md) (proposed 2026-09-27) would supersede
+decision 1, decision 5 as far as it shares the license, and the session parts
+of the "authentication intent across shared clients" amendment.
 **Related:** `skillmeter-license-activation` (server-side counterpart for decision 1), `skillmeter-codex-marketplace`, `skillmeter-vscode-extension`
 
 ## Context
