@@ -31,6 +31,10 @@ not ask a question or change policy for that org.
 
 ### Ongoing telemetry
 
+Every telemetry choice applies to every SkillMeter client on this machine
+(the Claude Code and Codex plugins) and to every clone or worktree of a
+repository. State that in one line before each telemetry question below.
+
 For an org whose `consent` is `null`, call `AskUserQuestion` exactly once with
 one combined, single-select telemetry question:
 

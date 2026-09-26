@@ -1,6 +1,7 @@
 /**
  * Pure telemetry capture policy.
  *
+ * A policy file that cannot be read blocks everything (ADR 004, decision 5).
  * Org consent is the parent authorization. A repository must also have an
  * explicit opt-in; an unset repository stays off until the user selects it.
  * Network drainers separately enforce the same global + org + repo boundary.
@@ -9,6 +10,7 @@
  */
 
 function resolveTelemetryGate({
+  policyBlocked = null,
   globalDisabled,
   signedIn,
   cwdAvailable = true,
@@ -16,6 +18,7 @@ function resolveTelemetryGate({
   orgConsent,
   projectOptIn,
 }) {
+  if (policyBlocked) return { capture: false, mode: "policy_unreadable", reason: policyBlocked };
   if (globalDisabled) return { capture: false, mode: "global_disabled" };
   if (!signedIn) return { capture: false, mode: "not_signed_in" };
   if (!cwdAvailable) return { capture: false, mode: "cwd_unavailable" };

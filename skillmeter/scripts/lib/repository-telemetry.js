@@ -269,6 +269,9 @@ function toggleDescription({ gate, projectSetting, org }) {
   if (gate.mode === "global_disabled") {
     return "Disabled by the global telemetry kill-switch.";
   }
+  if (gate.mode === "policy_unreadable") {
+    return "Disabled because the telemetry policy file is unreadable; repair it first.";
+  }
   if (gate.mode === "org_disabled") {
     return `Disabled for @${org}.`;
   }
@@ -287,6 +290,7 @@ function buildRepositoryTelemetryState(roots, {
     telemetryStore.getRepositoryOverride(repoKey),
   getOrgConsent = telemetryStore.getOrganizationConsent,
   getGlobalDisabled = telemetryStore.getGlobalDisabled,
+  getPolicyBlockedReason = telemetryStore.getPolicyBlockedReason,
   isSignedIn = credstore.isSignedIn,
   getHashSalt = credstore.getOrCreateHashSalt,
   getConfiguredRepositories = () =>
@@ -294,6 +298,7 @@ function buildRepositoryTelemetryState(roots, {
   getAllowedOrgs = credstore.getAllowedGitHubOrgs,
 } = {}) {
   const globalDisabled = getGlobalDisabled();
+  const policyBlocked = getPolicyBlockedReason();
   const signedIn = isSignedIn();
   let hashSalt = "";
   const repositories = [];
@@ -347,6 +352,7 @@ function buildRepositoryTelemetryState(roots, {
     const projectSetting = getProjectSetting(scope.repoKey);
     const orgConsent = getOrgConsent(scope.remoteOrg);
     const gate = resolveTelemetryGate({
+      policyBlocked,
       globalDisabled,
       signedIn,
       repoOrgOwned: true,
@@ -403,9 +409,16 @@ function buildRepositoryTelemetryState(roots, {
     a.displayName.localeCompare(b.displayName) || a.id.localeCompare(b.id)
   );
 
+  let acknowledgementRequired = false;
+  try {
+    acknowledgementRequired = !policyBlocked && telemetryStore.acknowledgementRequired();
+  } catch {}
   return {
     revision: telemetryStore.getPolicyRevision(),
     globalDisabled,
+    policyBlocked,
+    acknowledgementRequired,
+    statement: telemetryStore.CONSENT_STATEMENT,
     signedIn,
     repositories,
     summary: {
@@ -420,6 +433,9 @@ function publicRepositoryState(state) {
   return {
     revision: state.revision,
     globalDisabled: state.globalDisabled,
+    policyBlocked: state.policyBlocked,
+    acknowledgementRequired: state.acknowledgementRequired,
+    statement: state.statement,
     signedIn: state.signedIn,
     repositories: state.repositories.map((repo) => ({
       id: repo.id,

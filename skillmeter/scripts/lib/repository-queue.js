@@ -24,22 +24,77 @@ function queueContextForRepository(repoKey, org = "") {
     repoKey,
     credstore.getOrCreateHashSalt()
   );
+  let existing;
   try {
     fs.mkdirSync(paths.root, { recursive: true });
-    const existing = safeReadJson(paths.metadata, null);
+    existing = safeReadJson(paths.metadata, null);
     if (existing && existing.repoKey !== repoKey) return null;
     if (!existing) {
       atomicWriteJson(paths.metadata, {
         repoKey,
         org,
         policyRevision: telemetryStore.getPolicyRevision(),
+        revocationsSeen: currentRevocations({ repoKey, org }),
         createdAt: Date.now(),
       });
     }
   } catch {
     return null;
   }
-  return { repoKey, org, ...paths };
+  const context = { repoKey, org, ...paths };
+  // Capture-time check: rows queued before an unobserved OFF are purged before
+  // new rows join them, so later capture is not lost with them.
+  if (existing) reconcileRevocations(context);
+  return context;
+}
+
+// ADR 004 decision 6. The counters this queue last observed, stored in its
+// repository.json. Rows queued before either writer recorded a counter carry
+// none and read as 0.
+function currentRevocations(context) {
+  const state = telemetryStore.readPolicyState();
+  if (state.status === "blocked") return null;
+  const policy = state.policy;
+  return {
+    org: telemetryStore.revocationCount(policy.organizations[context.org]),
+    repo: telemetryStore.revocationCount(policy.repositories[context.repoKey]),
+  };
+}
+
+function seenRevocations(context) {
+  const seen = safeReadJson(context.metadata, null)?.revocationsSeen;
+  const count = (value) => Number.isSafeInteger(value) && value >= 0 ? value : 0;
+  return { org: count(seen?.org), repo: count(seen?.repo) };
+}
+
+// "higher": an OFF happened that this queue did not observe; "lower": the
+// policy was restored from an older copy; "equal" otherwise.
+function revocationComparison(context) {
+  const current = currentRevocations(context);
+  if (!current) return "equal";
+  const seen = seenRevocations(context);
+  if (current.org > seen.org || current.repo > seen.repo) return "higher";
+  if (current.org < seen.org || current.repo < seen.repo) return "lower";
+  return "equal";
+}
+
+function recordRevocationsSeen(context) {
+  const current = currentRevocations(context);
+  if (!current) return;
+  try {
+    const meta = safeReadJson(context.metadata, null);
+    if (!meta) return;
+    atomicWriteJson(context.metadata, { ...meta, revocationsSeen: current });
+  } catch {}
+}
+
+// Purge rows captured before an unobserved OFF, as an observed OFF would, then
+// record the new counters so later capture delivers.
+function reconcileRevocations(context) {
+  if (revocationComparison(context) !== "higher") return false;
+  clearRepositoryPayloads(context);
+  recordRevocationsSeen(context);
+  return true;
 }
 
 function listRepositoryQueueContexts() {
@@ -76,11 +131,23 @@ function queueContextForPath(filePath) {
   ) || null;
 }
 
+// ADR 004, decision 6: an explicit organization or repository OFF purges even
+// while the global pause holds everything else; an unset choice holds.
 function queueDisposition(context) {
-  const policy = telemetryStore.readPolicy();
+  const state = telemetryStore.readPolicyState();
+  if (state.status === "blocked") return "pause";
+  const policy = state.policy;
+  const org = policy.organizations[context.org];
+  const repo = policy.repositories[context.repoKey];
+  if (org?.enabled === false || repo?.enabled === false) return "delete";
+  const revocations = context.metadata ? revocationComparison(context) : "equal";
+  // An OFF/ON cycle this queue never observed revokes what it queued before.
+  if (revocations === "higher") return "delete";
   if (policy.global.enabled === false) return "pause";
-  if (policy.organizations[context.org]?.enabled !== true) return "delete";
-  if (policy.repositories[context.repoKey]?.enabled !== true) return "delete";
+  if (org?.enabled !== true || repo?.enabled !== true) return "pause";
+  // A lower counter means an older policy copy was restored: hold until it
+  // catches up; retention still bounds the hold.
+  if (revocations === "lower") return "pause";
   return "send";
 }
 
@@ -132,6 +199,16 @@ function clearRepositoryPayloads(context) {
 }
 
 function purgeRepositoryQueue(repoKey) {
+  const result = purgeRepositoryQueuePayloads(repoKey);
+  for (const context of listRepositoryQueueContexts()) {
+    if (context.repoKey === telemetryStore.normalizeRepoKey(repoKey)) {
+      recordRevocationsSeen(context);
+    }
+  }
+  return result;
+}
+
+function purgeRepositoryQueuePayloads(repoKey) {
   const normalized = telemetryStore.normalizeRepoKey(repoKey);
   if (!normalized) return false;
   let removed = false;
@@ -182,6 +259,7 @@ function purgeDisallowedQueues() {
   for (const context of listRepositoryQueueContexts()) {
     if (queueDisposition(context) !== "delete") continue;
     if (clearRepositoryPayloads(context)) removed++;
+    recordRevocationsSeen(context);
   }
   return removed;
 }
@@ -191,6 +269,7 @@ module.exports = {
   listRepositoryQueueContexts,
   queueContextForPath,
   queueDisposition,
+  reconcileRevocations,
   purgeRepositoryQueue,
   purgeOrganizationQueues,
   purgeAllRepositoryQueues,

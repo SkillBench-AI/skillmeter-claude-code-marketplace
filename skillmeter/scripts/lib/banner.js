@@ -120,6 +120,33 @@ function signinStatusBanner(org, consent, repositoryEnabled = false) {
   ]);
 }
 
+// Shown at SessionStart when the policy file cannot be read (ADR 004,
+// decision 5): nothing is captured or sent until it is readable again.
+function telemetryPolicyUnreadableBanner(reason) {
+  return card([
+    "[ ACTION REQUIRED ]",
+    "",
+    `Policy file   ${String(reason || "unreadable").replace(/_/g, " ")}`,
+    "Status        OFF — capture and uploads on hold",
+    "",
+    "→ /skillmeter:telemetry list for the file to repair",
+  ]);
+}
+
+// Shown once per session while ON choices predate the shared-client
+// statement (ADR 004, decision 4). Capture continues here; another client
+// uses those choices only after the user confirms.
+function telemetryAcknowledgementBanner() {
+  return card([
+    "[ CONFIRM SCOPE ]",
+    "",
+    "Your telemetry choices predate the shared-client statement.",
+    "They apply to every SkillMeter client on this machine.",
+    "",
+    "→ /skillmeter:telemetry list to confirm",
+  ]);
+}
+
 // Shown at SessionStart when no valid license JWT is detected.
 function signInRequiredBanner() {
   return card([
@@ -165,6 +192,8 @@ function telemetryFailedNotice(error) {
 module.exports = {
   signinStatusBanner,
   signInRequiredBanner,
+  telemetryPolicyUnreadableBanner,
+  telemetryAcknowledgementBanner,
   telemetryConsentRequiredBanner,
   telemetryRepositoryRequiredBanner,
   signinRepositoryInventoryBanner,
