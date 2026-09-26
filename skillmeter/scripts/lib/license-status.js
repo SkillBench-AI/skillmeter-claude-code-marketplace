@@ -22,8 +22,9 @@
  */
 
 const fs = require("fs");
+const crypto = require("crypto");
 const path = require("path");
-const { STATE_DIR, getRetryDaemonIntervalMs } = require("./config");
+const { STATE_DIR, CRED_FILE, getRetryDaemonIntervalMs } = require("./config");
 const { safeReadJson, atomicWriteJson } = require("./io");
 
 const LICENSE_STATUS_FILE = path.join(STATE_DIR, "license-status.json");
@@ -56,10 +57,23 @@ function emptyStatus() {
   };
 }
 
+// Bind new status records to the exchange identity without storing a token.
+// Another client may sign in without knowing about this Claude status file.
+function authContext() {
+  const store = safeReadJson(CRED_FILE, {});
+  return crypto.createHash("sha256").update(JSON.stringify([
+    store.auth_generation || null, store.device_id || null,
+    store.license_jwt || null, store.signed_out === true,
+  ])).digest("hex");
+}
+
 function readLicenseStatus() {
   const raw = safeReadJson(LICENSE_STATUS_FILE, null);
   if (!raw || typeof raw !== "object" || raw.schema_version !== SCHEMA_VERSION) {
     return emptyStatus();
+  }
+  if (raw.auth_context && raw.auth_context !== authContext()) {
+    return { ...emptyStatus(), revision: raw.revision || 0 };
   }
   return { ...emptyStatus(), ...raw };
 }
@@ -125,8 +139,9 @@ const MAX_UPDATE_ATTEMPTS = 5;
 function updateLicenseStatus(mutate) {
   let next;
   for (let attempt = 0; attempt < MAX_UPDATE_ATTEMPTS; attempt++) {
+    const context = authContext();
     const prev = readLicenseStatus();
-    next = { ...mutate(prev), revision: (prev.revision || 0) + 1 };
+    next = { ...mutate(prev), auth_context: context, revision: (prev.revision || 0) + 1 };
     try {
       if (writeIfRevisionUnchanged(next, prev.revision || 0)) {
         persistenceFailureReported = false;
