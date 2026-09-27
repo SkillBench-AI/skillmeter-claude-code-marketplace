@@ -12,7 +12,7 @@ const { signinStatusBanner } = require("./lib/banner.js");
 const { startSpinner } = require("./lib/spinner.js");
 const { getRepoScopeDecision } = require("./lib/repo-scope");
 const telemetryStore = require("./lib/telemetry-store");
-const { clearLicenseStatus } = require("./lib/license-status");
+const { clearLicenseStatus, readLicenseStatus, TERMINAL_REASONS } = require("./lib/license-status");
 const { STATE_DIR } = require("./lib/config");
 const { requestDeviceCode, pollDeviceToken } = require("./lib/broker");
 const { exchangeIdToken } = require("./lib/license-exchange");
@@ -142,6 +142,13 @@ function spawnBackgroundPoll(deviceId, deviceCode, interval, generation) {
 }
 
 async function main() {
+  // Read before markEngaged: a new intent changes the status record's context,
+  // after which it reads as empty. A session the broker or the server ended
+  // can leave a license that is still valid for up to one lifetime; that
+  // license is not a sign-in to keep.
+  const sessionEnded =
+    readLicenseStatus().terminal?.reason === TERMINAL_REASONS.REACTIVATION_REQUIRED;
+
   // Explicit sign-in clears the signed-out sentinel before starting the flow.
   const deviceId = credstore.getDeviceId();
   const generation = credstore.markEngaged();
@@ -149,12 +156,14 @@ async function main() {
   clearLicenseStatus({ source: "signin" });
 
   const existingToken = credstore.getLicenseToken();
-  if (existingToken && !credstore.isLicenseTokenExpired(existingToken)) {
+  if (existingToken && !sessionEnded && !credstore.isLicenseTokenExpired(existingToken)) {
     // Already signed in — the license (and its validated org) is current.
     showSigninStatus();
     return;
   }
-  if (existingToken) {
+  if (sessionEnded) {
+    log("Your session ended — signing in again...");
+  } else if (existingToken) {
     log("License expired — refreshing...");
   }
 
