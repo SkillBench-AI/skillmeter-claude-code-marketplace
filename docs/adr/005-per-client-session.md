@@ -1,7 +1,9 @@
 # Per-Client Sessions: a Hydra Refresh Token, with the License as a Cache
 
 **Date:** 2026-09-27
-**Status:** Proposed. Author: arcmin.
+**Status:** Proposed. Author: arcmin. Implemented and verified end to end in
+dev and prod on 2026-09-27 (0.40.0, 0.40.1); see
+[Verification](#verification-2026-09-27).
 **Supersedes:** ADR 001 decision 1 (1-hour TTL), ADR 001 decision 5 as far as
 it shares the license, and the session parts of ADR 001's amendment
 "authentication intent across shared clients". ADR 004 (shared consent) is
@@ -72,8 +74,11 @@ window ends, then signs in to Codex.
 
 ### 2. The refresh token is the session; the license is a cache
 
-- **Signed in** means this client's session holds a refresh token (during
-  migration, a license) and is not signed out.
+- **Signed in** means this client's session holds a license and is not signed
+  out. A session the broker ended keeps its license until the next sign-in, so
+  recording continues (ADR 001 decision 3) while transmission waits; the
+  SessionStart banner asks for sign-in, and `/skillmeter:signin` runs the
+  device flow even while that license is still valid.
 - **Sign-in** stores the device grant's refresh token and the license from
   `/activate` in one atomic write.
 - **Renewal** is one function behind the existing single-flight lock, held
@@ -89,8 +94,9 @@ window ends, then signs in to Codex.
 
 | Outcome | Result |
 |---|---|
-| Hydra `invalid_grant`; legacy `/refresh` 401 or 410 | Drop the session; terminal `reactivation_required` |
-| `/activate` 402, or 404 `workspace_not_found` for the pinned tenant | Drop the session and purge that organization's unsent data (the 402 rule of ADR 001's 2026-09-27 amendment); terminal `revoked` |
+| Hydra `invalid_grant`; legacy `/refresh` 401 or 410 | Keep the session; terminal `reactivation_required`. A session with a refresh token never falls back to `/refresh` |
+| `/activate` 402, or 404 `workspace_not_found` for the pinned tenant | Drop the session, purge that organization's unsent data (the 402 rule of ADR 001's 2026-09-27 amendment) and revoke the refresh token; terminal `revoked` |
+| `/activate` 401 right after the broker granted | Transient: a server configuration fault, not a verdict on the session |
 | Network error or 5xx | Transient; the existing backoff. Recording continues (ADR 001 decision 3) |
 
 ### 3. Revocation belongs to Hydra and to the exchange
@@ -113,10 +119,25 @@ gone.
 ### 5. Hydra session lifetime: 30 days idle, 90 days absolute
 
 `skillmeter-plugin` is a public client with the `device_code` and
-`refresh_token` grants and revocation. Refresh tokens rotate with a grace
-period of 30 to 60 seconds, covering a crash between receiving a rotated
-token and storing it. The refresh response must carry a new `id_token`. These
-settings live in `skillbench-infra`.
+`refresh_token` grants and revocation. The refresh response carries a new
+`id_token`, with `auth_time` kept from the original sign-in.
+
+| Setting | Value | Where |
+|---|---|---|
+| Idle lifetime | 30 days | Hydra's default `ttl.refresh_token` (720h), renewed on every rotation |
+| Absolute lifetime | 90 days | Not enforced yet: `/activate` is to refuse an ID token whose `auth_time` is older |
+| Rotation grace | 30 s, one reuse | `OAUTH2_GRANT_REFRESH_TOKEN_ROTATION_GRACE_PERIOD=30s`, `..._REUSE_COUNT=2` (skillbench-infra #289, #290) |
+
+The reuse count includes the rotation itself: Hydra increments `used_times`
+on every use and allows one while `used_times < count`, so `2` is one reuse
+and `1` is none. Hydra's default (`0s`) revokes the whole chain on any second
+use; the grace period covers a crash between receiving a rotated token and
+storing it, and a second reuse still revokes the chain.
+
+Hydra's task definitions are owned by Terraform, but `modules/ecs-service`
+ignores task definition changes on the service. An apply alone does not reach
+the running tasks; skillbench-infra #291 rolls a config-only revision after
+the control-plane apply.
 
 ### 6. The custom refresh protocol is removed after migration
 
@@ -142,18 +163,38 @@ sign-in path goes when the VS Code extension moves to the broker.
 
 ## Implementation mapping
 
-| Step | Repository | Change |
+| Step | Repository | Change | Status |
+|---|---|---|---|
+| 1 | license | Client id list (`PLUGIN_OAUTH_CLIENT_IDS`); `code` in 402 and 404 bodies; `registerDevice` failure is logged, not fatal; `LICENSE_TTL_SECONDS`; no `email` claim | Done: license #41, dev and prod |
+| 2a | plugin | `session.json`, migration, status record and sentinel moved | Done: #157, 0.40.0 |
+| 2b–2d | plugin | `lib/broker.js` and `lib/license-exchange.js`; refresh token stored at sign-in; Hydra renewal pinned to the tenant; revoke at sign-out | Done: #158, 0.40.0 |
+| — | plugin | Sign-in runs the device flow when the session ended | Done: #160, 0.40.1 |
+| — | infra | Rotation grace period; roll Hydra after apply | Done: #289, #290 (dev and prod); #291 open |
+| 3 | Codex, VS Code | Own session; VS Code moves to the broker and to atomic writes | Open |
+| 4 | all | Remove `/refresh`, `original_iat`, the fallback and the GitHub path | Open, after step 3 and 14 days without `/refresh` calls |
+
+## Verification (2026-09-27)
+
+Run on `main` against dev and against prod, each in an isolated state
+directory with token values hashed in the record:
+
+| Check | Dev | Prod |
 |---|---|---|
-| 1 | license | Client id list (`PLUGIN_OAUTH_CLIENT_IDS`); `code` in 402 and 404 bodies; `registerDevice` failure is logged, not fatal; `LICENSE_TTL_SECONDS`; no `email` claim |
-| 2a | plugin | `session.json`, migration, status record and sentinel moved |
-| 2b | plugin | `lib/broker.js` and `lib/license-exchange.js` extracted from `signin.js` |
-| 2c | plugin | Store the refresh token at sign-in; Hydra renewal pinned to the tenant |
-| 2d | plugin | Revoke at sign-out; release |
-| 3 | Codex, VS Code | Own client id and session; VS Code moves to the broker and to atomic writes |
-| 4 | all | Remove `/refresh`, `original_iat`, the fallback and the GitHub path |
+| Sign-in stores the refresh token and a license (15-minute TTL, no `email`) | ✅ | ✅ |
+| Renewal rotates the refresh token and returns an `id_token`; `auth_time` is kept | ✅ | ✅ |
+| Renewal `/activate` is pinned to the tenant slug; no `/refresh` call | ✅ | ✅ |
+| A spent token presented once more within 30 s is accepted and the session continues | ✅ | ✅ |
+| A second reuse gets `invalid_grant` and revokes the chain; the plugin reports sign-in required | ✅ | ✅ |
+| After the session ended, `/skillmeter:signin` runs the device flow although the license is valid | ✅ | ✅ |
+| Sign-out revokes the refresh token; the old token then gets `invalid_grant` | ✅ | ✅ |
+
+Not verified end to end: removal from a workspace (402, or 404 for the pinned
+tenant), which is covered by unit tests only.
 
 ## Open items
 
-- Hydra configuration has to be confirmed in `skillbench-infra`: grant types,
-  rotation grace period, lifetimes, and the `id_token` on refresh.
+- The absolute 90-day lifetime (decision 5).
+- An end-to-end check of removal from a workspace.
+- Steps 3 and 4. Until `/refresh` is removed, a copied license can still be
+  renewed there for up to seven days from its first activation.
 - OS keychain storage for the refresh token is deferred.
