@@ -4,7 +4,7 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
-const { makeTempDir, writeJson, writeFile, writeTelemetryPolicy, makeJwt, runNode } = require("../testing/helpers");
+const { makeTempDir, writeFile, writeTelemetryPolicy, makeJwt, runNode, writeCredentials, readSession, accountDir } = require("../testing/helpers");
 
 const scripts = path.resolve(__dirname, "../skillmeter/scripts");
 
@@ -23,7 +23,7 @@ function fixture({ realSpawn = false } = {}) {
   const claims = { sub: "test-tenant", broker_sub: "test-user", org: { login: "acme" }, aud: "https://acme.meter.skillbench.ai" };
   const token = makeJwt({ ...claims, exp: Math.floor(start / 1000) + 900 });
   const credentials = { device_id: "11111111-2222-4333-8444-555555555555", hash_salt: "0123456789abcdef0123456789abcdef", license_jwt: token };
-  writeJson(path.join(state, "credentials.json"), credentials);
+  writeCredentials(state, credentials, { dataDir: data });
   writeTelemetryPolicy(state, { orgs: { acme: true }, repositories: { "github.com/acme/widgets": true } });
   writeFile(path.join(repo, ".git/config"), '[remote "origin"]\nurl = https://github.com/acme/widgets.git\n');
   const preload = path.join(root, "preload.cjs");
@@ -112,7 +112,7 @@ test("Stop's detached drain refreshes and uploads after the hook exits", async (
   const f = fixture({ realSpawn: true });
   f.hook(16);
   assert.ok(f.records().some(r => r.exited === "stop.js"));
-  assert.equal(JSON.parse(fs.readFileSync(path.join(f.state, "credentials.json"))).license_jwt, f.token);
+  assert.equal(readSession(f.state, { dataDir: f.data }).license_jwt, f.token);
   fs.writeFileSync(f.release, "continue");
   // Longer than the worker's own 15 s release wait, so a slow machine surfaces
   // the worker's error instead of the test giving up first.
@@ -135,7 +135,7 @@ test("Stop's detached drain refreshes and uploads after the hook exits", async (
   const uploads = urls.filter(url => url.endsWith("/logs/claude"));
   assert.equal(uploads.length, 1, "the event recorded while expired is sent once");
   assert.ok(urls.indexOf("https://activation.test/refresh") < urls.indexOf(uploads[0]), "after a refresh");
-  const renewed = JSON.parse(fs.readFileSync(path.join(f.state, "credentials.json"))).license_jwt;
+  const renewed = readSession(f.state, { dataDir: f.data }).license_jwt;
   assert.notEqual(renewed, f.token, "child must persist the refreshed token to the isolated state root");
   assert.match(f.hook(17, { TEST_REAL_SPAWN: "0" }).stderr, /logged/);
 });
@@ -155,7 +155,7 @@ test("refresh failure backs off and later recovers without SessionStart", () => 
   const f = fixture();
   f.hook(16);
   f.drain(16, { TEST_REFRESH_STATUS: "503" });
-  const status = JSON.parse(fs.readFileSync(path.join(f.state, "license-status.json")));
+  const status = JSON.parse(fs.readFileSync(path.join(accountDir(f.state, f.data), "license-status.json")));
   assert.equal(status.last_outcome, "transient_failure");
   f.hook(17);
   f.drain(17);
@@ -169,10 +169,10 @@ for (const denied of ["signed_out", "global_off", "org_off", "repo_off", "missin
   test(`${denied}: repository content is never sent`, () => {
     const f = fixture();
     if (denied === "signed_out") {
-      writeJson(path.join(f.state, "credentials.json"), { ...f.credentials, signed_out: true });
+      writeCredentials(f.state, { ...f.credentials, signed_out: true }, { dataDir: f.data });
     } else if (denied === "missing_token") {
       const { license_jwt, ...rest } = f.credentials;
-      writeJson(path.join(f.state, "credentials.json"), rest);
+      writeCredentials(f.state, rest, { dataDir: f.data });
     } else {
       writeTelemetryPolicy(f.state, { enabled: denied !== "global_off", orgs: { acme: denied !== "org_off" }, repositories: { "github.com/acme/widgets": denied !== "repo_off" } });
     }
@@ -199,7 +199,7 @@ for (const status of [401, 402, 410]) {
     f.hook(20);
     f.drain(20);
     assert.equal(f.records().filter(r => r.url).length, 1, "no further refresh until a new sign-in");
-    assert.ok(JSON.parse(fs.readFileSync(path.join(f.state, "license-status.json"))).terminal);
+    assert.ok(JSON.parse(fs.readFileSync(path.join(accountDir(f.state, f.data), "license-status.json"))).terminal);
   });
 }
 
@@ -210,7 +210,7 @@ for (const change of ["signout", "revoke_consent"]) {
     assert.ok(f.records().filter(r => r.spawn).length >= 1);
     if (change === "signout") {
       const { license_jwt, ...rest } = f.credentials;
-      writeJson(path.join(f.state, "credentials.json"), { ...rest, signed_out: true });
+      writeCredentials(f.state, { ...rest, signed_out: true }, { dataDir: f.data });
     } else {
       writeTelemetryPolicy(f.state, { orgs: { acme: false }, repositories: { "github.com/acme/widgets": true } });
     }

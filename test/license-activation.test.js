@@ -8,7 +8,7 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
 
-const { makeTempDir, setTestEnv, makeJwt, writeJson } = require("../testing/helpers");
+const { makeTempDir, setTestEnv, makeJwt, writeCredentials, readSession } = require("../testing/helpers");
 
 const stateDir = makeTempDir("skm-license-activation-");
 
@@ -24,7 +24,6 @@ const { LOG_DIR } = require("../skillmeter/scripts/lib/paths");
 
 const DEVICE_ID = "11111111-2222-4333-8444-555555555555";
 const LOCK_FILE = path.join(LOG_DIR, ".license-refresh.lock");
-const CRED_FILE = path.join(stateDir, "credentials.json");
 
 function jwt({ expiresInSec }) {
   return makeJwt({
@@ -42,7 +41,7 @@ const FRESH = () => jwt({ expiresInSec: 3600 });
 function writeCreds(licenseJwt) {
   const store = { device_id: DEVICE_ID, hash_salt: "0123456789abcdef0123456789abcdef" };
   if (licenseJwt) store.license_jwt = licenseJwt;
-  writeJson(CRED_FILE, store);
+  writeCredentials(stateDir, store);
 }
 
 // fetch stub: queue of responses, records calls.
@@ -261,9 +260,12 @@ test("ensureFreshLicense refreshes once the record is clear, and honours the loc
 });
 
 test("signed out: neither path makes a network call", async () => {
-  const store = JSON.parse(fs.readFileSync(CRED_FILE, "utf8"));
-  store.signed_out = true;
-  writeJson(CRED_FILE, store);
+  writeCredentials(stateDir, {
+    device_id: DEVICE_ID,
+    hash_salt: "0123456789abcdef0123456789abcdef",
+    ...readSession(stateDir),
+    signed_out: true,
+  });
   assert.equal(await refreshLicense(DEVICE_ID, { source: "daemon" }), null);
   assert.equal(await ensureFreshLicense(DEVICE_ID, { source: "daemon" }), null);
   assert.equal(calls.length, 0);

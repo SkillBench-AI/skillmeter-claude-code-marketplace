@@ -9,7 +9,7 @@ and [privacy notice](../PRIVACY.md) before enabling collection.
 | Command | Purpose |
 | --- | --- |
 | `/skillmeter:signin` | Sign in through the SkillBench identity service and review consent |
-| `/skillmeter:signout` | Remove the shared license and stop authenticated uploads |
+| `/skillmeter:signout` | Sign this plugin out and stop its authenticated uploads (other SkillMeter clients stay signed in) |
 | `/skillmeter:telemetry list` | Review and toggle known repositories |
 | `/skillmeter:telemetry status` | Inspect sign-in, global and current-repository state |
 | `/skillmeter:telemetry disable-global` | Pause live and historical uploads |
@@ -114,18 +114,23 @@ license removes them, and are deleted once they are older than 7 days.
 Recording does not wait for the license: while you are signed in, hooks record
 even if the license has expired, and the data is sent after the next refresh.
 The license is refreshed in one place, by the upload drain just before it sends,
-and once more if the server rejects the token (HTTP 401). Transient failures
-back off up to a 30-minute interval and keep retrying. A license that can no
-longer be refreshed (401/410) or was revoked (402) requires `/skillmeter:signin`
-and browser approval. See [ADR001](../docs/adr/001-license-token-lifecycle.md).
+and once more if the server rejects the token (HTTP 401). Sign-in keeps the
+sign-in service's refresh token, which renews the license for this workspace
+only; sign-out revokes it. Transient failures back off up to a 30-minute
+interval and keep retrying. A session the sign-in service ended, or a license
+that was revoked because the workspace no longer licenses you (402), requires
+`/skillmeter:signin` and browser approval. See
+[ADR001](../docs/adr/001-license-token-lifecycle.md) and
+[ADR005](../docs/adr/005-per-client-session.md).
 
 ## Local state and diagnostics
 
 | Location | Contents |
 | --- | --- |
-| `~/.skillbench/credentials.json` | Device ID, hash salt and license |
+| `~/.skillbench/credentials.json` | Device ID and hash salt, shared with other SkillMeter clients |
 | `~/.skillbench/telemetry-policy.json` | Global, organization and repository choices |
-| `~/.skillbench/license-status.json` | Refresh timestamps, failures and terminal reason |
+| `${CLAUDE_PLUGIN_DATA}/account/<id>/session.json` | This plugin's license and sign-in state, not shared with other clients |
+| `${CLAUDE_PLUGIN_DATA}/account/<id>/license-status.json` | Refresh timestamps, failures and terminal reason |
 | `${CLAUDE_PLUGIN_DATA}/logs/repositories/` | Repository event and transcript queues |
 | `${CLAUDE_PLUGIN_DATA}/logs/backfill.ndjson` | Local backfill progress and upload outcomes |
 
