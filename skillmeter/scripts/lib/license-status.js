@@ -1,6 +1,6 @@
 /**
- * Device-wide refresh status in STATE_DIR, shared across sessions. Refresh and
- * sign-in update it; the upload drains read it for backoff and SessionStart for
+ * This client's refresh status, next to its session in the account directory
+ * (ADR 005) and shared across its sessions. Refresh and sign-in update it; the upload drains read it for backoff and SessionStart for
  * its sign-in banner, without a network request.
  *
  * Shape (schema_version 1):
@@ -24,10 +24,14 @@
 const fs = require("fs");
 const crypto = require("crypto");
 const path = require("path");
-const { STATE_DIR, CRED_FILE, getRetryDaemonIntervalMs } = require("./config");
+const { CRED_FILE, getRetryDaemonIntervalMs } = require("./config");
+const { ACCOUNT_DIR } = require("./paths");
 const { safeReadJson, atomicWriteJson } = require("./io");
 
-const LICENSE_STATUS_FILE = path.join(STATE_DIR, "license-status.json");
+const LICENSE_STATUS_FILE = path.join(ACCOUNT_DIR, "license-status.json");
+// credstore's session file. Named here rather than required, so reading the
+// status never runs the session migration.
+const SESSION_FILE = path.join(ACCOUNT_DIR, "session.json");
 const SCHEMA_VERSION = 1;
 
 // Backoff bounds. The base is the monitor's sweep interval (2 min by default);
@@ -60,13 +64,14 @@ function emptyStatus() {
   };
 }
 
-// Bind new status records to the exchange identity without storing a token.
-// Another client may sign in without knowing about this Claude status file.
+// Bind new status records to the exchange identity without storing a token:
+// this client's session, and the shared device identity.
 function authContext() {
-  const store = safeReadJson(CRED_FILE, {});
+  const session = safeReadJson(SESSION_FILE, {}) || {};
+  const identity = safeReadJson(CRED_FILE, {}) || {};
   return crypto.createHash("sha256").update(JSON.stringify([
-    store.auth_generation || null, store.device_id || null,
-    store.license_jwt || null, store.signed_out === true,
+    session.auth_generation || null, identity.device_id || null,
+    session.license_jwt || null, session.signed_out === true,
   ])).digest("hex");
 }
 

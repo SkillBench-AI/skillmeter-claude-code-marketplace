@@ -13,6 +13,9 @@ const {
   runNode,
   writeFile,
   writeJson,
+  writeCredentials,
+  readSession,
+  sessionPath,
 } = require("../testing/helpers");
 
 const HOOK = path.resolve(__dirname, "../skillmeter/scripts/hook.js");
@@ -48,12 +51,12 @@ function makeEnvironment({
 } = {}) {
   const stateDir = makeTempDir("skm-exclusion-state-");
   const dataDir = makeTempDir("skm-exclusion-data-");
-  writeJson(path.join(stateDir, "credentials.json"), {
+  writeCredentials(stateDir, {
     device_id: "EXCLUSION-TEST-DEVICE",
     hash_salt: SALT,
     license_jwt: token,
     telemetry_disabled: true,
-  });
+  }, { dataDir });
   writeJson(path.join(stateDir, "telemetry-policy.json"), {
     schema_version: 1,
     revision: 1,
@@ -275,14 +278,12 @@ test("global OFF pauses an existing audit queue and tenant mismatch deletes it",
   const mismatch = makeEnvironment();
   runPrompt(mismatch.env, external);
   const mismatchFile = organizationAuditFiles(mismatch.dataDir)[0];
-  const credentials = readJson(
-    path.join(mismatch.stateDir, "credentials.json")
-  );
-  credentials.license_jwt = licenseJwt(
+  const session = readSession(mismatch.stateDir, { dataDir: mismatch.dataDir });
+  session.license_jwt = licenseJwt(
     "skillbench-ai",
     "https://different-tenant.example"
   );
-  writeJson(path.join(mismatch.stateDir, "credentials.json"), credentials);
+  writeJson(sessionPath(mismatch.stateDir, mismatch.dataDir), session);
   assert.equal(
     runNode("-e", [purgeProbe], { cwd, env: mismatch.env }).status,
     0

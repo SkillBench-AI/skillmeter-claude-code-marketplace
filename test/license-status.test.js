@@ -9,7 +9,7 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
 
-const { makeTempDir, setTestEnv } = require("../testing/helpers");
+const { makeTempDir, setTestEnv, accountDir } = require("../testing/helpers");
 
 const stateDir = makeTempDir("skm-license-status-");
 setTestEnv("SKILLMETER_STATE_DIR", stateDir);
@@ -39,9 +39,11 @@ test("refreshBlockedReason: null, backoff, terminal", () => {
   );
 });
 
-test("record lives next to credentials.json and starts empty", () => {
+test("record lives next to this client's session, not in the shared state dir, and starts empty", () => {
   ls.clearLicenseStatus();
-  assert.equal(path.dirname(ls.LICENSE_STATUS_FILE), stateDir);
+  // ADR 005: the status belongs to this client's session.
+  assert.equal(path.dirname(ls.LICENSE_STATUS_FILE), accountDir(stateDir));
+  assert.equal(fs.existsSync(path.join(stateDir, "license-status.json")), false);
   assert.ok(fs.existsSync(ls.LICENSE_STATUS_FILE));
   const s = ls.readLicenseStatus();
   assert.equal(s.consecutive_failures, 0);
@@ -133,6 +135,7 @@ test("a terminal record stays terminal when a late transient failure lands", () 
 });
 
 test("a record with another schema version is ignored", () => {
+  fs.mkdirSync(path.dirname(ls.LICENSE_STATUS_FILE), { recursive: true });
   fs.writeFileSync(ls.LICENSE_STATUS_FILE, JSON.stringify({ schema_version: 99, terminal: { reason: "x" } }));
   assert.equal(ls.readLicenseStatus().terminal, null);
 });

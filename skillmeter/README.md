@@ -9,7 +9,7 @@ and [privacy notice](../PRIVACY.md) before enabling collection.
 | Command | Purpose |
 | --- | --- |
 | `/skillmeter:signin` | Sign in through the SkillBench identity service and review consent |
-| `/skillmeter:signout` | Remove the shared license and stop authenticated uploads |
+| `/skillmeter:signout` | Sign this plugin out and stop its authenticated uploads (other SkillMeter clients stay signed in) |
 | `/skillmeter:telemetry list` | Review and toggle known repositories |
 | `/skillmeter:telemetry status` | Inspect sign-in, global and current-repository state |
 | `/skillmeter:telemetry disable-global` | Pause live and historical uploads |
@@ -123,9 +123,10 @@ and browser approval. See [ADR001](../docs/adr/001-license-token-lifecycle.md).
 
 | Location | Contents |
 | --- | --- |
-| `~/.skillbench/credentials.json` | Device ID, hash salt and license |
+| `~/.skillbench/credentials.json` | Device ID and hash salt, shared with other SkillMeter clients |
 | `~/.skillbench/telemetry-policy.json` | Global, organization and repository choices |
-| `~/.skillbench/license-status.json` | Refresh timestamps, failures and terminal reason |
+| `${CLAUDE_PLUGIN_DATA}/account/<id>/session.json` | This plugin's license and sign-in state, not shared with other clients |
+| `${CLAUDE_PLUGIN_DATA}/account/<id>/license-status.json` | Refresh timestamps, failures and terminal reason |
 | `${CLAUDE_PLUGIN_DATA}/logs/repositories/` | Repository event and transcript queues |
 | `${CLAUDE_PLUGIN_DATA}/logs/backfill.ndjson` | Local backfill progress and upload outcomes |
 
