@@ -5,7 +5,7 @@ const path = require("path");
 // Two stores (ADR 005). The shared one, CRED_FILE, holds the device identity
 // every client on the machine agrees on (device_id, hash_salt) and fields
 // other clients own, which are preserved. The session, SESSION_FILE, is this
-// client's alone: its license, sign-in intent and sign-out. SKILLMETER_STATE_DIR
+// client's alone: its license, broker refresh token, sign-in intent and sign-out. SKILLMETER_STATE_DIR
 // still isolates a dev environment's state from prod; the account directory is
 // keyed by it (lib/paths).
 const { CRED_FILE } = require("./lib/config");
@@ -157,6 +157,7 @@ function recoverySnapshot() {
   const session = readSession();
   return {
     token: session.license_jwt || null,
+    refreshToken: session.refresh_token || null,
     generation: session.auth_generation || null,
     deviceId: currentDeviceId(),
     signedOut: session.signed_out === true,
@@ -166,12 +167,23 @@ function recoverySnapshot() {
 function snapshotMatches(session, expected) {
   return expected && !expected.signedOut && session.signed_out !== true &&
     (session.license_jwt || null) === expected.token &&
+    (session.refresh_token || null) === (expected.refreshToken || null) &&
     (session.auth_generation || null) === expected.generation &&
     currentDeviceId() === expected.deviceId;
 }
 
 function isRecoveryCurrent(expected) {
   return snapshotMatches(readSession(), expected);
+}
+
+// The broker rotated the refresh token: the one presented is now spent, so the
+// new one is stored before anything else can fail (ADR 005). Returns false when
+// the session moved on meanwhile.
+function commitRotation(expected, refreshToken) {
+  return mutateSession((session) => {
+    if (!snapshotMatches(session, expected)) return false;
+    session.refresh_token = refreshToken;
+  });
 }
 
 function commitRefresh(jwt, expected) {
@@ -192,6 +204,7 @@ function dropRevokedLicense(expected, onCommit) {
   return mutateSession((session) => {
     if (!snapshotMatches(session, expected)) return false;
     delete session.license_jwt;
+    delete session.refresh_token;
     session.auth_generation = crypto.randomUUID();
   }, onCommit);
 }
@@ -371,6 +384,7 @@ function isTelemetryTransmissionAllowed(repoKey = "") {
 function signOut() {
   return mutateSession((session) => {
     delete session.license_jwt;
+    delete session.refresh_token;
     session.signed_out = true;
     session.auth_generation = crypto.randomUUID();
   });
@@ -394,12 +408,16 @@ function signinMatches(session, expected) {
 }
 
 // onCommit publishes local status/notifications before another intent can win.
-// It must be synchronous and must not acquire the session lock again.
-function commitSignin({ jwt, expected, onCommit }) {
+// It must be synchronous and must not acquire the session lock again. A sign-in
+// without a refresh token (a broker that did not grant `offline`) clears any
+// earlier one, so renewal never mixes two sign-ins.
+function commitSignin({ jwt, refreshToken = null, expected, onCommit }) {
   return mutateSession((session) => {
     if (session.signed_out === true) return false;
     if (expected && !signinMatches(session, expected)) return false;
     session.license_jwt = jwt;
+    if (refreshToken) session.refresh_token = refreshToken;
+    else delete session.refresh_token;
     session.auth_generation = crypto.randomUUID();
   }, onCommit);
 }
@@ -421,6 +439,7 @@ module.exports = {
   recoverySnapshot,
   isRecoveryCurrent,
   commitRefresh,
+  commitRotation,
   dropRevokedLicense,
   withRecoveryCurrent,
   getDeviceId,

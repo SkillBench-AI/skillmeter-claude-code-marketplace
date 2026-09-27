@@ -118,7 +118,7 @@ function runNode(script, args = [], options = {}) {
 // ADR 005: the device identity (and other clients' fields) lives in the shared
 // credentials.json, this client's session in its account directory. Mirrors
 // ACCOUNT_DIR in lib/paths.
-const SESSION_FIELDS = ["license_jwt", "signed_out", "auth_generation"];
+const SESSION_FIELDS = ["license_jwt", "refresh_token", "signed_out", "auth_generation"];
 
 function accountDir(stateDir, dataDir = process.env.CLAUDE_PLUGIN_DATA) {
   const key = require("crypto").createHash("sha256").update(path.resolve(stateDir)).digest("hex").slice(0, 12);
