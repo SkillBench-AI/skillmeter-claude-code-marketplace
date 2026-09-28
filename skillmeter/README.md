@@ -19,8 +19,8 @@ and [privacy notice](../PRIVACY.md) before enabling collection.
 
 Sign-in uses a browser-approved device code from `id.skillbench.ai`. The broker
 ID token is exchanged for a SkillMeter license; it is not stored. The license
-is shared with other SkillMeter clients, so signing out affects those clients
-too. Device identity and telemetry policy remain on disk.
+is this plugin's own; signing out does not affect other SkillMeter clients.
+Device identity and telemetry policy remain on disk.
 
 ## Collection scope
 
@@ -78,7 +78,7 @@ and bounded descriptions/bodies of custom project or user skills. Instruction
 file bodies and MCP command/args/env are excluded from dedicated harness fields,
 but sensitive values can still appear in conversation content.
 
-Policy 3.1.0 applies before queueing:
+Policy 3.1.2 applies before queueing:
 
 - Recognized secrets and rule-detectable personal information receive typed
   placeholders. Names in general prose and other contextual identifiers can remain.
@@ -128,7 +128,7 @@ that was revoked because the workspace no longer licenses you (402), requires
 | Location | Contents |
 | --- | --- |
 | `~/.skillbench/credentials.json` | Device ID and hash salt, shared with other SkillMeter clients |
-| `~/.skillbench/telemetry-policy.json` | Global, organization and repository choices |
+| `~/.skillbench/telemetry-policy.json` | This plugin's global, organization and repository choices; other clients keep their own |
 | `${CLAUDE_PLUGIN_DATA}/account/<id>/session.json` | This plugin's license and sign-in state, not shared with other clients |
 | `${CLAUDE_PLUGIN_DATA}/account/<id>/license-status.json` | Refresh timestamps, failures and terminal reason |
 | `${CLAUDE_PLUGIN_DATA}/logs/repositories/` | Repository event and transcript queues |
@@ -155,7 +155,7 @@ which stay outside the shipped plugin directory. See
 | `CLAUDE_PLUGIN_DATA` | Persistent plugin state; use a temporary directory for direct test runs |
 | `SKILLMETER_ENV=dev` | Select development identity/activation endpoints and separate state |
 | `SKILLMETER_STATE_DIR` | Override credential and policy state for isolated runs |
-| `SKILLMETER_ACTIVATE_URL` | Activation URL; refresh uses the same host |
+| `SKILLMETER_ACTIVATE_URL` | Activation URL; renewal exchanges a broker ID token there |
 | `SKILLMETER_BROKER_URL` | Identity service URL |
 | `SKILLMETER_OAUTH_CLIENT_ID` | Public device-flow client ID; default `skillmeter-plugin` |
 | `SKILLMETER_BACKEND_URL` | Telemetry base URL override; authentication is still required |

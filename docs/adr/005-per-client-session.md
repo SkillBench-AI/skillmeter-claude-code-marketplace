@@ -6,8 +6,8 @@ dev and prod on 2026-09-27 (0.40.0, 0.40.1); see
 [Verification](#verification-2026-09-27).
 **Supersedes:** ADR 001 decision 1 (1-hour TTL), ADR 001 decision 5 as far as
 it shares the license, and the session parts of ADR 001's amendment
-"authentication intent across shared clients". ADR 004 (shared consent) is
-unchanged.
+"authentication intent across shared clients". ADR 004 (shared consent) was
+unchanged by this ADR; ADR 006 (2026-09-28) later made consent per client too.
 **Related:** `skillmeter-license-activation` (`/activate`, `/refresh`),
 `skillbench-infra` (Hydra clients), `skillmeter-codex-marketplace`,
 `skillmeter-vscode-extension`
