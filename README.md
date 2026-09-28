@@ -43,6 +43,27 @@ claude plugin update skillmeter@skillbench
 Restart Claude Code or run `/reload-plugins`. See [support](SUPPORT.md) for
 troubleshooting and version checks.
 
+## Internal channel
+
+SkillBench developers can dogfood the latest `main` against the dev environment.
+The `internal` branch is rebuilt from every `main` commit that passes CI; it has
+the same code, defaults to the dev sign-in service, license server and
+`~/.skillbench-dev` state, and is published as the `skillbench-internal`
+marketplace so its installation and plugin data stay apart from the stable one.
+
+```sh
+claude plugin uninstall skillmeter@skillbench
+claude plugin marketplace add SkillBench-AI/skillmeter-claude-code-marketplace#internal
+claude plugin install skillmeter@skillbench-internal
+```
+
+Sign in with a dev workspace account. Uninstall the stable plugin first, or both
+would record the same sessions. Cards show `internal (dev)` in the title. To
+update, run `claude plugin marketplace update skillbench-internal` and
+`claude plugin update skillmeter@skillbench-internal`. The
+workflow that rebuilds the branch is `.github/workflows/internal-channel.yml`;
+never commit `skillmeter/channel.json` to `main` (a test fails if it is present).
+
 ## Validate and test
 
 ```bash

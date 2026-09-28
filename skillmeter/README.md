@@ -153,7 +153,7 @@ which stay outside the shipped plugin directory. See
 | Environment variable | Purpose |
 | --- | --- |
 | `CLAUDE_PLUGIN_DATA` | Persistent plugin state; use a temporary directory for direct test runs |
-| `SKILLMETER_ENV=dev` | Select development identity/activation endpoints and separate state |
+| `SKILLMETER_ENV=dev` or `prod` | Select that environment's identity and activation endpoints and state directory. Without it, the internal channel build uses dev and the stable build uses prod |
 | `SKILLMETER_STATE_DIR` | Override credential and policy state for isolated runs |
 | `SKILLMETER_ACTIVATE_URL` | Activation URL; renewal exchanges a broker ID token there |
 | `SKILLMETER_BROKER_URL` | Identity service URL |

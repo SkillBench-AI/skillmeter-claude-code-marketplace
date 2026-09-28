@@ -1,6 +1,9 @@
 /**
- * Resolve configuration in order: environment, dev bundle when
- * SKILLMETER_ENV=dev, then production default.
+ * Resolve configuration in order: environment, dev bundle when the environment
+ * is dev, then production default. The environment is SKILLMETER_ENV (`dev` or
+ * `prod`) when set, otherwise the installation's channel file (`channel.json`
+ * at the plugin root, present only in the internal channel build), otherwise
+ * prod.
  *
  * Only the environment can override an endpoint or the OAuth client. Project
  * files deliberately cannot: `.claude/settings.local.json` is cwd-scoped, so any
@@ -12,17 +15,39 @@
  * Keep this module independent of paths, credstore and jwt to avoid import cycles.
  */
 
+const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
+const CHANNEL_FILE = path.join(__dirname, "..", "..", "channel.json");
+const ENVIRONMENTS = ["prod", "dev"];
+
+// The release channel this installation was built for. Only the exact shape
+// the internal build writes is honoured; anything else is the stable channel.
+function readChannel(file = CHANNEL_FILE) {
+  try {
+    const value = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (value && typeof value.channel === "string" && /^[a-z]+$/.test(value.channel) &&
+        ENVIRONMENTS.includes(value.env)) {
+      return { channel: value.channel, env: value.env };
+    }
+  } catch {}
+  return { channel: "stable", env: "prod" };
+}
+
+const CHANNEL = readChannel();
+
 // Single master switch. Eager: the environment for a process is fixed at launch.
-const IS_DEV = process.env.SKILLMETER_ENV === "dev";
+const ENVIRONMENT = ENVIRONMENTS.includes(process.env.SKILLMETER_ENV)
+  ? process.env.SKILLMETER_ENV
+  : CHANNEL.env;
+const IS_DEV = ENVIRONMENT === "dev";
 
 // Production defaults
 const PROD_ACTIVATE_URL = "https://api.skillbench.ai/activate";
 const PROD_BROKER_URL = "https://id.skillbench.ai";
 
-// --- Dev bundle (SKILLMETER_ENV=dev) ---
+// --- Dev bundle (environment dev) ---
 const DEV_ACTIVATE_URL = "https://api.dev.skillbench.com/activate";
 const DEV_BROKER_URL = "https://id.dev.skillbench.com";
 const DEV_STATE_DIRNAME = ".skillbench-dev";
@@ -39,7 +64,7 @@ const OAUTH_SCOPE = "openid offline email profile";
 /**
  * Generic string resolver implementing the precedence rule above.
  * @param {string} envVar    process.env key checked first
- * @param {string} devDefault  used when SKILLMETER_ENV=dev
+ * @param {string} devDefault  used when the environment is dev
  * @param {string} prodDefault  used otherwise
  */
 function resolveString(envVar, devDefault, prodDefault) {
@@ -157,6 +182,10 @@ function getTranscriptChunkMaxBytes() {
 }
 
 module.exports = {
+  CHANNEL_FILE,
+  CHANNEL,
+  ENVIRONMENT,
+  readChannel,
   STATE_DIR,
   CRED_FILE,
   TELEMETRY_POLICY_FILE,

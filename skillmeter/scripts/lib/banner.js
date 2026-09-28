@@ -4,6 +4,13 @@
  */
 
 const { PLUGIN_VERSION } = require("./paths");
+const { CHANNEL, ENVIRONMENT } = require("./config");
+
+// Names a non-default channel or environment so the destination is visible.
+function channelLabel() {
+  if (CHANNEL.channel !== "stable") return ` · ${CHANNEL.channel} (${ENVIRONMENT})`;
+  return ENVIRONMENT === "prod" ? "" : ` · ${ENVIRONMENT}`;
+}
 
 // Content-sized card (2-space body padding). All glyphs used here are
 // single-column, so [...value].length measures the visible width correctly.
@@ -12,7 +19,7 @@ const { PLUGIN_VERSION } = require("./paths");
 // first line ("SessionStart:startup says: ", "FileChanged says: "), which would
 // otherwise indent the top border past the rest of the box.
 function card(lines) {
-  const title = `SkillMeter v${PLUGIN_VERSION}`;
+  const title = `SkillMeter v${PLUGIN_VERSION}${channelLabel()}`;
   const bodyWidth = Math.max(
     [...title].length,
     ...lines.map((line) => [...line].length)
