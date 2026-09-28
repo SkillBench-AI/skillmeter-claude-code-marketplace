@@ -79,7 +79,11 @@ is the model for length and tone.
   naming the release that lists them.
 - **Details**: PR numbers only. ADRs and privacy documents are reachable from
   the PRs.
-- Cut the release on the commit that bumps `skillmeter/.claude-plugin/plugin.json`,
-  in the same PR cycle. The marketplace installs `main`, so a bumped version
-  without a release is what users see.
+- Pull requests target `next`, the development branch; the internal channel
+  follows it. `main` is what the marketplace installs and moves only at
+  releases: bump `skillmeter/.claude-plugin/plugin.json` on `next`, then open a
+  pull request from `next` to `main` and merge it with a merge commit, not a
+  squash, so both branches keep one history. Cut the release on that merge. A
+  hotfix goes to `main` in its own release pull request and is merged back into
+  `next` right after.
 - Obtain approval before publishing unless already authorized.
