@@ -115,6 +115,7 @@ function testEnvironment() {
     license_jwt: makeJwt({
       exp: Math.floor(Date.now() / 1000) + 3600,
       org: { login: "skillbench-ai" },
+      orgs: ["skillbench-ai"],
     }),
   });
   // repo-a and its clone share one canonical identity, so a single OFF entry

@@ -24,6 +24,7 @@ function licenseJwt(org = "SkillBench-AI") {
   return makeJwt({
     exp: Math.floor(Date.now() / 1000) + 3600,
     org: { login: org },
+    orgs: [org],
   });
 }
 
