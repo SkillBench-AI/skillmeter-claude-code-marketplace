@@ -1,6 +1,9 @@
 /**
- * Resolve configuration in order: environment, dev bundle when
- * SKILLMETER_ENV=dev, then production default.
+ * The installation's channel picks the environment: `channel.json` at the plugin
+ * root exists only in the internal channel build and selects dev; without it the
+ * stable build uses prod. Nothing at runtime switches the environment. An
+ * environment variable can still point one endpoint, the OAuth client or the
+ * state directory elsewhere, for a local stack or isolated tests.
  *
  * Only the environment can override an endpoint or the OAuth client. Project
  * files deliberately cannot: `.claude/settings.local.json` is cwd-scoped, so any
@@ -12,21 +15,41 @@
  * Keep this module independent of paths, credstore and jwt to avoid import cycles.
  */
 
+const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-// Single master switch. Eager: the environment for a process is fixed at launch.
-const IS_DEV = process.env.SKILLMETER_ENV === "dev";
+const ENVIRONMENTS = {
+  prod: {
+    activateUrl: "https://api.skillbench.ai/activate",
+    brokerUrl: "https://id.skillbench.ai",
+    stateDirname: ".skillbench",
+  },
+  dev: {
+    activateUrl: "https://api.dev.skillbench.com/activate",
+    brokerUrl: "https://id.dev.skillbench.com",
+    stateDirname: ".skillbench-dev",
+  },
+};
 
-// Production defaults
-const PROD_ACTIVATE_URL = "https://api.skillbench.ai/activate";
-const PROD_BROKER_URL = "https://id.skillbench.ai";
+const CHANNEL_FILE = path.join(__dirname, "..", "..", "channel.json");
 
-// --- Dev bundle (SKILLMETER_ENV=dev) ---
-const DEV_ACTIVATE_URL = "https://api.dev.skillbench.com/activate";
-const DEV_BROKER_URL = "https://id.dev.skillbench.com";
-const DEV_STATE_DIRNAME = ".skillbench-dev";
-const PROD_STATE_DIRNAME = ".skillbench";
+// The release channel this installation was built for. Only the exact shape
+// the internal build writes is honoured; anything else is the stable channel.
+function readChannel(file = CHANNEL_FILE) {
+  try {
+    const value = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (value && typeof value.channel === "string" && /^[a-z]+$/.test(value.channel) &&
+        Object.hasOwn(ENVIRONMENTS, value.env)) {
+      return { channel: value.channel, env: value.env };
+    }
+  } catch {}
+  return { channel: "stable", env: "prod" };
+}
+
+const CHANNEL = readChannel();
+// Eager: fixed by the installation for the life of the process.
+const DEFAULTS = ENVIRONMENTS[CHANNEL.env];
 
 // Broker device flow uses a public client with no embedded secret.
 // The same client ID is registered in each environment.
@@ -37,14 +60,12 @@ const OAUTH_CLIENT_ID = "skillmeter-plugin";
 const OAUTH_SCOPE = "openid offline email profile";
 
 /**
- * Generic string resolver implementing the precedence rule above.
+ * An explicit override from the environment, else the channel's default.
  * @param {string} envVar    process.env key checked first
- * @param {string} devDefault  used when SKILLMETER_ENV=dev
- * @param {string} prodDefault  used otherwise
+ * @param {string} fallback  the channel environment's default
  */
-function resolveString(envVar, devDefault, prodDefault) {
-  if (process.env[envVar]) return process.env[envVar];
-  return IS_DEV ? devDefault : prodDefault;
+function resolveString(envVar, fallback) {
+  return process.env[envVar] || fallback;
 }
 
 /**
@@ -76,8 +97,8 @@ function trustedEndpoint(url, fallback, label) {
 
 function getActivateUrl() {
   return trustedEndpoint(
-    resolveString("SKILLMETER_ACTIVATE_URL", DEV_ACTIVATE_URL, PROD_ACTIVATE_URL),
-    PROD_ACTIVATE_URL,
+    resolveString("SKILLMETER_ACTIVATE_URL", DEFAULTS.activateUrl),
+    DEFAULTS.activateUrl,
     "activation"
   );
 }
@@ -98,8 +119,8 @@ function getRefreshUrl() {
 // being able to express.
 function getBrokerUrl() {
   return trustedEndpoint(
-    resolveString("SKILLMETER_BROKER_URL", DEV_BROKER_URL, PROD_BROKER_URL),
-    PROD_BROKER_URL,
+    resolveString("SKILLMETER_BROKER_URL", DEFAULTS.brokerUrl),
+    DEFAULTS.brokerUrl,
     "broker"
   ).replace(/\/+$/, "");
 }
@@ -121,7 +142,7 @@ function getRevokeUrl() {
 // overridable because a client id is the one thing likely to differ in a
 // one-off local broker.
 function getOAuthClientId() {
-  return resolveString("SKILLMETER_OAUTH_CLIENT_ID", OAUTH_CLIENT_ID, OAUTH_CLIENT_ID);
+  return resolveString("SKILLMETER_OAUTH_CLIENT_ID", OAUTH_CLIENT_ID);
 }
 
 // Hard bypass of the JWT's `aud` endpoint claim (see jwt.js). Explicit-only:
@@ -138,7 +159,7 @@ function getBackendUrlOverride() {
 // --- Eager path config (env + os only, matching former paths.js) ---
 const STATE_DIR =
   process.env.SKILLMETER_STATE_DIR ||
-  path.join(os.homedir(), IS_DEV ? DEV_STATE_DIRNAME : PROD_STATE_DIRNAME);
+  path.join(os.homedir(), DEFAULTS.stateDirname);
 const CRED_FILE = path.join(STATE_DIR, "credentials.json");
 const TELEMETRY_POLICY_FILE = path.join(STATE_DIR, "telemetry-policy.json");
 
@@ -157,6 +178,9 @@ function getTranscriptChunkMaxBytes() {
 }
 
 module.exports = {
+  CHANNEL_FILE,
+  CHANNEL,
+  readChannel,
   STATE_DIR,
   CRED_FILE,
   TELEMETRY_POLICY_FILE,

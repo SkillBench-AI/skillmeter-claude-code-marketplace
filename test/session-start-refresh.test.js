@@ -60,7 +60,6 @@ function runSessionStart({ port }) {
       SKILLMETER_ACTIVATE_URL: `http://127.0.0.1:${port}/activate`,
       // Nothing may upload anywhere real.
       SKILLMETER_BACKEND_URL: "http://127.0.0.1:9",
-      SKILLMETER_ENV: "",
     },
     stdio: ["pipe", "pipe", "pipe"],
   });

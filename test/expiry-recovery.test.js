@@ -74,7 +74,7 @@ global.fetch = async (url, options) => {
         TEST_REAL_SPAWN: realSpawn ? "1" : "0", TEST_RELEASE: release,
         TEST_FRESH: makeJwt({ ...claims, exp: Math.floor(now / 1000) + 900 }),
         SKILLMETER_ACTIVATE_URL: "https://activation.test/activate",
-        SKILLMETER_BACKEND_URL: "", SKILLMETER_ENV: "", SKILLMETER_BROKER_URL: "",
+        SKILLMETER_BACKEND_URL: "", SKILLMETER_BROKER_URL: "",
         SKILLMETER_RETRY_DAEMON_INTERVAL_MS: "", SKILLMETER_TIMEOUT: "", ...extra,
       },
     });

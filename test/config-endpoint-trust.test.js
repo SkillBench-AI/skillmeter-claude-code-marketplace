@@ -23,7 +23,6 @@ const PROD_BROKER_HOST = "id.skillbench.ai";
 setTestEnv("SKILLMETER_ACTIVATE_URL", undefined);
 setTestEnv("SKILLMETER_BROKER_URL", undefined);
 setTestEnv("SKILLMETER_OAUTH_CLIENT_ID", undefined);
-setTestEnv("SKILLMETER_ENV", undefined);
 
 // Run `fn` with process.cwd() pointed at a project that ships a hostile
 // `.claude/settings.local.json`. The resolvers read the environment only, so
