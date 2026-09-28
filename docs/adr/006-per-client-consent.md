@@ -1,7 +1,7 @@
 # Per-Client Consent Records
 
 **Date:** 2026-09-28
-**Status:** Proposed. Supersedes ADR 004 decisions 1, 3, 4 and 9, and the
+**Status:** Proposed; implemented in Codex 0.12.1 (skillmeter-codex-marketplace#109). Supersedes ADR 004 decisions 1, 3, 4 and 9, and the
 parts of decisions 5 and 8 that assume a shared record.
 **Related:** ADR 004 (shared consent), ADR 005 (per-client sessions),
 `skillmeter-codex-marketplace` `docs/adr/004-shared-consent.md`
@@ -78,4 +78,4 @@ existing retention limit; it is never sent under the new record.
 | Client | Change | Status |
 |---|---|---|
 | This plugin | None; its record and controls already cover only this plugin | Done |
-| Codex | Own record, organization control, no local-only grant | [skillmeter-codex-marketplace#109](https://github.com/SkillBench-AI/skillmeter-codex-marketplace/pull/109) |
+| Codex | Own record, organization control, no local-only grant | Done in 0.12.1 ([skillmeter-codex-marketplace#109](https://github.com/SkillBench-AI/skillmeter-codex-marketplace/pull/109)) |

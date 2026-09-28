@@ -1,5 +1,5 @@
 ---
-description: Sign out of SkillMeter and stop all telemetry
+description: Sign this plugin out of SkillMeter and stop its telemetry; other SkillMeter clients stay signed in
 disable-model-invocation: true
 allowed-tools: Bash(node *)
 ---

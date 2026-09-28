@@ -96,5 +96,5 @@ size in MB (`bytes` / 1,000,000, one decimal) and the repository count; omit
 the counts when `history` is null. Say that the import runs in the background,
 that SkillMeter notifies the user once when it finishes, and that
 `/skillmeter:backfill status` shows progress meanwhile. Do not report the
-worker PID. Ongoing telemetry remains unchanged. The global telemetry
-kill-switch still pauses historical transmission.
+worker PID. Ongoing telemetry remains unchanged. This plugin's global
+telemetry pause still pauses historical transmission.
