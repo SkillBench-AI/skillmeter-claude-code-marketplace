@@ -41,11 +41,16 @@ test("only the exact internal shape selects a channel", (t) => {
 test("the internal build uses dev regardless of the environment", (t) => {
   const root = tempDir(t);
   for (const file of [".github/scripts/make-internal-channel.mjs", ".claude-plugin/marketplace.json",
-    "skillmeter/scripts/lib/config.js"]) {
+    "skillmeter/scripts/lib/config.js", "skillmeter/.claude-plugin/plugin.json"]) {
     fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
     fs.copyFileSync(path.join(repo, file), path.join(root, file));
   }
-  execFileSync(process.execPath, [path.join(root, ".github/scripts/make-internal-channel.mjs"), root]);
+  execFileSync(process.execPath, [path.join(root, ".github/scripts/make-internal-channel.mjs"), root, "--build", "7"]);
+  // The internal build is a prerelease of the next patch: after the current
+  // release and before the next one.
+  const [major, minor, patch] = require(path.join(repo, "skillmeter/.claude-plugin/plugin.json")).version.split(".").map(Number);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, "skillmeter/.claude-plugin/plugin.json"), "utf8")).version,
+    `${major}.${minor}.${patch + 1}-internal.7`);
   assert.equal(JSON.parse(fs.readFileSync(path.join(root, ".claude-plugin/marketplace.json"), "utf8")).name,
     "skillbench-internal");
   const probe = "const c=require('./skillmeter/scripts/lib/config');" +

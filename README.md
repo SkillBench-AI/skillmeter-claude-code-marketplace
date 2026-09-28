@@ -45,11 +45,14 @@ troubleshooting and version checks.
 
 ## Internal channel
 
-SkillBench developers can dogfood the latest `main` against the dev environment.
-The `internal` branch is rebuilt from every `main` commit that passes CI; it has
-the same code, defaults to the dev sign-in service, license server and
-`~/.skillbench-dev` state, and is published as the `skillbench-internal`
-marketplace so its installation and plugin data stay apart from the stable one.
+SkillBench developers can dogfood the code under development against the dev
+environment. Development happens on `next`; `main` moves only at releases. The
+`internal` branch is rebuilt from every `next` commit that passes CI. It is
+versioned as a prerelease of the next patch (for example `0.41.1-internal.37`,
+which sorts after `0.41.0` and before `0.41.1`), defaults to the dev sign-in
+service, license server and `~/.skillbench-dev` state, and is published as the
+`skillbench-internal` marketplace so its installation and plugin data stay apart
+from the stable one.
 
 ```sh
 claude plugin uninstall skillmeter@skillbench
