@@ -23,6 +23,8 @@ Review these documents before installing:
 
 ## Install from the SkillBench marketplace
 
+Requires Node.js 22 or later on `PATH`; the plugin's hooks run `node`.
+
 ```bash
 claude plugin marketplace add SkillBench-AI/skillmeter-claude-code-marketplace
 claude plugin install skillmeter@skillbench
