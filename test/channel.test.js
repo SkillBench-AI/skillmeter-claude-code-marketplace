@@ -38,7 +38,7 @@ test("only the exact internal shape selects a channel", (t) => {
   }
 });
 
-test("the internal build defaults to dev and SKILLMETER_ENV still overrides it", (t) => {
+test("the internal build uses dev regardless of the environment", (t) => {
   const root = tempDir(t);
   for (const file of [".github/scripts/make-internal-channel.mjs", ".claude-plugin/marketplace.json",
     "skillmeter/scripts/lib/config.js"]) {
@@ -49,10 +49,19 @@ test("the internal build defaults to dev and SKILLMETER_ENV still overrides it",
   assert.equal(JSON.parse(fs.readFileSync(path.join(root, ".claude-plugin/marketplace.json"), "utf8")).name,
     "skillbench-internal");
   const probe = "const c=require('./skillmeter/scripts/lib/config');" +
-    "console.log(JSON.stringify([c.ENVIRONMENT,c.getDeviceCodeUrl(),require('path').basename(c.STATE_DIR)]))";
+    "console.log(JSON.stringify([c.CHANNEL.env,c.getDeviceCodeUrl(),require('path').basename(c.STATE_DIR)]))";
   const run = (env) => JSON.parse(spawnSync(process.execPath, ["-e", probe], {
     cwd: root, encoding: "utf8", env: { PATH: process.env.PATH, HOME: root, ...env },
   }).stdout);
   assert.deepEqual(run({}), ["dev", "https://id.dev.skillbench.com/oauth2/device/auth", ".skillbench-dev"]);
-  assert.deepEqual(run({ SKILLMETER_ENV: "prod" }), ["prod", "https://id.skillbench.ai/oauth2/device/auth", ".skillbench"]);
+  assert.deepEqual(run({ SKILLMETER_ENV: "prod" }), ["dev", "https://id.dev.skillbench.com/oauth2/device/auth", ".skillbench-dev"]);
+});
+
+test("an environment variable cannot switch a stable install to dev", () => {
+  const probe = "const c=require('./skillmeter/scripts/lib/config');" +
+    "console.log(JSON.stringify([c.CHANNEL.env,c.getDeviceCodeUrl(),require('path').basename(c.STATE_DIR)]))";
+  const result = spawnSync(process.execPath, ["-e", probe], {
+    cwd: repo, encoding: "utf8", env: { PATH: process.env.PATH, HOME: os.tmpdir(), SKILLMETER_ENV: "dev" },
+  });
+  assert.deepEqual(JSON.parse(result.stdout), ["prod", "https://id.skillbench.ai/oauth2/device/auth", ".skillbench"]);
 });

@@ -150,10 +150,13 @@ which stay outside the shipped plugin directory. See
 [AGENTS.md](../AGENTS.md) for contribution conventions and the
 [ADRs](../docs/adr/README.md) for shared policy decisions.
 
+The environment is fixed by the installation: the internal channel uses dev
+(`~/.skillbench-dev`), the stable channel prod. No environment variable switches
+it; the variables below point one endpoint or directory elsewhere.
+
 | Environment variable | Purpose |
 | --- | --- |
 | `CLAUDE_PLUGIN_DATA` | Persistent plugin state; use a temporary directory for direct test runs |
-| `SKILLMETER_ENV=dev` or `prod` | Select that environment's identity and activation endpoints and state directory. Without it, the internal channel build uses dev and the stable build uses prod |
 | `SKILLMETER_STATE_DIR` | Override credential and policy state for isolated runs |
 | `SKILLMETER_ACTIVATE_URL` | Activation URL; renewal exchanges a broker ID token there |
 | `SKILLMETER_BROKER_URL` | Identity service URL |

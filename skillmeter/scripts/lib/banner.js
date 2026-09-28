@@ -4,12 +4,11 @@
  */
 
 const { PLUGIN_VERSION } = require("./paths");
-const { CHANNEL, ENVIRONMENT } = require("./config");
+const { CHANNEL } = require("./config");
 
-// Names a non-default channel or environment so the destination is visible.
+// Names a non-stable channel and its environment so the destination is visible.
 function channelLabel() {
-  if (CHANNEL.channel !== "stable") return ` · ${CHANNEL.channel} (${ENVIRONMENT})`;
-  return ENVIRONMENT === "prod" ? "" : ` · ${ENVIRONMENT}`;
+  return CHANNEL.channel === "stable" ? "" : ` · ${CHANNEL.channel} (${CHANNEL.env})`;
 }
 
 // Content-sized card (2-space body padding). All glyphs used here are
