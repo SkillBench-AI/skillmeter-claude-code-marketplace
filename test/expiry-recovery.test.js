@@ -20,7 +20,7 @@ function fixture({ realSpawn = false } = {}) {
   const calls = path.join(root, "calls.jsonl");
   const release = path.join(root, "release-refresh");
   const start = Date.now();
-  const claims = { sub: "test-tenant", broker_sub: "test-user", org: { login: "acme" }, aud: "https://acme.meter.skillbench.ai" };
+  const claims = { sub: "test-tenant", broker_sub: "test-user", org: { login: "acme" }, orgs: ["acme"], aud: "https://acme.meter.skillbench.ai" };
   const token = makeJwt({ ...claims, exp: Math.floor(start / 1000) + 900 });
   const credentials = { device_id: "11111111-2222-4333-8444-555555555555", hash_salt: "0123456789abcdef0123456789abcdef", license_jwt: token };
   writeCredentials(state, credentials, { dataDir: data });

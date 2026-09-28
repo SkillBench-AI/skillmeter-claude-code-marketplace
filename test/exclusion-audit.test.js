@@ -30,6 +30,7 @@ function licenseJwt(org = "skillbench-ai", audience = "https://tenant.example") 
     exp: Math.floor(Date.now() / 1000) + 3600,
     aud: audience,
     org: { login: org },
+    orgs: [org],
   });
 }
 

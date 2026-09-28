@@ -26,6 +26,7 @@ writeJson(path.join(STATE_DIR, "credentials.json"), {
   license_jwt: makeJwt({
     exp: Math.floor(Date.now() / 1000) + 3600,
     org: { login: "skillbench-ai" },
+    orgs: ["skillbench-ai"],
     aud: "https://example.test",
   }),
 });

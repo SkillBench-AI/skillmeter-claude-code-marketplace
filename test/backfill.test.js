@@ -247,6 +247,7 @@ test("accept queues historical data without changing telemetry policy", async ()
     license_jwt: makeJwt({
       exp: Math.floor(Date.now() / 1000) + 3600,
       org: { login: "SkillBench-AI" },
+      orgs: ["SkillBench-AI"],
     }),
   });
   writeJson(backfillState.BACKFILL_STATE_FILE, {

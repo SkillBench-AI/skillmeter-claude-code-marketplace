@@ -57,6 +57,7 @@ function fixture() {
     license_jwt: makeJwt({
       exp: Math.floor(Date.now() / 1000) + 3600,
       org: { login: "SkillBench-AI" },
+      orgs: ["SkillBench-AI"],
     }),
   });
   return {

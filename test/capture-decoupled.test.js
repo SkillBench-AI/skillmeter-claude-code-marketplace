@@ -31,6 +31,7 @@ function license(expiresInSec) {
   return makeJwt({
     exp: Math.floor(Date.now() / 1000) + expiresInSec,
     org: { login: ORG },
+    orgs: [ORG],
     // Reserved domain: a test must never reach a real tenant.
     aud: "https://acme.meter.skillbench.example",
   });
