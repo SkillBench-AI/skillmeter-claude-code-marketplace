@@ -207,8 +207,8 @@ entered; use `/skillmeter:telemetry list` for granular changes.
 ## Sign-in required
 
 This is the branch for any hook status that is not the sign-in state JSON
-above — today that is `Sign-in is required.`, and it is what a person without a
-current licence gets.
+above — today that is `Sign-in is required.`, alone or after `Your SkillMeter
+session ended.`, and it is what a person without a current licence gets.
 
 Reply with the status the hook gave, and include the `!`-prefixed command
 exactly as provided, on its own line in a fenced code block. Do not rephrase,

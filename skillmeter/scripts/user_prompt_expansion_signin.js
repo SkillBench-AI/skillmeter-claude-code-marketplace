@@ -11,7 +11,7 @@
 
 const credstore = require("./credstore.js");
 const telemetryStore = require("./lib/telemetry-store");
-const { clearLicenseStatus } = require("./lib/license-status");
+const { clearLicenseStatus, isSessionEnded } = require("./lib/license-status");
 const { readStdinJson } = require("./lib/io");
 const {
   loadRepositoryTelemetryState,
@@ -107,6 +107,14 @@ async function main() {
 
   // Existing and new users receive the same one-time backfill lifecycle.
   try { initializeBackfillLifecycle(); } catch {}
+
+  // A session the broker ended can leave a license that is still valid. It is
+  // not a sign-in to report, and the sign-in command must still find the
+  // ended session, so nothing is reset here.
+  if (credstore.getLicenseToken() && isSessionEnded()) {
+    addContext(`Your SkillMeter session ended. Sign-in is required.\n${RUN_INSTRUCTION}`);
+    return;
+  }
 
   // Explicit sign-in clears the signed-out sentinel and resets refresh status.
   credstore.markEngaged();
