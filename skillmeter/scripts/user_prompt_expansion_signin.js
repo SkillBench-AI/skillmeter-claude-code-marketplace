@@ -37,6 +37,18 @@ const RUN_INSTRUCTION =
   `3. Once the browser shows the success page, run \`/skillmeter:signin\` ` +
   `again to confirm the license and see the welcome banner.`;
 
+// A sign-in waits for approval. Starting over cancels it, so the command is
+// offered only for when that sign-in cannot finish: the page was closed, the
+// code expired, or its poller stopped, which is not detected here.
+const IN_PROGRESS =
+  `SkillMeter sign-in in progress. A sign-in code is waiting for approval in ` +
+  `the browser. Tell the user to approve it there, then run ` +
+  `\`/skillmeter:signin\` again to confirm.\n` +
+  `Only if the browser page was closed, the code expired, or the user already ` +
+  `approved and keeps getting this message, they can start over by pasting ` +
+  `this into their NEXT prompt. It cancels the sign-in in progress:\n\n` +
+  `    ! ${SIGNIN_COMMAND}`;
+
 // This hook has no TTY guard and defaults empty input to {} (its isSigninCommand
 // check tolerates an empty object).
 const readStdin = () => readStdinJson({ tty: {}, empty: {} });
@@ -111,11 +123,7 @@ async function main() {
   // A device flow is waiting for browser approval. A new intent here would
   // discard it, and the license on disk says nothing about it yet.
   if (credstore.isSigninPending()) {
-    addContext(
-      "SkillMeter sign-in in progress. Approve the code in the browser, then " +
-      "run /skillmeter:signin again to confirm. To start over instead:\n" +
-      RUN_INSTRUCTION
-    );
+    addContext(IN_PROGRESS);
     return;
   }
 

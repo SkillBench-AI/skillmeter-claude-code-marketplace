@@ -136,6 +136,7 @@ test("/skillmeter:signin while a first sign-in waits for approval reports it in 
   const context = f.slashCommand();
   assert.match(context, /sign-in in progress/);
   assert.match(context, /! .*bin\/signin/, "with a way to start over");
+  assert.match(context, /cancels the sign-in in progress/, "that says what starting over costs");
   assert.doesNotMatch(context, /Sign-in is required/);
   assert.equal(f.session().auth_generation, intent, "no new intent");
   assert.equal(f.statusBytes(), record, "the status record is left alone");
