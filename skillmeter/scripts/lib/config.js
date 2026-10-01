@@ -1,25 +1,55 @@
 /**
- * Resolve configuration in order: environment, project string setting, dev
- * bundle when SKILLMETER_ENV=dev, then production default.
+ * The installation's channel picks the environment: `channel.json` at the plugin
+ * root exists only in the internal channel build and selects dev; without it the
+ * stable build uses prod. Nothing at runtime switches the environment. An
+ * environment variable can still point one endpoint, the OAuth client or the
+ * state directory elsewhere, for a local stack or isolated tests.
+ *
+ * Only the environment can override an endpoint or the OAuth client. Project
+ * files deliberately cannot: `.claude/settings.local.json` is cwd-scoped, so any
+ * repository you open could otherwise send the activation and token requests,
+ * which carry the broker ID token and refresh credentials, to a host it
+ * controls, or swap the client the user authorizes. The environment is set by
+ * the person at the keyboard, not by repository content.
+ *
  * Keep this module independent of paths, credstore and jwt to avoid import cycles.
  */
 
+const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { getSkillmeterStringSetting } = require("./settings");
 
-// Single master switch. Eager: the environment for a process is fixed at launch.
-const IS_DEV = process.env.SKILLMETER_ENV === "dev";
+const ENVIRONMENTS = {
+  prod: {
+    activateUrl: "https://api.skillbench.ai/activate",
+    brokerUrl: "https://id.skillbench.ai",
+    stateDirname: ".skillbench",
+  },
+  dev: {
+    activateUrl: "https://api.dev.skillbench.com/activate",
+    brokerUrl: "https://id.dev.skillbench.com",
+    stateDirname: ".skillbench-dev",
+  },
+};
 
-// Production defaults
-const PROD_ACTIVATE_URL = "https://api.skillbench.ai/activate";
-const PROD_BROKER_URL = "https://id.skillbench.ai";
+const CHANNEL_FILE = path.join(__dirname, "..", "..", "channel.json");
 
-// --- Dev bundle (SKILLMETER_ENV=dev) ---
-const DEV_ACTIVATE_URL = "https://api.dev.skillbench.com/activate";
-const DEV_BROKER_URL = "https://id.dev.skillbench.com";
-const DEV_STATE_DIRNAME = ".skillbench-dev";
-const PROD_STATE_DIRNAME = ".skillbench";
+// The release channel this installation was built for. Only the exact shape
+// the internal build writes is honoured; anything else is the stable channel.
+function readChannel(file = CHANNEL_FILE) {
+  try {
+    const value = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (value && typeof value.channel === "string" && /^[a-z]+$/.test(value.channel) &&
+        Object.hasOwn(ENVIRONMENTS, value.env)) {
+      return { channel: value.channel, env: value.env };
+    }
+  } catch {}
+  return { channel: "stable", env: "prod" };
+}
+
+const CHANNEL = readChannel();
+// Eager: fixed by the installation for the life of the process.
+const DEFAULTS = ENVIRONMENTS[CHANNEL.env];
 
 // Broker device flow uses a public client with no embedded secret.
 // The same client ID is registered in each environment.
@@ -30,23 +60,47 @@ const OAUTH_CLIENT_ID = "skillmeter-plugin";
 const OAUTH_SCOPE = "openid offline email profile";
 
 /**
- * Generic string resolver implementing the precedence rule above.
+ * An explicit override from the environment, else the channel's default.
  * @param {string} envVar    process.env key checked first
- * @param {string|null} settingKey  skillmeter.<key> in settings.local.json, or null to skip
- * @param {string} devDefault  used when SKILLMETER_ENV=dev
- * @param {string} prodDefault  used otherwise
+ * @param {string} fallback  the channel environment's default
  */
-function resolveString(envVar, settingKey, devDefault, prodDefault) {
-  if (process.env[envVar]) return process.env[envVar];
-  if (settingKey) {
-    const fromSettings = getSkillmeterStringSetting(process.cwd(), settingKey);
-    if (fromSettings) return fromSettings;
+function resolveString(envVar, fallback) {
+  return process.env[envVar] || fallback;
+}
+
+/**
+ * Defence in depth for endpoints that receive credentials: refuse a plaintext
+ * or malformed override. Loopback stays exempt so a local backend remains a
+ * one-env-var workflow. Never throws, since this runs inside hooks; a rejected
+ * override degrades to the production endpoint with a stderr note.
+ */
+function trustedEndpoint(url, fallback, label) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    process.stderr.write(`[skillmeter] Ignoring malformed ${label} URL\n`);
+    return fallback;
   }
-  return IS_DEV ? devDefault : prodDefault;
+  const isLoopback =
+    parsed.hostname === "localhost" ||
+    parsed.hostname === "127.0.0.1" ||
+    parsed.hostname === "[::1]";
+  if (parsed.protocol === "https:" || (parsed.protocol === "http:" && isLoopback)) {
+    return url;
+  }
+  process.stderr.write(
+    `[skillmeter] Ignoring non-HTTPS ${label} URL: ${parsed.host} (it receives credentials)\n`
+  );
+  return fallback;
 }
 
 function getActivateUrl() {
-  return resolveString("SKILLMETER_ACTIVATE_URL", "activate_url", DEV_ACTIVATE_URL, PROD_ACTIVATE_URL);
+  return trustedEndpoint(
+    resolveString("SKILLMETER_ACTIVATE_URL", DEFAULTS.activateUrl),
+    DEFAULTS.activateUrl,
+    "activation"
+  );
 }
 
 // The /refresh endpoint sits next to /activate on the same host. Derive it from
@@ -64,7 +118,11 @@ function getRefreshUrl() {
 // half-configured URLs pointing at different brokers is not a state worth
 // being able to express.
 function getBrokerUrl() {
-  return resolveString("SKILLMETER_BROKER_URL", "broker_url", DEV_BROKER_URL, PROD_BROKER_URL).replace(/\/+$/, "");
+  return trustedEndpoint(
+    resolveString("SKILLMETER_BROKER_URL", DEFAULTS.brokerUrl),
+    DEFAULTS.brokerUrl,
+    "broker"
+  ).replace(/\/+$/, "");
 }
 
 function getDeviceCodeUrl() {
@@ -75,24 +133,33 @@ function getTokenUrl() {
   return getBrokerUrl() + "/oauth2/token";
 }
 
+// RFC 7009. Sign-out revokes this client's refresh token here (ADR 005).
+function getRevokeUrl() {
+  return getBrokerUrl() + "/oauth2/revoke";
+}
+
 // Same id in every environment, so dev and prod share a default. It stays
 // overridable because a client id is the one thing likely to differ in a
 // one-off local broker.
 function getOAuthClientId() {
-  return resolveString("SKILLMETER_OAUTH_CLIENT_ID", "oauth_client_id", OAUTH_CLIENT_ID, OAUTH_CLIENT_ID);
+  return resolveString("SKILLMETER_OAUTH_CLIENT_ID", OAUTH_CLIENT_ID);
 }
 
 // Hard bypass of the JWT's `aud` endpoint claim (see jwt.js). Explicit-only:
 // NOT bundled into the dev switch, because dev keeps the real sign-in flow and
-// the dev-minted JWT already carries a dev endpoint in `aud`.
+// the dev-minted JWT already carries a dev endpoint in `aud`. Uploads send the
+// license as a bearer token, so the override gets the same HTTPS rule as the
+// sign-in endpoints; a rejected one falls back to `aud` routing (null).
 function getBackendUrlOverride() {
-  return process.env.SKILLMETER_BACKEND_URL || null;
+  const url = process.env.SKILLMETER_BACKEND_URL;
+  if (!url) return null;
+  return trustedEndpoint(url, null, "backend");
 }
 
-// --- Eager path config (env + os only; no cwd/settings, matching former paths.js) ---
+// --- Eager path config (env + os only, matching former paths.js) ---
 const STATE_DIR =
   process.env.SKILLMETER_STATE_DIR ||
-  path.join(os.homedir(), IS_DEV ? DEV_STATE_DIRNAME : PROD_STATE_DIRNAME);
+  path.join(os.homedir(), DEFAULTS.stateDirname);
 const CRED_FILE = path.join(STATE_DIR, "credentials.json");
 const TELEMETRY_POLICY_FILE = path.join(STATE_DIR, "telemetry-policy.json");
 
@@ -111,6 +178,9 @@ function getTranscriptChunkMaxBytes() {
 }
 
 module.exports = {
+  CHANNEL_FILE,
+  CHANNEL,
+  readChannel,
   STATE_DIR,
   CRED_FILE,
   TELEMETRY_POLICY_FILE,
@@ -118,6 +188,7 @@ module.exports = {
   getRefreshUrl,
   getDeviceCodeUrl,
   getTokenUrl,
+  getRevokeUrl,
   getOAuthClientId,
   getBackendUrlOverride,
   getEventTimeoutMs,

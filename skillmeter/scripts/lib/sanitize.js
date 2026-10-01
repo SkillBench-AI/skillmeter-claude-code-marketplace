@@ -20,7 +20,8 @@ const VOCABULARY = require("./path-vocabulary.json");
 // per-record reporting. 3.1.0 = segment-wise hashing of file-path fields with
 // the shared vocabulary, and `counts.path` (ADR 002 amendment, decision 6).
 // 3.1.1 preserves distinct entries whose object keys redact to the same string.
-const POLICY_VERSION = "3.1.1";
+// 3.1.2 hashes `directory`, `worktree_path` and `scratchpad_dir` wholesale.
+const POLICY_VERSION = "3.1.2";
 
 // ---------------------------------------------------------------------------
 // Content redaction
@@ -207,7 +208,15 @@ function escapeRegExp(str) {
 // command shape is preserved while secrets are redacted and the home prefix
 // is hashed.
 const SEGMENT_KEYS = new Set(["file_path", "filePath", "notebook_path"]);
-const WHOLE_KEYS = new Set(["path", "cwd", "old_cwd", "new_cwd"]);
+const WHOLE_KEYS = new Set([
+  "path",
+  "cwd",
+  "old_cwd",
+  "new_cwd",
+  "directory",
+  "worktree_path",
+  "scratchpad_dir",
+]);
 const PATH_KEYS = new Set([...SEGMENT_KEYS, ...WHOLE_KEYS]);
 
 // Every HMAC applied to a path element is tallied under `counts.path`. It is a

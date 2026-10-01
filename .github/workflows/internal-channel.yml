@@ -1,0 +1,46 @@
+name: Internal channel
+
+# Rebuild the `internal` branch from every `next` commit whose CI passed: the
+# code under development, versioned as a prerelease of the next patch and
+# defaulting to the dev environment under the `skillbench-internal` marketplace
+# name. Internal developers install from it; customers install from main, which
+# moves only at releases.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [next]
+  workflow_dispatch:
+
+concurrency:
+  group: internal-channel
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build the internal channel
+        run: node .github/scripts/make-internal-channel.mjs --build ${{ github.run_number }}
+      - name: Publish the internal branch
+        env:
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B internal
+          git add -A
+          git commit -m "chore(internal): channel build of ${SOURCE_SHA}"
+          # The branch is derived from next on every run, so it is replaced.
+          git push --force origin internal

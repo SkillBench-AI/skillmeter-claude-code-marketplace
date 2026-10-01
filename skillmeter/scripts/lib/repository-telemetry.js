@@ -287,14 +287,14 @@ function buildRepositoryTelemetryState(roots, {
     telemetryStore.getRepositoryOverride(repoKey),
   getOrgConsent = telemetryStore.getOrganizationConsent,
   getGlobalDisabled = telemetryStore.getGlobalDisabled,
-  hasValidLicense = credstore.hasValidLicense,
+  isSignedIn = credstore.isSignedIn,
   getHashSalt = credstore.getOrCreateHashSalt,
   getConfiguredRepositories = () =>
     telemetryStore.readPolicy().repositories,
   getAllowedOrgs = credstore.getAllowedGitHubOrgs,
 } = {}) {
   const globalDisabled = getGlobalDisabled();
-  const signedIn = hasValidLicense();
+  const signedIn = isSignedIn();
   let hashSalt = "";
   const repositories = [];
   const discovered = new Map();
@@ -348,7 +348,7 @@ function buildRepositoryTelemetryState(roots, {
     const orgConsent = getOrgConsent(scope.remoteOrg);
     const gate = resolveTelemetryGate({
       globalDisabled,
-      hasValidLicense: signedIn,
+      signedIn,
       repoOrgOwned: true,
       orgConsent,
       projectOptIn: projectSetting,

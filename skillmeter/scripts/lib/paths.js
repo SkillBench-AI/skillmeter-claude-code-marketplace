@@ -11,6 +11,7 @@ const path = require("path");
 const crypto = require("crypto");
 const { safeReadJson } = require("./io");
 const { resolvePluginDataRoot } = require("./plugin-data-root");
+const { STATE_DIR } = require("./config");
 
 const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, "..", "..");
 
@@ -62,6 +63,16 @@ function organizationAuditQueuePaths(tenantFingerprint) {
   };
 }
 
+// This client's own account state (ADR 005): its session, the session's status
+// record and the sign-in and upload sentinels. Nothing here is shared with
+// another client. Keyed by the shared state directory, so a dev and a prod
+// environment on one installation (SKILLMETER_STATE_DIR) never share a session.
+const ACCOUNT_DIR = path.join(
+  DATA_ROOT,
+  "account",
+  crypto.createHash("sha256").update(path.resolve(STATE_DIR)).digest("hex").slice(0, 12)
+);
+
 const PLUGIN_VERSION =
   (safeReadJson(path.join(PLUGIN_ROOT, ".claude-plugin", "plugin.json"), {})).version ||
   "unknown";
@@ -69,6 +80,7 @@ const PLUGIN_VERSION =
 module.exports = {
   PLUGIN_ROOT,
   LOG_DIR,
+  ACCOUNT_DIR,
   REPOSITORIES_LOG_DIR,
   ORGANIZATION_AUDIT_LOG_DIR,
   SESSIONS_DIR,

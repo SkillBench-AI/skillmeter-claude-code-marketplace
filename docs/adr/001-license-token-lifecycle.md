@@ -9,6 +9,9 @@ Shared consent across clients is decided in
 [ADR 004](004-shared-consent.md), not here; see the
 [2026-09-25 note](#amendment-2026-09-25-shared-consent-is-decided-in-adr-004)
 at the end.
+[ADR 005](005-per-client-session.md) (proposed 2026-09-27) would supersede
+decision 1, decision 5 as far as it shares the license, and the session parts
+of the "authentication intent across shared clients" amendment.
 **Related:** `skillmeter-license-activation` (server-side counterpart for decision 1), `skillmeter-codex-marketplace`, `skillmeter-vscode-extension`
 
 ## Context
@@ -228,8 +231,8 @@ checked against it and against the VS Code extension's auth service (A6).
 | Decision | Issue |
 | --- | --- |
 | 1 | A5 (server TTL), with a linked ADR in `skillmeter-license-activation` |
-| 2 | A2 (background refresh) |
-| 3 | A3 (recording while the token is expired) |
+| 2 | A2 (background refresh); superseded, see the 2026-09-27 single-refresh-path amendment |
+| 3 | A3 (recording while the token is expired); implemented, see the 2026-09-27 amendment |
 | 4 | A4 (recovery without a stored token) |
 | 5 | A6 (Codex plugin and VS Code extension) |
 
@@ -332,7 +335,7 @@ while the token was expired. It does not create a sign-in, bypass disabled
 telemetry, change token lifetime, or rearm terminal 401/402/410 outcomes.
 
 Implementation: `scripts/lib/hook-license-recovery.js`, `scripts/stop.js` and
-`scripts/drain_once.js`. Run `node --test skillmeter/test/expiry-recovery.test.js`
+`scripts/drain_once.js`. Run `node --test test/expiry-recovery.test.js`
 from the repository root. The suite covers empty-queue recovery, consent and
 terminal boundaries, and a real detached child that persists a synthetic refresh
 after Stop exits. Its clock and network are substituted; it does not use live
@@ -351,3 +354,98 @@ moved to ADR 004 as decisions 4 to 6 and its acceptance table, and is
 withdrawn here in its favour. A token change never changes consent, and a
 consent change never mints or revokes a token; anything that touches both is
 decided in ADR 004 and mirrored in each client's ADR set.
+
+## Amendment: authentication intent across shared clients
+
+Credential writers coordinate on `credentials.json.lock`, preserving fields
+owned by other clients. Explicit sign-in, successful issuance, direct token
+replacement and sign-out rotate `auth_generation`. Refresh preserves that
+generation and commits only while the token, generation, device and sign-out
+state match its pre-request snapshot. This rejects delayed responses even when
+a new sign-in reuses the same token. Browser issuance carries the initiating
+generation and device through foreground and detached polling.
+
+Refresh status writes run under the same credential lock and recheck the
+exchange snapshot. New status records contain a hash of that authentication
+context, so a different client's sign-in invalidates stale backoff and terminal
+state without persisting another token copy. Older unbound status records remain
+readable. Refresh callers re-read credentials after an awaited exchange.
+
+The shared owner-token lock never expires a live writer by age. A contender
+reclaims only a valid owner whose PID check reports `ESRCH`. Cleanup takes a
+lock specific to the observed owner token, then rechecks that owner before
+unlinking. Every cleanup process for that incarnation uses the same guard,
+including through directory aliases. Dead cleanup owners use the same bounded
+recovery procedure. Unknown formats, unreadable ownership, permission-denied
+PID checks and potentially reused live PIDs hold the lock.
+
+This is a single-host, cooperating-client protocol on a local filesystem with
+atomic hard-link publication. It prefers a recoverable hold over simultaneous
+credential writers. Repeated crashes beyond the recovery depth also hold;
+`credential-store-busy` does not authorize deleting the lock while clients run.
+
+Both plugins must use the updated protocol, and old processes must exit after
+updating. Released clients that reclaim live locks by age and older Claude
+clients that ignore the lock cannot inherit this guarantee from a shared file.
+The candidate tests for surviving released processes cover their listed auth
+transitions only, not arbitrary overlapping writes. This amendment does not
+authorize telemetry, change consent, or establish a release support window.
+
+## Amendment 2026-09-27: decision 3 implemented
+
+**Status:** Accepted.
+
+The capture gate now uses `credstore.isSignedIn()`: a license is held and the
+user has not signed out. Freshness is enforced only at transmission, as before.
+An expired or unrefreshable token no longer drops events or advances the
+transcript cursor past turns the user chose to record.
+
+The removals decision 3 lists are in place:
+
+- Sign-out purges every repository queue and the organization-audit queue.
+  Chunks of an accepted historical import are kept, as in every other
+  repository purge: backfill consent is separate from repository telemetry,
+  and whether sign-out should also withdraw it is left open.
+- A 402 from `/refresh` purges the repository queues of the license's
+  organizations and the organization-audit queue. It also drops the license
+  token (without setting `signed_out`), so recording stops rather than
+  refilling the queues until the seven-day sweep. The server returns 402 when
+  the organization license is cancelled and when the user leaves or is removed
+  from the workspace, so both stop telemetry at the next refresh. (Amended
+  2026-09-27.)
+- Unsent event logs and transcript chunks older than seven days are deleted.
+  The sweep runs at every SessionStart, including when no usable license is
+  held, so the bound holds for exactly the devices that can no longer sign in.
+
+The SessionStart sign-in banner now appears when the user is signed out or the
+refresh chain needs a new sign-in (401, 410 or 402). A license waiting out an
+outage keeps recording, so it no longer shows that telemetry is off.
+
+## Amendment 2026-09-27: one refresh path
+
+**Status:** Accepted. Supersedes decision 2 and the Stop-triggered recovery
+amendment.
+
+Decision 2 and the Stop recovery existed so that no hook would meet an expired
+token: capture was gated on freshness, so every gap lost data. With decision 3
+implemented, capture no longer depends on the token, and refreshing ahead of
+need buys nothing. The license is now refreshed in one place: the upload drain,
+just before it sends a batch, and once more with the local expiry check
+bypassed when the server answers 401. Removed:
+
+- the retry-daemon's per-sweep refresh and its look-ahead window; the daemon
+  only drains;
+- the SessionStart refresh; SessionStart now spawns a detached drain, so it
+  never waits on the network;
+- the Stop-triggered recovery worker (`lib/hook-license-recovery.js`);
+- the `backoff_exhausted` terminal state. A transient failure keeps retrying
+  at the 30-minute cap, so an outage recovers without a new session. A record
+  written by an older version is ignored.
+
+Kept: the single-flight refresh lock and cooldown, backoff, the 401/410
+(re-activation) and 402 (revoked) terminal states, and SessionStart clearing a
+terminal state to give a new session one attempt. The sign-in banner decides
+from the state the session found, before that clear.
+
+An upload rejected with 401 is not charged against the chunk's retry budget:
+the token, not the chunk, was refused.

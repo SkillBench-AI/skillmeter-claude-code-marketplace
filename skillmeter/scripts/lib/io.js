@@ -1,7 +1,7 @@
 /**
  * Shared low-level I/O helpers. This is a LEAF module — it imports only Node
  * built-ins (fs/path/process) and nothing from the plugin, so any module
- * (credstore, paths, harness, settings, repo-scope, …) can require it without
+ * (credstore, paths, harness, repo-scope, …) can require it without
  * risking an import cycle.
  */
 

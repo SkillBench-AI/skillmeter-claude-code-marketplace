@@ -23,6 +23,8 @@ Review these documents before installing:
 
 ## Install from the SkillBench marketplace
 
+Requires Node.js 22 or later on `PATH`; the plugin's hooks run `node`.
+
 ```bash
 claude plugin marketplace add SkillBench-AI/skillmeter-claude-code-marketplace
 claude plugin install skillmeter@skillbench
@@ -42,6 +44,30 @@ claude plugin update skillmeter@skillbench
 
 Restart Claude Code or run `/reload-plugins`. See [support](SUPPORT.md) for
 troubleshooting and version checks.
+
+## Internal channel
+
+SkillBench developers can dogfood the code under development against the dev
+environment. Development happens on `next`; `main` moves only at releases. The
+`internal` branch is rebuilt from every `next` commit that passes CI. It is
+versioned as a prerelease of the next patch (for example `0.41.1-internal.37`,
+which sorts after `0.41.0` and before `0.41.1`), defaults to the dev sign-in
+service, license server and `~/.skillbench-dev` state, and is published as the
+`skillbench-internal` marketplace so its installation and plugin data stay apart
+from the stable one.
+
+```sh
+claude plugin uninstall skillmeter@skillbench
+claude plugin marketplace add SkillBench-AI/skillmeter-claude-code-marketplace#internal
+claude plugin install skillmeter@skillbench-internal
+```
+
+Sign in with a dev workspace account. Uninstall the stable plugin first, or both
+would record the same sessions. Cards show `internal (dev)` in the title. To
+update, run `claude plugin marketplace update skillbench-internal` and
+`claude plugin update skillmeter@skillbench-internal`. The
+workflow that rebuilds the branch is `.github/workflows/internal-channel.yml`;
+never commit `skillmeter/channel.json` to `main` (a test fails if it is present).
 
 ## Validate and test
 

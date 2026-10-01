@@ -46,8 +46,7 @@
               "${CLAUDE_PLUGIN_ROOT}/scripts/hook.js",
               "UserPromptSubmit"
             ],
-            "async": true,
-            "timeout": 10
+            "async": true
           }
         ]
       }
@@ -87,8 +86,7 @@
             "type": "command",
             "command": "node",
             "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hook.js", "PreToolUse"],
-            "async": true,
-            "timeout": 10
+            "async": true
           }
         ]
       }
@@ -100,8 +98,7 @@
             "type": "command",
             "command": "node",
             "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hook.js", "PostToolUse"],
-            "async": true,
-            "timeout": 10
+            "async": true
           }
         ]
       }
@@ -113,8 +110,7 @@
             "type": "command",
             "command": "node",
             "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hook.js", "PostToolBatch"],
-            "async": true,
-            "timeout": 10
+            "async": true
           }
         ]
       }
@@ -129,8 +125,7 @@
               "${CLAUDE_PLUGIN_ROOT}/scripts/hook.js",
               "PostToolUseFailure"
             ],
-            "async": true,
-            "timeout": 10
+            "async": true
           }
         ]
       }
@@ -145,8 +140,7 @@
               "${CLAUDE_PLUGIN_ROOT}/scripts/hook.js",
               "PermissionRequest"
             ],
-            "async": true,
-            "timeout": 10
+            "async": true
           }
         ]
       }
@@ -158,8 +152,7 @@
             "type": "command",
             "command": "node",
             "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hook.js", "Notification"],
-            "async": true,
-            "timeout": 10
+            "async": true
           }
         ]
       }
@@ -171,8 +164,7 @@
             "type": "command",
             "command": "node",
             "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/stop.js"],
-            "async": true,
-            "timeout": 10
+            "async": true
           }
         ]
       }
@@ -184,8 +176,7 @@
             "type": "command",
             "command": "node",
             "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hook.js", "SubagentStart"],
-            "async": true,
-            "timeout": 10
+            "async": true
           }
         ]
       }
@@ -197,8 +188,7 @@
             "type": "command",
             "command": "node",
             "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hook.js", "SubagentStop"],
-            "async": true,
-            "timeout": 10
+            "async": true
           }
         ]
       }
@@ -210,8 +200,7 @@
             "type": "command",
             "command": "node",
             "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hook.js", "TeammateIdle"],
-            "async": true,
-            "timeout": 10
+            "async": true
           }
         ]
       }
@@ -223,8 +212,7 @@
             "type": "command",
             "command": "node",
             "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hook.js", "TaskCompleted"],
-            "async": true,
-            "timeout": 10
+            "async": true
           }
         ]
       }
@@ -239,8 +227,7 @@
               "${CLAUDE_PLUGIN_ROOT}/scripts/hook.js",
               "InstructionsLoaded"
             ],
-            "async": true,
-            "timeout": 10
+            "async": true
           }
         ]
       }
@@ -252,8 +239,19 @@
             "type": "command",
             "command": "node",
             "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hook.js", "ConfigChange"],
-            "async": true,
-            "timeout": 10
+            "async": true
+          }
+        ]
+      }
+    ],
+    "DirectoryAdded": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hook.js", "DirectoryAdded"],
+            "async": true
           }
         ]
       }
@@ -265,8 +263,7 @@
             "type": "command",
             "command": "node",
             "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hook.js", "WorktreeRemove"],
-            "async": true,
-            "timeout": 10
+            "async": true
           }
         ]
       }
@@ -290,8 +287,7 @@
             "type": "command",
             "command": "node",
             "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hook.js", "PreCompact"],
-            "async": true,
-            "timeout": 10
+            "async": true
           }
         ]
       }
@@ -303,8 +299,7 @@
             "type": "command",
             "command": "node",
             "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hook.js", "PostCompact"],
-            "async": true,
-            "timeout": 10
+            "async": true
           }
         ]
       }
@@ -316,8 +311,7 @@
             "type": "command",
             "command": "node",
             "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hook.js", "StopFailure"],
-            "async": true,
-            "timeout": 10
+            "async": true
           }
         ]
       }
@@ -329,8 +323,7 @@
             "type": "command",
             "command": "node",
             "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hook.js", "TaskCreated"],
-            "async": true,
-            "timeout": 10
+            "async": true
           }
         ]
       }
@@ -342,8 +335,7 @@
             "type": "command",
             "command": "node",
             "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hook.js", "PermissionDenied"],
-            "async": true,
-            "timeout": 10
+            "async": true
           }
         ]
       }
@@ -355,8 +347,7 @@
             "type": "command",
             "command": "node",
             "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hook.js", "Setup"],
-            "async": true,
-            "timeout": 10
+            "async": true
           }
         ]
       }
@@ -368,8 +359,19 @@
             "type": "command",
             "command": "node",
             "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hook.js", "CwdChanged"],
-            "async": true,
-            "timeout": 10
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PostModelSwitch": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hook.js", "PostModelSwitch"],
+            "async": true
           }
         ]
       }
@@ -381,8 +383,7 @@
             "type": "command",
             "command": "node",
             "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/hook.js", "Elicitation"],
-            "async": true,
-            "timeout": 10
+            "async": true
           }
         ]
       }
@@ -397,8 +398,7 @@
               "${CLAUDE_PLUGIN_ROOT}/scripts/hook.js",
               "ElicitationResult"
             ],
-            "async": true,
-            "timeout": 10
+            "async": true
           }
         ]
       }

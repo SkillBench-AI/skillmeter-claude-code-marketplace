@@ -112,7 +112,7 @@ function resolveCwdForProject(projectDir, dirName) {
  *
  * Returns:
  *   {
- *     included: Array<{ sessionFile, sessionId, cwd, repoRoot, remoteOrg }>,
+ *     included: Array<{ sessionFile, sessionId, cwd, repoRoot, remoteOrg, repoKey }>,
  *     skipped:  Array<{ sessionFile, cwd, reason }>,
  *     summary:  {
  *       projectsScanned, sessionsIncluded, sessionsSkipped,

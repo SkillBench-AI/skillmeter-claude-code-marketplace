@@ -2,8 +2,8 @@
  * Machine-wide telemetry policy SSOT.
  *
  * Repository decisions are keyed by canonical GitHub identity, not a checkout
- * path, so clones and worktrees share one setting. credentials.json is the
- * identity/JWT store and holds no telemetry state.
+ * path, so clones and worktrees share one setting. Neither the shared
+ * credentials.json (identity) nor this client's session holds telemetry state.
  */
 
 const fs = require("fs");

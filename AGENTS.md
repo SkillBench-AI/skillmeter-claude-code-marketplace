@@ -34,7 +34,9 @@ concise English for readers who do not know the team's internal history.
   `CLAUDE_PLUGIN_DATA` explicitly. Skill commands must start with `node` to match
   `Bash(node *)`; they derive the data root from the resolved installation path.
   Do not assume skill/monitor subprocesses inherit `CLAUDE_PLUGIN_ROOT`.
-- Use `skillmeter/testing/helpers.js` for synthetic state. It loads bootstrap
+- Tests live in `test/` and fixtures in `testing/` at the repository root,
+  outside the shipped `skillmeter/` directory, so they never reach users.
+- Use `testing/helpers.js` for synthetic state. It loads bootstrap
   before runtime modules and forces a temporary plugin-data root. Tests that
   do not use helpers must load bootstrap themselves. Never test against real
   credential stores or plugin data.
@@ -42,27 +44,46 @@ concise English for readers who do not know the team's internal history.
   exercise affected handlers with synthetic stdin and isolated state. Verify
   relevant sanitization and consent behavior; historical snapshots additionally
   exclude tool results and images.
+- Register only events that cannot change Claude Code's behavior. Never
+  register `WorktreeCreate` (the hook replaces git worktree creation) or
+  `PreModelSwitch` (it is synchronous and a timed-out hook blocks the switch);
+  skip `MessageDisplay` (per streamed text delta, message content). Hooks whose
+  stdout reaches Claude, such as `PostModelSwitch`, must print nothing.
+- Claude Code does not enforce `timeout` on `async: true` command hooks, so
+  async hooks carry none; every network call bounds itself with
+  `AbortSignal.timeout`. Synchronous hooks keep an explicit `timeout`.
 - Keep upload, retry and cleanup failures best-effort so hooks can return.
   Preserve existing validation, privacy boundaries and recovery behavior.
 
 ## Release notes
 
 Release notes are public. They say what changed for the user; the PR holds the
-rest. Read the latest published release before writing one.
+rest. Read the latest published release before writing one;
+[0.38.0](https://github.com/SkillBench-AI/skillmeter-claude-code-marketplace/releases/tag/v0.38.0)
+is the model for length and tone.
 
 - Title `SkillMeter X.Y.Z`, then `### What changed`, `### After updating`,
   `### Known limitations`, and a final `Details: #PR, #PR` line.
-- **What changed**: the user-visible outcome, one sentence per bullet, at most
-  three bullets. No retry counts, line counts, algorithms or internal names.
+- **What changed**: the user-visible outcome, at most three bullets, one change
+  each. Each bullet is one short sentence, about 20 words or fewer, in the
+  present tense. No semicolons, no second clause after a colon, no "and"
+  joining two changes. No retry counts, line counts, algorithms, file or
+  module names, policy or schema versions, or ADR references.
 - **After updating**: always `1. claude plugin update skillmeter@skillbench`
   and `2. Quit and reopen Claude Code` (hooks and monitors load per session).
   Add a sign-in step only when the release requires one. Do not add sentences
   about what is not needed.
-- **Known limitations**: only what this release adds or changes. Otherwise
-  `Unchanged from X.Y.Z.`, naming the release that lists them.
+- **Known limitations**: only what this release adds or changes, under the
+  same sentence rule, each saying what the user will see. End with
+  `Otherwise unchanged from X.Y.Z.`, or use only `Unchanged from X.Y.Z.`,
+  naming the release that lists them.
 - **Details**: PR numbers only. ADRs and privacy documents are reachable from
   the PRs.
-- Cut the release on the commit that bumps `skillmeter/.claude-plugin/plugin.json`,
-  in the same PR cycle. The marketplace installs `main`, so a bumped version
-  without a release is what users see.
+- Pull requests target `next`, the development branch; the internal channel
+  follows it. `main` is what the marketplace installs and moves only at
+  releases: bump `skillmeter/.claude-plugin/plugin.json` on `next`, then open a
+  pull request from `next` to `main` and merge it with a merge commit, not a
+  squash, so both branches keep one history. Cut the release on that merge. A
+  hotfix goes to `main` in its own release pull request and is merged back into
+  `next` right after.
 - Obtain approval before publishing unless already authorized.

@@ -1,22 +1,17 @@
 #!/usr/bin/env node
 /**
  * Drain durable queues in a detached process so hooks do not wait on uploads.
- * Failed uploads remain available for SessionStart or monitor retries.
+ * The drains refresh the license before sending. Failed uploads stay queued
+ * for the next drain.
  */
 
 const {
   clearDrainOnceLock,
   drainQueuesOnce,
 } = require("./lib/transfer");
-const { refreshForEnabledRepositories } = require("./lib/hook-license-recovery");
 
 async function main() {
   try {
-    try {
-      await refreshForEnabledRepositories();
-    } catch (err) {
-      process.stderr.write(`[skillmeter-drain-once] refresh failed (${err.message})\n`);
-    }
     await drainQueuesOnce();
   } finally {
     clearDrainOnceLock();

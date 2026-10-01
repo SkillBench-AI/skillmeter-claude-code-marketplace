@@ -3,9 +3,10 @@
  * retries, policy revalidation, and delivered-artifact cleanup.
  *
  * The filesystem is the source of truth. Hooks append to the active
- * `events.jsonl`, final-session hooks seal it to `events.jsonl.<ts>`, and the
- * SessionStart hook / retry monitor drain sealed event logs plus queued
- * transcript delta chunks in the background.
+ * `events.jsonl`, final-session hooks seal it to `events.jsonl.<ts>`, and a
+ * detached drain (spawned by Stop, SessionEnd and SessionStart) or the retry
+ * monitor uploads sealed event logs plus queued transcript delta chunks,
+ * refreshing the license just before it sends.
  */
 
 const fs = require("fs");
@@ -77,6 +78,11 @@ const TRANSCRIPT_TIMEOUT = 30_000;
 // spent its retry budget and was quarantined — it is no longer awaiting
 // anything, and at a whole transcript slice each it cannot be kept forever.
 const CLEANUP_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+// Unsent telemetry older than the license's 7-day refresh window is deleted
+// (ADR 001, decision 3). Capture does not wait for a fresh token, so without
+// this a device that can no longer sign in would keep it indefinitely; by
+// then the token chain is dead and a new sign-in is required anyway.
+const UNSENT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const DRAIN_ONCE_LOCK_FILE = path.join(LOG_DIR, ".drain-once.lock");
 const DRAIN_ONCE_LOCK_STALE_MS = 30_000;
 const QUEUE_DRAIN_LOCK_STALE_MS = 2 * 60_000;
@@ -99,6 +105,41 @@ function acquireQueueDrainLock(name) {
   }
 }
 
+// Uploads run a few at a time: a large historical import would otherwise
+// start every chunk at once, share the bandwidth until they all time out, and
+// spend every chunk's retry budget together.
+const DRAIN_CONCURRENCY = 4;
+
+// Run `fn` over `items` with at most `limit` in flight; results keep input
+// order and have Promise.allSettled's shape. `onEach` runs after every item.
+async function settleWithLimit(items, limit, fn, onEach = () => {}) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const index = next++;
+      try {
+        results[index] = { status: "fulfilled", value: await fn(items[index]) };
+      } catch (reason) {
+        results[index] = { status: "rejected", reason };
+      }
+      onEach();
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, worker)
+  );
+  return results;
+}
+
+// A drain longer than QUEUE_DRAIN_LOCK_STALE_MS would otherwise look
+// abandoned, and a second drain would upload the same chunks again.
+function touchQueueDrainLock(lock) {
+  if (!lock) return;
+  const now = new Date();
+  try { fs.utimesSync(lock.lockPath, now, now); } catch {}
+}
+
 function releaseQueueDrainLock(lock) {
   if (!lock) return;
   try { fs.closeSync(lock.fd); } catch {}
@@ -116,7 +157,7 @@ function idempotencyKey(repoKey, body) {
 /**
  * Upload an event log file to the backend via fetch + gzip.
  * On success (2xx), renames the file to `.sent`; on failure, leaves it for
- * the next SessionStart's retryFailedLogs sweep.
+ * the next drain.
  * @returns {Promise<void>}
  */
 // Returns { ok } on success, { ok:false, error } on a real transmission failure
@@ -156,10 +197,9 @@ async function transferEventLog(logFile, timeoutMs = EVENT_TIMEOUT) {
   }
 
   // A valid (non-expired) license JWT is REQUIRED — the backend does not accept
-  // unauthenticated telemetry. No valid token → leave the file for retry (the
-  // drain batch calls ensureFreshLicense first, and SessionStart / the monitor
-  // retry once a fresh license is available). Uncached read so the long-lived
-  // daemon sees a token refreshed by another process.
+  // unauthenticated telemetry. No valid token → leave the file for retry; the
+  // drain refreshes before each batch, the one place refresh happens. Uncached
+  // read so the long-lived daemon sees a token refreshed by another process.
   const token = credstore.getLicenseTokenUncached();
   if (!token || isJwtExpired(token)) {
     console.error(`[skillmeter] Event log: no valid license JWT — leaving for retry`);
@@ -219,6 +259,7 @@ async function transferEventLog(logFile, timeoutMs = EVENT_TIMEOUT) {
       return { ok: true };
     }
     console.error(`[skillmeter] Event log transfer failed: HTTP ${res.status}`);
+    if (res.status === 401) return { ok: false, unauthorized: true, error: "HTTP 401" };
     return { ok: false, error: `HTTP ${res.status}` };
   } catch (err) {
     console.error(`[skillmeter] Event log transfer error: ${err.message}`);
@@ -228,7 +269,7 @@ async function transferEventLog(logFile, timeoutMs = EVENT_TIMEOUT) {
 
 /**
  * Seal the active event log into a retryable batch. This is a local durable
- * queue transition only; network upload is handled by retryFailedLogs().
+ * queue transition only; network upload is handled by drainFailedLogs().
  * @returns {string|null} sealed file path when a log was rotated.
  */
 function sealEventLog(repository) {
@@ -321,7 +362,13 @@ function clearDrainOnceLock() {
   try { fs.unlinkSync(DRAIN_ONCE_LOCK_FILE); } catch {}
 }
 
+// One hook process asks for at most one drain: a Stop that records and then
+// requests license recovery would otherwise spawn two, relying only on the
+// file debounce below to collapse them.
+let drainSpawnedInProcess = false;
+
 function spawnDetachedDrain() {
+  if (drainSpawnedInProcess) return false;
   if (!shouldSpawnDrainOnce()) return false;
 
   const script = path.join(PLUGIN_ROOT, "scripts", "drain_once.js");
@@ -332,6 +379,7 @@ function spawnDetachedDrain() {
       env: process.env,
     });
     child.unref();
+    drainSpawnedInProcess = true;
     console.error(`[skillmeter] Drain trigger spawned: pid=${child.pid}`);
     return true;
   } catch (err) {
@@ -569,6 +617,17 @@ async function uploadDeltaChunk(bodyPath, deviceId, timeoutMs = TRANSCRIPT_TIMEO
     return { ok: false, error: "invalid_queue_context" };
   }
   const disposition = chunkDisposition(meta, context);
+  if (disposition === "delete" && meta.promptId === "backfill") {
+    // Backfill consent is separate from repository policy: an offer that is
+    // no longer authorized removes only its own chunk. Purging the queue
+    // here would also drop the repository's live telemetry.
+    logBackfillChunk(meta, "upload_failed", {
+      error: "backfill_offer_not_authorized",
+    });
+    try { fs.unlinkSync(bodyPath); } catch {}
+    try { fs.unlinkSync(metaPath); } catch {}
+    return { ok: false, error: "backfill_offer_not_authorized" };
+  }
   if (disposition === "delete") {
     logBackfillChunk(meta, "upload_failed", {
       error: "repository_policy_deleted_queue",
@@ -659,6 +718,13 @@ async function uploadDeltaChunk(bodyPath, deviceId, timeoutMs = TRANSCRIPT_TIMEO
       });
       removeChunk();
       return { ok: true };
+    }
+    if (res.status === 401) {
+      // The token, not the chunk: no retry budget is spent. The drain refreshes
+      // once and resends.
+      console.error("[skillmeter] Transcript chunk rejected: license not accepted (HTTP 401) — kept for retry");
+      logBackfillChunk(meta, "upload_deferred", { reason: "license_rejected", httpStatus: 401 });
+      return { ok: false, unauthorized: true, error: "HTTP 401" };
     }
     const budget = noteChunkUploadFailure(
       bodyPath,
@@ -759,9 +825,13 @@ async function drainDeltaChunks(timeoutMs) {
     console.error(`[skillmeter] Draining ${files.length} transcript chunk(s)`);
     // Best-effort, single-flight refresh once per batch (see drainFailedLogs).
     await ensureFreshLicense(deviceId);
-    const results = await Promise.allSettled(
-      files.map((file) => uploadDeltaChunk(file, deviceId, timeoutMs))
+    const upload = (batch) => settleWithLimit(
+      batch,
+      DRAIN_CONCURRENCY,
+      (file) => uploadDeltaChunk(file, deviceId, timeoutMs),
+      () => touchQueueDrainLock(lock)
     );
+    const results = await retryUnauthorizedOnce(files, await upload(files), upload);
     if (backfillEntries.length > 0) {
       const backfillFiles = new Set(
         backfillEntries.map((entry) => entry.file)
@@ -808,8 +878,14 @@ async function drainDeltaChunks(timeoutMs) {
  */
 function stageTranscriptDelta(transcriptPath, promptId, deviceId, repository) {
   if (!repository?.repoKey) return { chunks: 0 };
-  if (isBackfillRunning()) return { chunks: 0, deferred: true };
   const transcriptId = path.basename(transcriptPath);
+  // The snapshot skips any transcript with a live cursor, so only transcripts
+  // without one (or with a discarded one) can race it and must wait. Deferring
+  // every session would lose the final turns of sessions that end meanwhile.
+  const existingCursor = readCursor(transcriptId, repository);
+  if ((!existingCursor || existingCursor.discarded) && isBackfillRunning()) {
+    return { chunks: 0, deferred: true };
+  }
 
   let raw;
   try {
@@ -983,8 +1059,8 @@ function discardSkippedSessionArtifacts(input, deviceId, repository) {
 }
 
 /**
- * Seal final-session artifacts into durable queues. Network upload is left to
- * SessionStart retry and the plugin monitor, keeping async hooks short.
+ * Seal final-session artifacts into durable queues and, when anything was
+ * queued, spawn a detached drain for the upload, keeping async hooks short.
  */
 function sealFinalSessionArtifacts(input, deviceId, repository) {
   const sealedEventLog = sealEventLog(repository);
@@ -1075,13 +1151,31 @@ async function drainFailedLogs(timeoutMs) {
     // Best-effort, single-flight refresh once per batch so every file in this
     // drain sends with the freshest token. Non-blocking and never throws.
     await ensureFreshLicense(credstore.getDeviceId());
-    const results = await Promise.allSettled(
-      files.map((filePath) => transferEventLog(filePath, timeoutMs))
+    const upload = (batch) => Promise.allSettled(
+      batch.map((filePath) => transferEventLog(filePath, timeoutMs))
     );
+    const results = await retryUnauthorizedOnce(files, await upload(files), upload);
     return tally(results);
   } finally {
     releaseQueueDrainLock(lock);
   }
+}
+
+// A 401 means the server rejected the token even though it looked fresh here
+// (a clock that runs ahead, a key rotation). Refresh once, bypassing the local
+// expiry check, and resend only the rejected files. Results keep input order.
+async function retryUnauthorizedOnce(files, results, upload) {
+  const rejected = files
+    .map((file, index) => ({ file, index }))
+    .filter(({ index }) => results[index]?.value?.unauthorized);
+  if (rejected.length === 0) return results;
+  const before = credstore.getLicenseTokenUncached();
+  const after = await ensureFreshLicense(credstore.getDeviceId(), { force: true });
+  if (!after || after === before) return results;
+  const retried = await upload(rejected.map(({ file }) => file));
+  const merged = results.slice();
+  rejected.forEach(({ index }, i) => { merged[index] = retried[i]; });
+  return merged;
 }
 
 // Drain both queues once. Record an upload-result sentinel so the next
@@ -1104,25 +1198,6 @@ async function drainQueuesOnce(timeoutMs) {
 }
 
 /**
- * Retry failed event log transfers. Matches files under LOG_DIR named
- * `events.jsonl.<timestamp>` (the pre-`.sent` state) and fires
- * transferEventLog for each.
- */
-function retryFailedLogs() {
-  void drainFailedLogs();
-}
-
-/**
- * Retry failed transcript uploads. Scans the delta chunk queue and fires an
- * upload for every chunk left behind by a previous session. Each upload is
- * fire-and-forget; on 2xx the chunk is removed, otherwise it stays for the
- * next session.
- */
-function retryFailedTranscripts() {
-  void drainDeltaChunks();
-}
-
-/**
  * Delete event logs already delivered (the `.sent` markers) and chunks that
  * spent their retry budget long ago. Unsent repository-bound chunks and cursors
  * are intentionally retained.
@@ -1130,8 +1205,23 @@ function retryFailedTranscripts() {
 function cleanupStaleFiles() {
   const now = Date.now();
   const candidates = [];
+  const unsent = [];
 
   for (const context of listRepositoryQueueContexts()) {
+    try {
+      for (const f of fs.readdirSync(context.root)) {
+        if (f === "events.jsonl" || /^events\.jsonl\.\d+$/.test(f)) {
+          unsent.push(path.join(context.root, f));
+        }
+      }
+    } catch {}
+    try {
+      for (const f of fs.readdirSync(context.chunks)) {
+        if (f.endsWith(".jsonl") || f.endsWith(".meta.json")) {
+          unsent.push(path.join(context.chunks, f));
+        }
+      }
+    } catch {}
     try {
       for (const f of fs.readdirSync(context.root)) {
         if (/^events\.jsonl\.\d+\.sent$/.test(f)) {
@@ -1190,6 +1280,20 @@ function cleanupStaleFiles() {
   if (deleted > 0) {
     console.error(`[skillmeter] Cleaned up ${deleted} stale file(s) older than 30 days`);
   }
+
+  let expired = 0;
+  for (const p of unsent) {
+    try {
+      const st = fs.statSync(p);
+      if (st.isFile() && now - st.mtimeMs > UNSENT_MAX_AGE_MS) {
+        fs.unlinkSync(p);
+        expired++;
+      }
+    } catch {}
+  }
+  if (expired > 0) {
+    console.error(`[skillmeter] Deleted ${expired} unsent file(s) older than 7 days`);
+  }
   cleanupStaleSessionContexts(CLEANUP_MAX_AGE_MS, now);
 }
 
@@ -1211,8 +1315,6 @@ module.exports = {
   drainDeltaChunks,
   drainQueuesOnce,
   queuedFileCount,
-  retryFailedLogs,
-  retryFailedTranscripts,
   cleanupStaleFiles,
   purgeRepositoryQueue,
   purgeOrganizationQueues,

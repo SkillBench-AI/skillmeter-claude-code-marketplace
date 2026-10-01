@@ -1,18 +1,18 @@
 /**
- * Device-wide refresh status in STATE_DIR, shared across sessions. Refresh and
- * sign-in update it; hooks and the retry daemon read it for notices and backoff
- * without a network request.
+ * This client's refresh status, next to its session in the account directory
+ * (ADR 005) and shared across its sessions. Refresh and sign-in update it; the upload drains read it for backoff and SessionStart for
+ * its sign-in banner, without a network request.
  *
  * Shape (schema_version 1):
  *   last_attempt_at       ms epoch of the last refresh or re-activation attempt
  *   last_success_at       ms epoch of the last success
- *   last_outcome          "rotated" | "reactivated" | "transient_failure" | "terminal"
+ *   last_outcome          "rotated" | "transient_failure" | "terminal"
  *   last_error            { kind, status, message } for the last failure, or null
  *   consecutive_failures  failures since the last success
- *   next_retry_at         ms epoch before which the daemon must not retry, or null
+ *   next_retry_at         ms epoch before which no refresh is attempted, or null
  *   terminal              null, or { reason, at, status, message } — retrying is
  *                         pointless until SessionStart or /skillmeter:signin clears it
- *   updated_by            "daemon" | "session_start" | "drain" | "signin" | ...
+ *   updated_by            "drain" | "session_start" | "signin" | ...
  *   revision              monotonically increasing write counter used for
  *                         compare-and-update (see updateLicenseStatus)
  *
@@ -22,15 +22,21 @@
  */
 
 const fs = require("fs");
+const crypto = require("crypto");
 const path = require("path");
-const { STATE_DIR, getRetryDaemonIntervalMs } = require("./config");
+const { CRED_FILE, getRetryDaemonIntervalMs } = require("./config");
+const { ACCOUNT_DIR } = require("./paths");
 const { safeReadJson, atomicWriteJson } = require("./io");
 
-const LICENSE_STATUS_FILE = path.join(STATE_DIR, "license-status.json");
+const LICENSE_STATUS_FILE = path.join(ACCOUNT_DIR, "license-status.json");
+// credstore's session file. Named here rather than required, so reading the
+// status never runs the session migration.
+const SESSION_FILE = path.join(ACCOUNT_DIR, "session.json");
 const SCHEMA_VERSION = 1;
 
-// Backoff bounds. The base is the daemon sweep interval (2 min by default);
-// the cap matches the daemon's drain backoff cap. See ADR 001, decision 2.
+// Backoff bounds. The base is the monitor's sweep interval (2 min by default);
+// the cap matches its drain backoff cap. Transient failures keep retrying at
+// the cap (ADR 001, amendment "one refresh path").
 const BACKOFF_CAP_MS = 30 * 60_000;
 
 // Terminal reasons. A terminal state means the client has stopped retrying for
@@ -38,7 +44,9 @@ const BACKOFF_CAP_MS = 30 * 60_000;
 const TERMINAL_REASONS = Object.freeze({
   REVOKED: "revoked", // 402 from /refresh or /activate
   REACTIVATION_REQUIRED: "reactivation_required", // 410/401: only a new sign-in helps
-  BACKOFF_EXHAUSTED: "backoff_exhausted", // failures kept coming past the cap
+  // Legacy: no longer written. Transient failures keep retrying at the cap;
+  // a record left by an older version is ignored (see refreshBlockedReason).
+  BACKOFF_EXHAUSTED: "backoff_exhausted",
 });
 
 function emptyStatus() {
@@ -56,10 +64,24 @@ function emptyStatus() {
   };
 }
 
+// Bind new status records to the exchange identity without storing a token:
+// this client's session, and the shared device identity.
+function authContext() {
+  const session = safeReadJson(SESSION_FILE, {}) || {};
+  const identity = safeReadJson(CRED_FILE, {}) || {};
+  return crypto.createHash("sha256").update(JSON.stringify([
+    session.auth_generation || null, identity.device_id || null,
+    session.license_jwt || null, session.signed_out === true,
+  ])).digest("hex");
+}
+
 function readLicenseStatus() {
   const raw = safeReadJson(LICENSE_STATUS_FILE, null);
   if (!raw || typeof raw !== "object" || raw.schema_version !== SCHEMA_VERSION) {
     return emptyStatus();
+  }
+  if (raw.auth_context && raw.auth_context !== authContext()) {
+    return { ...emptyStatus(), revision: raw.revision || 0 };
   }
   return { ...emptyStatus(), ...raw };
 }
@@ -125,8 +147,9 @@ const MAX_UPDATE_ATTEMPTS = 5;
 function updateLicenseStatus(mutate) {
   let next;
   for (let attempt = 0; attempt < MAX_UPDATE_ATTEMPTS; attempt++) {
+    const context = authContext();
     const prev = readLicenseStatus();
-    next = { ...mutate(prev), revision: (prev.revision || 0) + 1 };
+    next = { ...mutate(prev), auth_context: context, revision: (prev.revision || 0) + 1 };
     try {
       if (writeIfRevisionUnchanged(next, prev.revision || 0)) {
         persistenceFailureReported = false;
@@ -163,24 +186,17 @@ function backoffDelayMs(consecutiveFailures, baseMs = getRetryDaemonIntervalMs()
 }
 
 /**
- * True when the attempt that just failed was already waited for at the cap,
- * i.e. the previous delay had reached `capMs`. With a 2-minute base and a
- * 30-minute cap the sequence is 2, 4, 8, 16, 30 minutes of waiting, and the
- * sixth failure is terminal (about an hour of trying). Pure.
- */
-function backoffExhausted(consecutiveFailures, baseMs = getRetryDaemonIntervalMs(), capMs = BACKOFF_CAP_MS) {
-  if (consecutiveFailures < 2) return false;
-  return backoffDelayMs(consecutiveFailures - 1, baseMs, capMs) >= capMs;
-}
-
-/**
  * Why a refresh attempt should be skipped right now, or null when it may run.
  * Pure: takes the status object and the clock.
  * @returns {"terminal"|"backoff"|null}
  */
 function refreshBlockedReason(status, now = Date.now()) {
   if (!status) return null;
-  if (status.terminal) return "terminal";
+  // Only a new sign-in can clear a terminal state, so only reasons that need
+  // one block refresh. An outage is never terminal.
+  if (status.terminal && status.terminal.reason !== TERMINAL_REASONS.BACKOFF_EXHAUSTED) {
+    return "terminal";
+  }
   if (typeof status.next_retry_at === "number" && status.next_retry_at > now) return "backoff";
   return null;
 }
@@ -200,9 +216,9 @@ function recordRefreshSuccess({ source = "unknown", outcome = "rotated", now = D
 }
 
 /**
- * Record a transient failure (network, 5xx, malformed response, rejected
- * re-activation that may succeed later). Advances the backoff; flips to the
- * backoff_exhausted terminal state once the cap has been waited out.
+ * Record a transient failure (network, 5xx, malformed response). Advances the
+ * backoff, which stays at the cap for as long as failures continue: an outage
+ * recovers on its own once the server answers again, without a new session.
  */
 function recordRefreshFailure({
   source = "unknown",
@@ -217,27 +233,16 @@ function recordRefreshFailure({
   return updateLicenseStatus((prev) => {
   const failures = (prev.consecutive_failures || 0) + 1;
   // A terminal state is sticky: a late transient-failure write from another
-  // process (SessionStart bypasses the refresh lock) must not turn a revoked
-  // or reactivation-required record back into a retrying one. Only a success,
-  // SessionStart's clearTerminal, or /skillmeter:signin lifts it.
+  // process (a request that started before the terminal answer landed) must
+  // not turn a revoked or reactivation-required record back into a retrying
+  // one. Only a success, SessionStart's clearTerminal, or /skillmeter:signin
+  // lifts it.
   if (prev.terminal) {
     return {
       ...prev,
       last_attempt_at: now,
       last_error: error,
       consecutive_failures: failures,
-      updated_by: source,
-    };
-  }
-  if (backoffExhausted(failures, baseMs, capMs)) {
-    return {
-      ...prev,
-      last_attempt_at: now,
-      last_outcome: "terminal",
-      last_error: error,
-      consecutive_failures: failures,
-      next_retry_at: null,
-      terminal: { reason: TERMINAL_REASONS.BACKOFF_EXHAUSTED, at: now, status, message: error.message },
       updated_by: source,
     };
   }
@@ -296,7 +301,6 @@ module.exports = {
   TERMINAL_REASONS,
   readLicenseStatus,
   backoffDelayMs,
-  backoffExhausted,
   refreshBlockedReason,
   updateLicenseStatus,
   recordRefreshSuccess,

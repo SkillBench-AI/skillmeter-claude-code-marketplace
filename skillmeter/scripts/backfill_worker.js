@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+const fs = require("fs");
+
 const {
   finishBackfill,
   readBackfillState,
@@ -20,6 +22,25 @@ const {
   stageTranscriptSnapshot,
 } = require("./lib/transfer");
 
+// The snapshot reads a transcript into memory whole; past this size it is
+// skipped rather than risking the worker. One oversized or vanished file must
+// not fail the whole run.
+const MAX_SNAPSHOT_BYTES = 128 * 1024 * 1024;
+
+function snapshotGuard(file) {
+  let size;
+  try {
+    size = fs.statSync(file).size;
+  } catch (err) {
+    return err?.code === "ENOENT"
+      ? { skipped: true, reason: "missing", chunks: 0 }
+      : null;
+  }
+  return size > MAX_SNAPSHOT_BYTES
+    ? { skipped: true, reason: "too_large", chunks: 0 }
+    : null;
+}
+
 async function main() {
   const offerId = process.argv[2] || "";
   const state = readBackfillState();
@@ -36,6 +57,8 @@ async function main() {
     org: state.org,
     repositoryCount: (state.repository_ids || []).length,
   });
+  // Lets isBackfillRunning tell a dead worker from a slow one.
+  updateBackfillProgress(offerId, { worker_pid: process.pid });
 
   const repositoryState = await loadRepositoryTelemetryState();
   const repositoriesById = new Map(
@@ -78,7 +101,7 @@ async function main() {
 
   for (const session of scan.included) {
     const repository = repositoriesByKey.get(session.repoKey);
-    const result = stageTranscriptSnapshot(
+    const result = snapshotGuard(session.sessionFile) || stageTranscriptSnapshot(
       session.sessionFile,
       {
         repoKey: repository.repoKey,

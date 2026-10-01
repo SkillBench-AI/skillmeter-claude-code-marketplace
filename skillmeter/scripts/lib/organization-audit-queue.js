@@ -83,7 +83,7 @@ function appendCaptureExcluded({
   deviceId,
   hashSalt,
 }) {
-  if (!deviceId || !hashSalt || !credstore.hasValidLicense()) return false;
+  if (!deviceId || !hashSalt || !credstore.isSignedIn()) return false;
   if (!credstore.isTelemetryTransmissionAllowed("")) return false;
 
   const queue = currentOrganizationAuditContext({ create: true });

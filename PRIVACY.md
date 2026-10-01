@@ -26,7 +26,7 @@ true:
 1. a valid SkillMeter license is present;
 2. the user has explicitly authorized the licensed GitHub organization;
 3. the user has explicitly enabled the repository; and
-4. the machine-global telemetry kill-switch is not active.
+4. this plugin's global telemetry pause is not active.
 
 Organization authorization never silently enables a newly discovered
 repository. The plugin checks the current repository's Git remote against the
@@ -46,7 +46,7 @@ historical transcripts. This is a distinct decision with its own conditions:
    license;
 3. the user has explicitly approved the one-time historical question for the
    named set of repositories shown; and
-4. the machine-global telemetry kill-switch is not active — it pauses
+4. this plugin's global telemetry pause is not active — it pauses
    historical transmission just as it pauses ongoing telemetry.
 
 Because this consent is independent, the offer covers every repository of the
@@ -127,7 +127,8 @@ Before telemetry is queued, the plugin:
   IP addresses with `[IP]`, Korean resident registration and US Social
   Security numbers with `[ID_NUMBER]`, and payment card numbers with `[CARD]`;
 - hashes the home-directory prefix wherever it appears; hashes directory
-  fields (`cwd`, `old_cwd`, `new_cwd`) and the generic `path` field as whole
+  fields (`cwd`, `old_cwd`, `new_cwd`, `directory`, `worktree_path`,
+  `scratchpad_dir`) and the generic `path` field as whole
   values; and hashes file-path fields (`file_path`, `filePath`,
   `notebook_path`) segment by segment so that directory structure, file
   extensions and common technical names (`src`, `test`, `package.json`) stay
@@ -170,7 +171,7 @@ personal information.
 The plugin communicates with:
 
 - `id.skillbench.ai`, for sign-in (OAuth 2.0 device authorization);
-- `api.skillbench.ai`, for license activation and refresh; and
+- `api.skillbench.ai`, for license activation and renewal; and
 - the tenant-specific HTTPS telemetry endpoint encoded in the license JWT.
 
 Telemetry is authenticated with a SkillMeter license JWT and sent using HTTPS
@@ -192,14 +193,19 @@ the feature is introduced.
   successful HTTP acknowledgement;
 - successfully uploaded event batches can remain locally for up to 30 days for
   diagnostics;
-- failed or paused uploads remain queued until a later success or an applicable
-  organization/repository OFF decision deletes the payload;
-- the global kill-switch pauses queued uploads rather than deleting them;
+- while you are signed in, events keep being recorded even if the license is
+  waiting to be refreshed; they are sent once a fresh license is available;
+- failed or paused uploads remain queued until a later success, an applicable
+  organization/repository OFF decision, or a revoked organization license
+  deletes the payload, and any unsent event log or transcript chunk older than
+  7 days is deleted;
+- this plugin's global pause holds queued uploads rather than deleting them;
 - repository and organization OFF decisions delete queued payloads for that
   scope, while privacy cursors can remain to prevent later upload of content
   created while telemetry was disabled;
-- sign-out removes the license but retains the random device identifier,
-  hashing salt, and telemetry policy;
+- sign-out removes the license and deletes unsent repository telemetry and
+  organization audit records (an accepted history import stays queued), but
+  retains the random device identifier, hashing salt, and telemetry policy;
 - uninstalling the plugin may not remove `~/.skillbench/`.
 
 To remove the retained local identity and policy files, sign out first, close
@@ -224,7 +230,7 @@ may be directed to that organization as the data controller.
 - `/skillmeter:telemetry list` reviews and changes repository selection.
 - `/skillmeter:signout` removes the local license and stops authenticated
   transmission.
-- The global kill-switch pauses all transmission.
+- This plugin's global pause stops all of its transmission.
 
 Disabling telemetry does not retroactively delete server-side data. Contact
 SkillBench or the applicable organization for a server-side request.

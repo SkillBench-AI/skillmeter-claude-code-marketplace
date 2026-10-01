@@ -9,7 +9,7 @@ and [privacy notice](../PRIVACY.md) before enabling collection.
 | Command | Purpose |
 | --- | --- |
 | `/skillmeter:signin` | Sign in through the SkillBench identity service and review consent |
-| `/skillmeter:signout` | Remove the shared license and stop authenticated uploads |
+| `/skillmeter:signout` | Sign this plugin out and stop its authenticated uploads (other SkillMeter clients stay signed in) |
 | `/skillmeter:telemetry list` | Review and toggle known repositories |
 | `/skillmeter:telemetry status` | Inspect sign-in, global and current-repository state |
 | `/skillmeter:telemetry disable-global` | Pause live and historical uploads |
@@ -19,8 +19,8 @@ and [privacy notice](../PRIVACY.md) before enabling collection.
 
 Sign-in uses a browser-approved device code from `id.skillbench.ai`. The broker
 ID token is exchanged for a SkillMeter license; it is not stored. The license
-is shared with other SkillMeter clients, so signing out affects those clients
-too. Device identity and telemetry policy remain on disk.
+is this plugin's own; signing out does not affect other SkillMeter clients.
+Device identity and telemetry policy remain on disk.
 
 ## Collection scope
 
@@ -78,7 +78,7 @@ and bounded descriptions/bodies of custom project or user skills. Instruction
 file bodies and MCP command/args/env are excluded from dedicated harness fields,
 but sensitive values can still appear in conversation content.
 
-Policy 3.1.0 applies before queueing:
+Policy 3.1.2 applies before queueing:
 
 - Recognized secrets and rule-detectable personal information receive typed
   placeholders. Names in general prose and other contextual identifiers can remain.
@@ -107,25 +107,30 @@ Successful event batches become `.sent`; acknowledged transcript chunks are
 deleted. Transcript failures share a per-chunk retry budget across all drains:
 waits double from one minute to a 30-minute cap, then the eighth failed attempt
 quarantines the body and metadata. Quarantined files and delivered event logs
-are eligible for cleanup after 30 days. Pending chunks are retained for retry
-unless an applicable policy change removes them.
+are eligible for cleanup after 30 days. Pending event logs and chunks are
+retained for retry unless an applicable policy change, sign-out or a revoked
+license removes them, and are deleted once they are older than 7 days.
 
-License refresh runs at session start, before uploads and during monitor sweeps.
-Stop also requests a detached refresh for an enabled repository near expiry,
-even when its queue is empty and no monitor is running. Hooks do not wait for
-the request. This restores capture on later hooks after recovery; events skipped
-while the license is stale are still lost.
-Transient failures back off; repeated failure or revocation stops background
-retries. A license that can no longer be refreshed requires `/skillmeter:signin`
-and browser approval. See [ADR001](../docs/adr/001-license-token-lifecycle.md).
+Recording does not wait for the license: while you are signed in, hooks record
+even if the license has expired, and the data is sent after the next refresh.
+The license is refreshed in one place, by the upload drain just before it sends,
+and once more if the server rejects the token (HTTP 401). Sign-in keeps the
+sign-in service's refresh token, which renews the license for this workspace
+only; sign-out revokes it. Transient failures back off up to a 30-minute
+interval and keep retrying. A session the sign-in service ended, or a license
+that was revoked because the workspace no longer licenses you (402), requires
+`/skillmeter:signin` and browser approval. See
+[ADR001](../docs/adr/001-license-token-lifecycle.md) and
+[ADR005](../docs/adr/005-per-client-session.md).
 
 ## Local state and diagnostics
 
 | Location | Contents |
 | --- | --- |
-| `~/.skillbench/credentials.json` | Device ID, hash salt and license |
-| `~/.skillbench/telemetry-policy.json` | Global, organization and repository choices |
-| `~/.skillbench/license-status.json` | Refresh timestamps, failures and terminal reason |
+| `~/.skillbench/credentials.json` | Device ID and hash salt, shared with other SkillMeter clients |
+| `~/.skillbench/telemetry-policy.json` | This plugin's global, organization and repository choices; other clients keep their own |
+| `${CLAUDE_PLUGIN_DATA}/account/<id>/session.json` | This plugin's license and sign-in state, not shared with other clients |
+| `${CLAUDE_PLUGIN_DATA}/account/<id>/license-status.json` | Refresh timestamps, failures and terminal reason |
 | `${CLAUDE_PLUGIN_DATA}/logs/repositories/` | Repository event and transcript queues |
 | `${CLAUDE_PLUGIN_DATA}/logs/backfill.ndjson` | Local backfill progress and upload outcomes |
 
@@ -134,30 +139,38 @@ Backfill diagnostics omit transcript text, local paths, JWTs, device IDs and
 backend endpoints, but include repository/session identifiers. Review them
 before sharing; never post real telemetry or credentials in a public issue.
 
-Project `.claude/settings.local.json` contains development overrides, not
-telemetry consent. For problems, see [SUPPORT.md](../SUPPORT.md). Report security
+For problems, see [SUPPORT.md](../SUPPORT.md). Report security
 or privacy issues through [SECURITY.md](../SECURITY.md).
 
 ## Development
 
 Use CommonJS and run `node --test` from the repository root. Tests isolate plugin
-state through `testing/bootstrap.js` and `testing/helpers.js`. See
+state through the repository's `testing/bootstrap.js` and `testing/helpers.js`,
+which stay outside the shipped plugin directory. See
 [AGENTS.md](../AGENTS.md) for contribution conventions and the
 [ADRs](../docs/adr/README.md) for shared policy decisions.
+
+The environment is fixed by the installation: the internal channel uses dev
+(`~/.skillbench-dev`), the stable channel prod. No environment variable switches
+it; the variables below point one endpoint or directory elsewhere.
 
 | Environment variable | Purpose |
 | --- | --- |
 | `CLAUDE_PLUGIN_DATA` | Persistent plugin state; use a temporary directory for direct test runs |
-| `SKILLMETER_ENV=dev` | Select development identity/activation endpoints and separate state |
 | `SKILLMETER_STATE_DIR` | Override credential and policy state for isolated runs |
-| `SKILLMETER_ACTIVATE_URL` | Activation URL; refresh uses the same host |
+| `SKILLMETER_ACTIVATE_URL` | Activation URL; renewal exchanges a broker ID token there |
 | `SKILLMETER_BROKER_URL` | Identity service URL |
 | `SKILLMETER_OAUTH_CLIENT_ID` | Public device-flow client ID; default `skillmeter-plugin` |
 | `SKILLMETER_BACKEND_URL` | Telemetry base URL override; authentication is still required |
 | `SKILLMETER_TIMEOUT` | Event upload timeout in seconds; default 10 |
 | `SKILLMETER_RETRY_DAEMON_INTERVAL_MS` | Monitor sweep interval in milliseconds; default 120000 |
 
-Configuration precedence is environment, project string setting, development
-bundle, then production default. Project keys include `activate_url`,
-`broker_url` and `oauth_client_id`. Normal tenant routing comes from the license's
-`aud` claim and needs no endpoint override.
+Configuration precedence is environment, development bundle, then production
+default. Project files such as `.claude/settings.local.json` cannot override an
+endpoint or the OAuth client, because any repository could ship one. The
+activation, broker and backend URLs must use HTTPS (loopback `http` is allowed
+for a local backend). A rejected activation or broker override falls back to
+production, and a rejected backend override falls back to the license's `aud`,
+each with a stderr note.
+Normal tenant routing comes from the license's `aud` claim and needs no endpoint
+override.

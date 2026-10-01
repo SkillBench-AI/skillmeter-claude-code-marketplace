@@ -1,6 +1,9 @@
 /**
- * License refresh and retry orchestration, following ADR001.
- * Refresh 401/410 requires interactive sign-in; 402 marks the license revoked.
+ * License renewal and retry orchestration, following ADR 001 and ADR 005.
+ * A session with a broker refresh token renews through the refresh token grant
+ * and /activate; one without (signed in before ADR 005) through /refresh.
+ * Refresh 401/410 requires interactive sign-in; 402 marks the license revoked
+ * and drops the token, so recording stops until a new sign-in.
  * Other failures retain the token and use the shared status record for backoff.
  * SessionStart or explicit sign-in can reset terminal retry state.
  * No background path starts a new broker device grant.
@@ -12,6 +15,9 @@ const credstore = require("../credstore");
 const { LOG_DIR } = require("./paths");
 const { getActivateUrl, getRefreshUrl } = require("./config");
 const { postBearerJson } = require("./http");
+const { getLicenseOrgs, getLicenseTenantSlug } = require("./jwt");
+const broker = require("./broker");
+const { exchangeIdToken } = require("./license-exchange");
 const licenseStatus = require("./license-status");
 
 const { TERMINAL_REASONS } = licenseStatus;
@@ -28,10 +34,14 @@ const { TERMINAL_REASONS } = licenseStatus;
  *                                               longer be rotated; re-activate
  *   { outcome: "revoked",   status: 402 }       org license cancelled
  *   { outcome: "transient", status?, message }  network, 404, 5xx, bad body
+ *   { outcome: "superseded" }                  authentication changed
  */
-async function refreshExpiredJwt(jwt, deviceId) {
+async function refreshExpiredJwt(jwt, deviceId, expected) {
   if (!jwt || !deviceId) return { outcome: "transient", message: "missing token or device id" };
 
+  if (expected.deviceId !== deviceId || !credstore.isRecoveryCurrent(expected)) {
+    return { outcome: "superseded" };
+  }
   const url = getRefreshUrl();
 
   let res;
@@ -80,14 +90,65 @@ async function refreshExpiredJwt(jwt, deviceId) {
     console.error("[skillmeter] license refresh failed: response missing `token` field");
     return { outcome: "transient", status: res.status, message: "response missing token" };
   }
+  // Storing a malformed or already-expired token would replace the working one
+  // and, counted as a rotation, repeat every sweep without backoff.
+  if (typeof newJwt !== "string" || credstore.isLicenseTokenExpired(newJwt)) {
+    console.error("[skillmeter] license refresh failed: response token is malformed or already expired");
+    return { outcome: "transient", status: res.status, message: "unusable token in response" };
+  }
 
-  credstore.setLicenseToken(newJwt);
+  if (!credstore.commitRefresh(newJwt, expected)) return { outcome: "superseded" };
   console.error("[skillmeter] license refresh: rotated successfully");
   return { outcome: "rotated", token: newJwt };
 }
 
-// SessionStart, queue drains and the retry monitor share refresh coordination.
-// The status record supplies backoff and terminal state across processes.
+/**
+ * Renew through the broker (ADR 005): the refresh token grant, then /activate
+ * pinned to the current license's tenant. Same outcomes as refreshExpiredJwt,
+ * plus `expected`, the snapshot to settle the outcome against: it changes
+ * when the broker rotated the refresh token, which is stored before the
+ * exchange so a failure after it cannot strand the session on a spent token.
+ */
+async function renewViaBroker(jwt, deviceId, expected) {
+  if (!credstore.isRecoveryCurrent(expected)) return { outcome: "superseded" };
+  const grant = await broker.refreshGrant(expected.refreshToken);
+  if (grant.outcome === "rejected") {
+    console.error(`[skillmeter] license renewal: the broker ended this session (${grant.error}), sign-in required`);
+    return { outcome: "rejected", status: grant.status, expected };
+  }
+  if (grant.outcome !== "granted") {
+    console.error(`[skillmeter] license renewal failed at the broker: ${grant.message}`);
+    return { outcome: "transient", status: grant.status, message: grant.message, expected };
+  }
+
+  let current = expected;
+  if (grant.refreshToken !== expected.refreshToken) {
+    if (!credstore.commitRotation(expected, grant.refreshToken)) return { outcome: "superseded" };
+    current = { ...expected, refreshToken: grant.refreshToken };
+  }
+
+  const exchange = await exchangeIdToken(grant.idToken, deviceId, { org: getLicenseTenantSlug(jwt) });
+  if (exchange.outcome === "revoked") {
+    console.error("[skillmeter] license renewal: this workspace no longer licenses you");
+    return { outcome: "revoked", status: exchange.status, expected: current };
+  }
+  if (exchange.outcome !== "issued") {
+    // A 401 here refuses a broker token the broker just issued: a server
+    // configuration problem, not a verdict on this session.
+    const message = exchange.message || `HTTP ${exchange.status}`;
+    console.error(`[skillmeter] license renewal failed at /activate: ${message}`);
+    return { outcome: "transient", status: exchange.status ?? null, message, expected: current };
+  }
+  if (credstore.isLicenseTokenExpired(exchange.token)) {
+    return { outcome: "transient", status: 200, message: "unusable token in response", expected: current };
+  }
+  if (!credstore.commitRefresh(exchange.token, current)) return { outcome: "superseded" };
+  return { outcome: "rotated", token: exchange.token, expected: current };
+}
+
+// Upload drains refresh, in whichever process runs them (a detached drain,
+// the monitor). The lock coordinates them; the status record supplies backoff
+// and terminal state across processes.
 
 const LICENSE_REFRESH_LOCK_FILE = path.join(LOG_DIR, ".license-refresh.lock");
 // Don't retry a refresh within this window of the last attempt. Also serves as
@@ -96,20 +157,9 @@ const LICENSE_REFRESH_LOCK_FILE = path.join(LOG_DIR, ".license-refresh.lock");
 const LICENSE_REFRESH_COOLDOWN_MS = 60_000;
 
 /**
- * Hooks treat a token as expired LICENSE_EXPIRY_SKEW_SECONDS before `exp`. A
- * periodic caller (the daemon) must renew at least one period earlier than
- * that, otherwise hooks skip events between the moment the token crosses the
- * hooks' threshold and the caller's next tick. Pure.
- */
-function renewSkewSeconds(aheadMs = 0) {
-  const ahead = Number.isFinite(aheadMs) && aheadMs > 0 ? Math.ceil(aheadMs / 1000) : 0;
-  return credstore.LICENSE_EXPIRY_SKEW_SECONDS + ahead;
-}
-
-/**
- * Pure single-flight + cooldown decision (no I/O — unit-testable). All callers
- * are best-effort/proactive (there's no reactive force path), so a lock younger
- * than the cooldown simply means "someone else has it / just refreshed" → skip.
+ * Pure single-flight + cooldown decision (no I/O — unit-testable). A lock
+ * younger than the cooldown means "someone else has it / just refreshed", so
+ * every caller skips, including a forced refresh after a 401.
  * @param {boolean} tokenFresh   - current token exists and is not near expiry
  * @param {number|null} lockMtimeMs - mtime of the lock file, or null if absent
  * @param {number} now           - Date.now()
@@ -173,6 +223,21 @@ function acquireRefreshLock(staleLockPresent, cooldownMs = LICENSE_REFRESH_COOLD
   return tryCreate() !== "exists";
 }
 
+// 402: the organization no longer licenses this user (license cancelled, or
+// the user left or was removed from the workspace). What was recorded under
+// it and not yet sent is removed (ADR 001, decision 3). Runs outside the
+// credential lock because the purge helpers may take it.
+function purgeRevokedLicenseData(token) {
+  try {
+    const { purgeOrganizationQueues } = require("./repository-queue");
+    const { purgeOrganizationAuditQueues } = require("./organization-audit-queue");
+    for (const org of getLicenseOrgs(token)) purgeOrganizationQueues(org);
+    purgeOrganizationAuditQueues();
+  } catch (err) {
+    console.error(`[skillmeter] Revoked license cleanup failed: ${err.message}`);
+  }
+}
+
 /**
  * Orchestrate one refresh and record its outcome. Returns the freshest token
  * or null. Reads the token uncached so a refresh written by another process is
@@ -180,69 +245,91 @@ function acquireRefreshLock(staleLockPresent, cooldownMs = LICENSE_REFRESH_COOLD
  *
  * @param {string} deviceId
  * @param {object} [opts]
- * @param {string} [opts.source] who is asking ("session_start", "daemon", "drain")
- * @param {number} [opts.aheadMs] renew this much earlier than the hooks'
- *   expiry threshold (see renewSkewSeconds)
+ * @param {string} [opts.source] who is asking (a drain, or a test)
+ * @param {boolean} [opts.force] refresh even though the token looks fresh
+ *   locally: the server rejected it (401), e.g. under clock skew
  */
-async function refreshLicense(deviceId, { source = "unknown", aheadMs = 0 } = {}) {
-  const current = credstore.getLicenseTokenUncached();
-  if (current && !credstore.isLicenseTokenExpired(current, renewSkewSeconds(aheadMs))) return current;
+async function refreshLicense(deviceId, { source = "unknown", force = false } = {}) {
+  const expected = credstore.recoverySnapshot();
+  if (expected.signedOut || expected.deviceId !== deviceId) return null;
+  const current = expected.token;
+  if (!force && current && !credstore.isLicenseTokenExpired(current)) return current;
   // Refresh requires an existing sign-in. A missing license requires
   // the user to invoke /skillmeter:signin.
   if (!current || !deviceId) return null;
   if (credstore.getSignedOut()) return null;
 
-  const rotation = await refreshExpiredJwt(current, deviceId);
-  switch (rotation.outcome) {
-    case "rotated":
-      licenseStatus.recordRefreshSuccess({ source, outcome: "rotated" });
-      return rotation.token;
-    case "revoked":
-      licenseStatus.recordTerminal({ source, reason: TERMINAL_REASONS.REVOKED, status: 402 });
-      return null;
-    case "transient":
-      licenseStatus.recordRefreshFailure({
-        source,
-        kind: "refresh",
-        status: rotation.status ?? null,
-        message: rotation.message,
-      });
-      return null;
-    case "rejected":
-      break; // record that interactive sign-in is required
-    default:
-      return null;
+  // A session that holds a refresh token never falls back to /refresh: the
+  // broker ended it, and the old license must not outlive that decision.
+  const rotation = expected.refreshToken
+    ? await renewViaBroker(current, deviceId, expected)
+    : await refreshExpiredJwt(current, deviceId, expected);
+  const settled = rotation.expected || expected;
+  if (rotation.outcome === "revoked") {
+    const dropped = credstore.dropRevokedLicense(settled, () =>
+      licenseStatus.recordTerminal({ source, reason: TERMINAL_REASONS.REVOKED, status: rotation.status ?? 402 })
+    );
+    if (dropped === true) {
+      purgeRevokedLicenseData(current);
+      await broker.revoke(settled.refreshToken);
+    }
+    return null;
   }
+  const completed = rotation.outcome === "rotated" ? { ...settled, token: rotation.token } : settled;
+  let result = null;
+  credstore.withRecoveryCurrent(completed, () => {
+    switch (rotation.outcome) {
+      case "rotated":
+        licenseStatus.recordRefreshSuccess({ source, outcome: "rotated" });
+        result = rotation.token;
+        return;
+      case "transient":
+        licenseStatus.recordRefreshFailure({
+          source,
+          kind: "refresh",
+          status: rotation.status ?? null,
+          message: rotation.message,
+        });
+        return null;
+      case "rejected":
+        break; // record that interactive sign-in is required
+      default:
+        return null;
+    }
 
-  // Refresh 401/410 requires a new browser-approved sign-in. Record a terminal
-  // state so background callers do not keep retrying this token.
-  licenseStatus.recordTerminal({
-    source,
-    reason: TERMINAL_REASONS.REACTIVATION_REQUIRED,
-    status: rotation.status ?? null,
-    message: "licence can no longer be refreshed — run /skillmeter:signin",
+    // Refresh 401/410, or a refresh token the broker no longer accepts, requires
+    // a new browser-approved sign-in. Record a terminal state so background
+    // callers do not keep retrying.
+    licenseStatus.recordTerminal({
+      source,
+      reason: TERMINAL_REASONS.REACTIVATION_REQUIRED,
+      status: rotation.status ?? null,
+      message: "licence can no longer be refreshed — run /skillmeter:signin",
+    });
   });
-  return null;
+  return result;
 }
 
 /**
- * Best-effort, single-flight license refresh. Never throws; returns the
- * freshest token available (refreshed, existing, or null). Safe to call before
- * every drain/upload and on every daemon sweep — cheap no-op when the token is
- * already fresh, non-blocking when another process holds the refresh lock, and
- * silent while the status record says to back off or stop.
+ * Best-effort, single-flight license refresh; the one refresh path. The upload
+ * drains call it before sending a batch, and again with `force` after the
+ * server rejects the token (401). Recording never waits for it (ADR 001,
+ * decision 3), so nothing refreshes ahead of need. Never throws; returns the
+ * freshest token available (refreshed, existing, or null). A cheap no-op when
+ * the token is fresh, non-blocking when another process holds the refresh
+ * lock, and silent while the status record says to back off or stop.
  */
-async function ensureFreshLicense(deviceId, { source = "drain", aheadMs = 0 } = {}) {
+async function ensureFreshLicense(deviceId, { source = "drain", force = false } = {}) {
   if (!deviceId) return null;
   if (credstore.getSignedOut()) return null;
 
   const current = credstore.getLicenseTokenUncached();
   const tokenFresh =
-    Boolean(current) && !credstore.isLicenseTokenExpired(current, renewSkewSeconds(aheadMs));
+    !force && Boolean(current) && !credstore.isLicenseTokenExpired(current);
   if (tokenFresh) return current;
 
   // Backoff / terminal decisions are shared across processes through the
-  // status record, so a daemon and a drain never fight over the same failure.
+  // status record, so concurrent drains never fight over the same failure.
   if (licenseStatus.refreshBlockedReason(licenseStatus.readLicenseStatus(), Date.now())) {
     return current;
   }
@@ -252,6 +339,17 @@ async function ensureFreshLicense(deviceId, { source = "drain", aheadMs = 0 } = 
     lockMtimeMs = fs.statSync(LICENSE_REFRESH_LOCK_FILE).mtimeMs;
   } catch {
     // lock absent
+  }
+  // A lock dated more than a cooldown into the future means the clock moved
+  // back after it was written; left alone it would block refresh until the
+  // clock caught up. Re-date it to now instead of reclaiming it: a refresh
+  // still in flight under it finishes well within the cooldown, and the next
+  // attempt after the cooldown proceeds as usual.
+  if (lockMtimeMs != null && lockMtimeMs - Date.now() > LICENSE_REFRESH_COOLDOWN_MS) {
+    // Same clock as every other lock-age comparison here.
+    const nowSec = Date.now() / 1000;
+    try { fs.utimesSync(LICENSE_REFRESH_LOCK_FILE, nowSec, nowSec); } catch {}
+    return current;
   }
 
   const action = shouldRefresh(tokenFresh, lockMtimeMs, Date.now());
@@ -266,10 +364,12 @@ async function ensureFreshLicense(deviceId, { source = "drain", aheadMs = 0 } = 
   if (!acquireRefreshLock(lockMtimeMs != null, LICENSE_REFRESH_COOLDOWN_MS, Date.now())) return current;
 
   try {
-    return (await refreshLicense(deviceId, { source, aheadMs })) || current;
+    await refreshLicense(deviceId, { source, force });
   } catch {
-    return current;
+    // A failed exchange or busy writer must not return the pre-await token.
   }
+  const latest = credstore.recoverySnapshot();
+  return latest.signedOut || latest.deviceId !== deviceId ? null : latest.token;
 }
 
 module.exports = {

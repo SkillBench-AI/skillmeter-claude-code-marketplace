@@ -66,22 +66,17 @@ function getEndpointFromTokenAllowExpired(token) {
 }
 
 /**
- * The GitHub org(s) this license validates for telemetry, as decided by the
- * activator and minted into the JWT. No expiry gate — this is identity/routing
- * info (like getEndpointFromTokenAllowExpired), not an auth decision. Returns a
- * normalized (lowercased) array; `[]` when the token is missing/undecodable or
- * carries no org claim. Accepts the current singular `org.login` claim and a
- * future plural `orgs` array for forward-compat.
+ * The GitHub orgs whose repositories this license covers, from the `orgs`
+ * claim, lowercased. This is the only source of repository scope: `org.login`
+ * is the tenant slug on a broker license and never a repository owner. A
+ * missing or malformed claim covers nothing. No expiry gate — this is
+ * identity/routing info (like getEndpointFromTokenAllowExpired), not an auth
+ * decision.
  */
 function getLicenseOrgs(token) {
   const payload = token ? decodeJwtPayload(token) : null;
-  if (!payload) return [];
-  const raw = Array.isArray(payload.orgs)
-    ? payload.orgs
-    : payload.org && payload.org.login
-      ? [payload.org.login]
-      : [];
-  return raw
+  if (!payload || !Array.isArray(payload.orgs)) return [];
+  return payload.orgs
     .filter((o) => typeof o === "string")
     .map((o) => o.trim().toLowerCase())
     .filter(Boolean);
@@ -99,7 +94,20 @@ function getLicenseAudiences(token) {
   )].sort();
 }
 
+/**
+ * The tenant a broker license is for: its slug, which the license server keeps
+ * in `org.login` (a GitHub-path license keeps the GitHub login there). Renewal
+ * pins `/activate` to it so a renewal can never move the license to another
+ * workspace (ADR 005). Empty string when absent.
+ */
+function getLicenseTenantSlug(token) {
+  const payload = decodeJwtPayload(token);
+  const login = payload && payload.org && payload.org.login;
+  return typeof login === "string" ? login.trim() : "";
+}
+
 module.exports = {
+  getLicenseTenantSlug,
   isJwtExpired,
   getEndpointFromTokenAllowExpired,
   getLicenseOrgs,

@@ -188,6 +188,12 @@ async function main() {
     // does not validate the rest of the record. A corrupt status field makes
     // readBackfillState return null, and `status` is the command a user runs to
     // diagnose exactly that — so report it instead of throwing a type error.
+    // A run whose worker died is reported as failed, not as running forever.
+    try {
+      if (typeof runtime.backfillState.isBackfillRunning === "function") {
+        runtime.backfillState.isBackfillRunning();
+      }
+    } catch {}
     const state = runtime.backfillState.readBackfillState();
     if (!state) fail("the backfill lifecycle record is unreadable or corrupt.");
     const chunks = state.offer_id

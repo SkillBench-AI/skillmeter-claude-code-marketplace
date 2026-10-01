@@ -1,17 +1,15 @@
 #!/usr/bin/env node
 /**
- * Refresh licenses and drain queues during interactive sessions. Refresh runs
- * on every sweep with its own status/backoff; queue drains have separate backoff.
- * SessionStart remains the fallback when plugin monitors are unavailable.
+ * Drain queues during interactive sessions. The drains refresh the license
+ * themselves, just before they send, so this loop never refreshes on its own.
+ * SessionStart and Stop spawn the same drain when plugin monitors are
+ * unavailable.
  * Delay the first sweep to reduce overlap with startup retries.
  * Keep stdout silent: monitor stdout becomes a Claude notification. Use stderr
  * for diagnostics.
  */
 
 const transfer = require("../lib/transfer");
-const credstore = require("../credstore");
-const { ensureFreshLicense } = require("../lib/license-activation");
-const { readLicenseStatus, refreshBlockedReason, clearTerminal } = require("../lib/license-status");
 const { getRetryDaemonIntervalMs } = require("../lib/config");
 
 const INITIAL_DELAY_MS = 60_000;
@@ -39,59 +37,6 @@ function nextDrainInterval(before, after, current, base = INTERVAL_MS, cap = MAX
   return base;
 }
 
-/**
- * Refresh the license if it is near expiry. Cheap when the token is fresh (a
- * local `exp` check), silent while the status record says to back off, and a
- * one-line stderr note when the record has gone terminal.
- */
-async function maybeRefreshLicense(state = {}) {
-  let deviceId;
-  try {
-    deviceId = credstore.getDeviceId();
-  } catch {
-    return;
-  }
-  if (!deviceId) return;
-  if (credstore.getSignedOut()) return;
-
-  let status = readLicenseStatus();
-  const token = credstore.getLicenseTokenUncached();
-  // Two thresholds. Hooks accept a token until LICENSE_EXPIRY_SKEW_SECONDS
-  // before exp; the daemon must renew one sweep earlier than that so no hook
-  // ever meets an expired token between two ticks.
-  const hookValid = Boolean(token) && !credstore.isLicenseTokenExpired(token);
-  const proactiveFresh =
-    Boolean(token) &&
-    !credstore.isLicenseTokenExpired(token, credstore.LICENSE_EXPIRY_SKEW_SECONDS + Math.ceil(INTERVAL_MS / 1000));
-
-  // A token hooks accept wins over any recorded failure: a sign-in, a
-  // SessionStart refresh, or another client sharing credentials.json may have
-  // renewed it while this daemon was backing off or stopped.
-  if (hookValid && (status.terminal || status.next_retry_at || status.consecutive_failures)) {
-    status = clearTerminal({ source: "daemon" });
-  }
-  if (proactiveFresh) return;
-
-  const blocked = refreshBlockedReason(status, Date.now());
-  if (blocked === "terminal") {
-    const at = status.terminal && status.terminal.at;
-    if (state.lastTerminalLogged !== at) {
-      log(`license refresh stopped: ${status.terminal.reason} (a new session or /skillmeter:signin re-arms it)`);
-      state.lastTerminalLogged = at;
-    }
-    return;
-  }
-  if (blocked === "backoff") return;
-
-  try {
-    // Renew one sweep interval ahead of the hooks' expiry threshold so no hook
-    // ever sees an expired token between two ticks.
-    await ensureFreshLicense(deviceId, { source: "daemon", aheadMs: INTERVAL_MS });
-  } catch (err) {
-    log(`license refresh error: ${err && err.message ? err.message : err}`);
-  }
-}
-
 async function sweep() {
   try {
     await transfer.drainFailedLogs();
@@ -109,17 +54,13 @@ async function main() {
   log(`started (initial delay ${INITIAL_DELAY_MS} ms, interval ${INTERVAL_MS} ms)`);
   await sleep(INITIAL_DELAY_MS);
 
-  // The refresh check runs every tick. Draining follows its own adaptive
-  // schedule (nextDrainInterval) so a dead backend slows uploads down without
-  // ever slowing the token refresh down.
+  // Draining follows an adaptive schedule (nextDrainInterval) so a dead
+  // backend slows uploads down.
   let drainInterval = INTERVAL_MS;
   let nextDrainAt = 0;
-  const refreshState = {};
 
   // Loop until Claude Code terminates the monitor process at session end.
   while (true) {
-    await maybeRefreshLicense(refreshState);
-
     const now = Date.now();
     if (now >= nextDrainAt) {
       const before = transfer.queuedFileCount();
@@ -150,4 +91,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { nextDrainInterval, maybeRefreshLicense, INTERVAL_MS, MAX_INTERVAL_MS };
+module.exports = { nextDrainInterval, INTERVAL_MS, MAX_INTERVAL_MS };

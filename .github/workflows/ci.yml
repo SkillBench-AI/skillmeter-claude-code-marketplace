@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, next]
   pull_request:
   workflow_dispatch:
 
@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [20, 22]
+        node-version: [22, 24]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,7 +30,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-      # Runs skillmeter/test/*.test.js, including the shared secret-fixture
+      # Runs test/*.test.js, including the shared secret-fixture
       # parity suite (sanitize.test.js) fed by test/fixtures/secret-corpus.json.
       # A Tier-1 corpus miss fails here and blocks merge.
       - name: Run unit tests

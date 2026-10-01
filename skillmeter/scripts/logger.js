@@ -168,7 +168,7 @@ async function runHook(eventName, buildData, options = {}) {
     : null;
   const gate = resolveTelemetryGate({
     globalDisabled: telemetryStore.getGlobalDisabled(),
-    hasValidLicense: credstore.hasValidLicense(),
+    signedIn: credstore.isSignedIn(),
     cwdAvailable,
     repoOrgOwned: repoScopeDecision.allowed,
     orgConsent,
@@ -184,7 +184,7 @@ async function runHook(eventName, buildData, options = {}) {
 
   const sessionId = input.session_id || "unknown";
   const organizationAuditAllowed =
-    credstore.hasValidLicense() &&
+    credstore.isSignedIn() &&
     credstore.isTelemetryTransmissionAllowed("");
   const hashSalt =
     gate.capture || organizationAuditAllowed

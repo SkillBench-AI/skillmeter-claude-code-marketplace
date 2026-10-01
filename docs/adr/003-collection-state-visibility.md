@@ -345,3 +345,17 @@ reasons as decisions 1 and 5. There is no separate `/skillmeter:status`.
   one. The current answer is yes, since the resolver only sees the file.
 - The shared-credential ownership rule (which client may delete the token, and
   under which server responses) is decided with the shared-credential and client-parity work, not here.
+
+## Amendment 2026-09-27: after recording was decoupled from the license
+
+ADR 001 now records while signed in regardless of token freshness (decision 3)
+and refreshes only in the upload drain (amendment "one refresh path"). Three
+statements above describe the earlier behaviour:
+
+- Hooks no longer print `skipped (not signed in)` for an expired license; they
+  do so only when the user is signed out or holds no license.
+- `backoff_exhausted` is no longer written: transient refresh failures keep
+  retrying at the 30-minute cap, so `delivery_paused` applies to
+  `reactivation_required` (401 or 410) only.
+- There is no Stop-triggered recovery worker. Stop, SessionEnd and SessionStart
+  spawn the ordinary detached drain, which refreshes before it sends.

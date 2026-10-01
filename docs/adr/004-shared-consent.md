@@ -1,7 +1,9 @@
 # One Consent Record Shared by Every Client on a Machine
 
 **Date:** 2026-09-25
-**Status:** Accepted (PR #129, merged 2026-09-25). Authors: Seungho Baek,
+**Status:** Accepted (PR #129, merged 2026-09-25). [ADR 006](006-per-client-consent.md)
+(proposed 2026-09-28) supersedes decisions 1, 3, 4 and 9: each client keeps
+its own record. Authors: Seungho Baek,
 Juho Kim. Decisions 4 to 6 restate the amendment Juho proposed on ADR 001 in
 PR #128; this ADR replaces that amendment, and ADR 001 keeps a pointer here.
 Acceptance covers the contract; implementation and the open items are gated

@@ -1,13 +1,30 @@
 #!/usr/bin/env node
 const { runHook } = require("./logger.js");
 const {
-  retryFailedLogs,
-  retryFailedTranscripts,
+  spawnDetachedDrain,
   cleanupStaleFiles,
   initializeTranscriptCursor,
 } = require("./lib/transfer");
-const { refreshLicense } = require("./lib/license-activation");
-const { clearTerminal } = require("./lib/license-status");
+const {
+  clearTerminal,
+  readLicenseStatus,
+  TERMINAL_REASONS,
+} = require("./lib/license-status");
+
+// Recording continues while a license waits out an outage, so the sign-in
+// banner is for states only a new sign-in can fix: the refresh chain ended
+// (410/401) or the organization license was revoked (402).
+// SessionStart clears the terminal state to give the new session one attempt,
+// so the banner decision uses the state as the session found it.
+let terminalAtStart = null;
+
+function signInRequiredToRecover() {
+  const reason = (terminalAtStart || readLicenseStatus()?.terminal)?.reason;
+  return (
+    reason === TERMINAL_REASONS.REACTIVATION_REQUIRED ||
+    reason === TERMINAL_REASONS.REVOKED
+  );
+}
 const { detectHarness } = require("./harness.js");
 const { PLUGIN_ROOT, PLUGIN_VERSION } = require("./lib/paths");
 const { initializeBackfillLifecycle } = require("./lib/backfill-state");
@@ -29,12 +46,13 @@ const {
 const credstore = require("./credstore.js");
 const telemetryStore = require("./lib/telemetry-store");
 
-// Refresh the stored license and create the sign-in result sentinel before
-// reporting startup state. Keep stdout for the single onGate JSON response.
+// Create the sign-in result sentinel and re-arm refresh before reporting
+// startup state. Keep stdout for the single onGate JSON response.
 async function prepareSession() {
   // Materialize the one-time historical-backfill offer before sign-in state is
-  // evaluated. Existing and new users receive the same lifecycle.
-  initializeBackfillLifecycle();
+  // evaluated. Existing and new users receive the same lifecycle. A backfill
+  // problem must not skip the session setup below.
+  try { initializeBackfillLifecycle(); } catch {}
   const deviceId = credstore.getDeviceId();
   credstore.ensureSigninResultFile();
   ensureBackfillResultFile();
@@ -42,13 +60,12 @@ async function prepareSession() {
   // marked done, or whose settle was interrupted.
   try { settleBackfillDelivery(); } catch {}
   if (!deviceId) return;
-  // A new session gets one fresh attempt even if the daemon gave up last time
-  // (ADR 001, decision 2: SessionStart clears the terminal state). Done before
-  // the global gate so a session that starts paused and is re-enabled later
-  // does not inherit a stale terminal state.
+  // A new session gets one fresh attempt even after a refresh ended in a
+  // sign-in-required state: SessionStart clears the terminal state. Done
+  // before the global gate so a session that starts paused and is re-enabled
+  // later does not inherit a stale terminal state.
+  terminalAtStart = readLicenseStatus()?.terminal || null;
   clearTerminal({ source: "session_start" });
-  if (telemetryStore.getGlobalDisabled()) return;
-  try { await refreshLicense(deviceId, { source: "session_start" }); } catch {}
 }
 
 function runSessionStartHook() {
@@ -117,7 +134,7 @@ function runSessionStartHook() {
           credstore.markUploadNotified();
         }
       }
-      if (!credstore.hasValidLicense()) {
+      if (!credstore.isSignedIn() || signInRequiredToRecover()) {
         lines.push(signInRequiredBanner());
       } else if (gate.mode === "org_consent_required") {
         lines.push(telemetryConsentRequiredBanner(repoScopeDecision.remoteOrg));
@@ -138,15 +155,18 @@ function runSessionStartHook() {
       process.stdout.write(JSON.stringify(out) + "\n");
 
       // Organization-authorized audit and repository queues can be drained
-      // independently of the repository this new session starts in.
+      // independently of the repository this new session starts in. The drain
+      // runs detached, refreshes the license itself if needed, and so never
+      // holds session start on the network.
       if (
-        credstore.hasValidLicense() &&
+        credstore.isSignedIn() &&
         credstore.isTelemetryTransmissionAllowed("")
       ) {
-        retryFailedLogs();
-        retryFailedTranscripts();
-        cleanupStaleFiles();
+        spawnDetachedDrain();
       }
+      // Local-only; runs even without a usable license so unsent data still
+      // ages out for a device that can no longer sign in.
+      try { cleanupStaleFiles(); } catch {}
 
       // stderr notices + SessionStart-only side effects (wording unchanged).
       if (gate.mode === "project_disabled") {

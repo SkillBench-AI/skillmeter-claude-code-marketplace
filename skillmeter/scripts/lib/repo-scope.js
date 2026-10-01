@@ -1,8 +1,7 @@
 /**
  * Decide whether an event originating in `cwd` should be captured, by matching
- * the GitHub org of the repo's remote(s) against the org the license was
- * validated for (the JWT `org` claim, surfaced via
- * credstore.getAllowedGitHubOrgs).
+ * the GitHub org of the repo's remote(s) against the orgs the license
+ * covers (the JWT `orgs` claim, surfaced via credstore.getAllowedGitHubOrgs).
  *
  * Nothing here shells out to `git`; the plugin walks `.git/config` directly
  * so hooks don't pay a fork-per-event cost.
@@ -280,15 +279,15 @@ function getRemoteUrlsForRepo(repoRoot) {
 
 /**
  * Decide whether an event from `cwd` is in-scope. Telemetry fires only in repos
- * whose GitHub remote org matches the org the license was validated for (the
- * JWT `org` claim, surfaced via credstore.getAllowedGitHubOrgs). Anything
+ * whose GitHub remote org matches an org the license covers (the JWT `orgs`
+ * claim, surfaced via credstore.getAllowedGitHubOrgs). Anything
  * outside that — including non-git directories and non-GitHub remotes — is
  * blocked.
  *
- * Result always contains `allowed` (boolean) and `classification` (string);
- * other fields (`scope`, `repoRoot`, `remoteOrg`) are included when
- * meaningful so callers / downstream logs have enough context to audit
- * decisions after the fact.
+ * Result always contains `allowed` (boolean), `scope` and `classification`
+ * (strings); other fields (`repoRoot`, `remoteOrg`, `repoKey`, `repoName`)
+ * are included when meaningful so callers / downstream logs have enough
+ * context to audit decisions after the fact.
  */
 function getRepoScopeDecision(cwd) {
   // Validated org(s) from the license JWT (already normalized to lowercase).

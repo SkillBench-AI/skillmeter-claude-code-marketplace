@@ -35,7 +35,7 @@ function derivePluginDataRoot(pluginRoot) {
 
 /**
  * @param {string} pluginRoot the caller's already-resolved plugin root, which
- *   must include its own `__dirname` fallback — a monitor process has neither
+ *   must include its own `__dirname` fallback — a skill process has neither
  *   CLAUDE_PLUGIN_DATA nor CLAUDE_PLUGIN_ROOT in its environment.
  * @returns {string} the data root, or "" when it cannot be established.
  * On a successful derivation the value is written back to
