@@ -176,7 +176,7 @@ async function main() {
   // Straight to the device grant.
   const device = await requestDeviceCode();
   const lifetimeS = Number(device.expires_in) > 0 ? Number(device.expires_in) : DEFAULT_DEVICE_CODE_LIFETIME_S;
-  credstore.writeSigninResult({ status: "pending", expires_at: Date.now() + lifetimeS * 1000 }, expected);
+  credstore.writeSigninPending(lifetimeS * 1000, expected);
 
   const expiresMin = Math.round(device.expires_in / 60);
   const clipboardCopied = copyToClipboard(device.user_code);
