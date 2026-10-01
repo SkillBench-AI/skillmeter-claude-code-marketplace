@@ -46,6 +46,7 @@ writeTelemetryPolicy(STATE_DIR, { orgs: { [ORG]: true } });
 const backfillState = require("../skillmeter/scripts/lib/backfill-state");
 const store = require("../skillmeter/scripts/lib/telemetry-store");
 const transfer = require("../skillmeter/scripts/lib/transfer");
+const { currentTenantFingerprint } = require("../skillmeter/scripts/lib/tenant");
 const { REPOSITORIES_LOG_DIR } = require("../skillmeter/scripts/lib/paths");
 
 const realFetch = global.fetch;
@@ -66,6 +67,7 @@ function startRun() {
     org: ORG,
     repositoryIds: ["aaaaaaaaaaaa"],
     repositoryKeys: [REPO.repoKey],
+    tenantFingerprint: currentTenantFingerprint(),
   });
   assert.equal(begun.started, true);
   return state.offer_id;

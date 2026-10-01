@@ -67,8 +67,8 @@ test("a derived root is published to the env so children inherit it", () => {
   assert.equal(env.CLAUDE_PLUGIN_DATA, expected);
 });
 
-// Only hooks and MCP/LSP subprocesses get these exported; monitor commands and
-// skill content get the `${...}` placeholders substituted instead. Reading the
+// Only hooks and MCP/LSP subprocesses get these exported; skill content gets
+// the `${...}` placeholders substituted instead. Reading the
 // plugin root from the environment is therefore never valid for those.
 test("the plugin root comes from the caller, never from the environment", () => {
   const { pluginRoot, expected } = makeHostLayout();
@@ -82,24 +82,10 @@ test("an unsubstituted placeholder is never treated as a path", () => {
   assert.equal(resolvePluginDataRoot(pluginRoot, env), expected);
 });
 
-test("monitor commands pass the data dir through the supported substitution", () => {
-  const monitors = JSON.parse(
-    fs.readFileSync(path.resolve(__dirname, "..", "skillmeter", "monitors", "monitors.json"), "utf8")
-  );
-  assert.ok(monitors.length > 0);
-  for (const monitor of monitors) {
-    assert.match(
-      monitor.command,
-      /CLAUDE_PLUGIN_DATA="\$\{CLAUDE_PLUGIN_DATA\}"/,
-      `${monitor.name} must pass CLAUDE_PLUGIN_DATA explicitly`
-    );
-  }
-});
-
-// Skills cannot use the same trick as monitors: their `allowed-tools` grant is
-// `Bash(node *)`, so an env-assignment prefix would stop matching and every
-// command would prompt. Skill processes therefore rely on the derivation, and
-// their commands must keep starting with `node`.
+// Skills cannot pass CLAUDE_PLUGIN_DATA as an env-assignment prefix: their
+// `allowed-tools` grant is `Bash(node *)`, so the prefix would stop matching
+// and every command would prompt. Skill processes therefore rely on the
+// derivation, and their commands must keep starting with `node`.
 test("skill commands stay shaped for the Bash(node *) grant", () => {
   const skills = path.resolve(__dirname, "..", "skillmeter", "skills");
   let checked = 0;
@@ -129,7 +115,7 @@ test("skill commands stay shaped for the Bash(node *) grant", () => {
 
 // Run the real entrypoint without plugin environment variables, as skill
 // commands may be launched. Verify data-root derivation from the install layout.
-test("a monitor launched with no plugin env at all resolves its queue", () => {
+test("an entrypoint launched with no plugin env at all resolves its queue", () => {
   const { pluginRoot, expected } = makeHostLayout();
   const source = path.resolve(__dirname, "..", "skillmeter", "scripts");
   fs.cpSync(source, path.join(pluginRoot, "scripts"), { recursive: true });

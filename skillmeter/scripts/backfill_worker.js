@@ -15,6 +15,7 @@ const {
 const { appendBackfillLog } = require("./lib/backfill-log");
 const {
   announceBackfillFailure,
+  queueUnqueuedBackfillEvent,
   settleBackfillDelivery,
 } = require("./lib/backfill-delivery");
 const {
@@ -167,9 +168,19 @@ async function main() {
   // The drain was spawned before the snapshot was marked finished, so it can
   // empty the queue while the state still says running and settle nothing.
   // Settling here too covers that ordering.
-  try { settleBackfillDelivery(); } catch {}
+  // Settling queues the completion event; the drain that emptied the queue may
+  // already have finished, so ask for one to send it.
+  try { if (settleBackfillDelivery()) spawnDetachedDrain(); } catch {}
   // A no-op unless the snapshot failed with nothing queued.
   try { announceBackfillFailure(offerId); } catch {}
+  // With nothing queued no drain was requested above, so the event needs one.
+  if (queuedChunks === 0) queueEventAndDrain(offerId);
+}
+
+function queueEventAndDrain(offerId) {
+  try {
+    if (queueUnqueuedBackfillEvent(offerId)) spawnDetachedDrain();
+  } catch {}
 }
 
 const offerId = process.argv[2] || "";
@@ -185,6 +196,7 @@ main().catch((err) => {
       });
     } catch {}
     try { announceBackfillFailure(offerId); } catch {}
+    queueEventAndDrain(offerId);
   }
   process.exitCode = 1;
 });

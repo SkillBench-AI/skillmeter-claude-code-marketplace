@@ -16,7 +16,7 @@ const { STATE_DIR } = require("./config");
 const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, "..", "..");
 
 // Queues and locks must survive updates in the persistent plugin data directory.
-// Pass the resolved root to the data-directory resolver for skill/monitor calls
+// Pass the resolved root to the data-directory resolver for skill calls
 // without plugin environment variables. Never fall back to the install cache.
 const DATA_ROOT = resolvePluginDataRoot(PLUGIN_ROOT);
 if (!DATA_ROOT) {

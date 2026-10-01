@@ -13,7 +13,7 @@ const { makeTempDir, setTestEnv, makeJwt, writeCredentials, readSession } = requ
 const stateDir = makeTempDir("skm-license-activation-");
 
 setTestEnv("SKILLMETER_STATE_DIR", stateDir);
-setTestEnv("SKILLMETER_RETRY_DAEMON_INTERVAL_MS", "1000");
+setTestEnv("SKILLMETER_RETRY_BASE_MS", "1000");
 setTestEnv("SKILLMETER_ACTIVATE_URL", "https://activation.test/activate");
 setTestEnv("SKILLMETER_BACKEND_URL", undefined);
 

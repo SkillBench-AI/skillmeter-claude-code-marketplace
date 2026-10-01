@@ -28,7 +28,7 @@
 const fs = require("fs");
 const crypto = require("crypto");
 const path = require("path");
-const { CRED_FILE, getRetryDaemonIntervalMs } = require("./config");
+const { CRED_FILE, getRetryBaseMs } = require("./config");
 const { ACCOUNT_DIR } = require("./paths");
 const { safeReadJson, atomicWriteJson } = require("./io");
 
@@ -38,8 +38,8 @@ const LICENSE_STATUS_FILE = path.join(ACCOUNT_DIR, "license-status.json");
 const SESSION_FILE = path.join(ACCOUNT_DIR, "session.json");
 const SCHEMA_VERSION = 1;
 
-// Backoff bounds. The base is the monitor's sweep interval (2 min by default);
-// the cap matches its drain backoff cap. Transient failures keep retrying at
+// Backoff bounds: a 2-minute base (SKILLMETER_RETRY_BASE_MS) and a 30-minute
+// cap. Transient failures keep retrying at
 // the cap (ADR 001, amendment "one refresh path").
 const BACKOFF_CAP_MS = 30 * 60_000;
 
@@ -188,7 +188,7 @@ function writeLicenseStatus(status) {
  * Delay before the next attempt after `consecutiveFailures` failures:
  * base, 2*base, 4*base, ... capped. Pure.
  */
-function backoffDelayMs(consecutiveFailures, baseMs = getRetryDaemonIntervalMs(), capMs = BACKOFF_CAP_MS) {
+function backoffDelayMs(consecutiveFailures, baseMs = getRetryBaseMs(), capMs = BACKOFF_CAP_MS) {
   if (consecutiveFailures <= 0) return 0;
   const raw = baseMs * 2 ** (consecutiveFailures - 1);
   return Math.min(raw, capMs);
@@ -254,7 +254,7 @@ function recordRefreshFailure({
   status = null,
   message = "",
   now = Date.now(),
-  baseMs = getRetryDaemonIntervalMs(),
+  baseMs = getRetryBaseMs(),
   capMs = BACKOFF_CAP_MS,
 } = {}) {
   const error = { kind, status, message: String(message || "").slice(0, 200) };
