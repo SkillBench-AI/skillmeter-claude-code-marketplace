@@ -172,6 +172,7 @@ function priorOffersOf(state) {
       offer_id: state.offer_id,
       org: state.org,
       repository_keys: state.repository_keys || [],
+      tenant_fingerprint: state.tenant_fingerprint || "",
     },
     ...prior,
   ].slice(0, MAX_PRIOR_OFFERS);
@@ -219,7 +220,11 @@ function beginBackfill(offerId, {
   org,
   repositoryIds,
   repositoryKeys,
+  tenantFingerprint,
 } = {}) {
+  // Consent is given to one tenant; without its identity the chunks could
+  // later follow a sign-in to another tenant that lists the same org.
+  if (!tenantFingerprint) return { started: false, state: readBackfillState() };
   let started = false;
   const state = mutateBackfillState((current) => {
     if (
@@ -237,6 +242,7 @@ function beginBackfill(offerId, {
       org,
       repository_ids: [...new Set(repositoryIds || [])],
       repository_keys: [...new Set(repositoryKeys || [])],
+      tenant_fingerprint: tenantFingerprint,
       upload_authorized: true,
       processed_transcripts: 0,
       queued_chunks: 0,
@@ -275,6 +281,19 @@ function isBackfillUploadAuthorized({
       Array.isArray(prior.repository_keys) &&
       prior.repository_keys.includes(repoKey)
   );
+}
+
+// The tenant an accepted offer was consented to, or "" when unknown (an offer
+// accepted before tenants were recorded, or no such offer).
+function backfillOfferTenant(offerId) {
+  const state = readBackfillState();
+  if (!state || !offerId) return "";
+  if (state.upload_authorized === true && state.offer_id === offerId) {
+    return state.tenant_fingerprint || "";
+  }
+  const prior = (Array.isArray(state.prior_offers) ? state.prior_offers : [])
+    .find((offer) => offer && offer.offer_id === offerId);
+  return prior?.tenant_fingerprint || "";
 }
 
 function updateBackfillProgress(offerId, progress) {
@@ -350,6 +369,7 @@ module.exports = {
   claimBackfillOffer,
   markBackfillDeclined,
   beginBackfill,
+  backfillOfferTenant,
   updateBackfillProgress,
   finishBackfill,
   markBackfillDelivered,

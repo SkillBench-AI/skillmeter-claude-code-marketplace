@@ -60,9 +60,11 @@ const {
 } = require("./organization-audit-queue");
 const { cleanupStaleSessionContexts } = require("./cwd-context");
 const {
+  backfillOfferTenant,
   isBackfillRunning,
   isBackfillUploadAuthorized,
 } = require("./backfill-state");
+const { currentTenantFingerprint, tenantFingerprint } = require("./tenant");
 
 // Async gzip for transcript uploads — keeps the hook's event loop responsive
 // while compressing multi-MB transcripts. Sync variants are still used for
@@ -542,10 +544,25 @@ function isBackfillChunkAuthorized(meta, context) {
   );
 }
 
+// A backfill chunk belongs to the tenant its offer was accepted under. Signed
+// out, it waits; signed in to any other tenant, including one that lists the
+// same org, it is never sent there. An offer accepted before tenants were
+// recorded has no tenant and so matches none.
+function backfillTenantMatches(meta, token) {
+  const expected = backfillOfferTenant(meta.backfillOfferId);
+  return !!expected &&
+    tenantFingerprint(token, credstore.getHashSalt()) === expected;
+}
+
 function chunkDisposition(meta, context) {
   if (telemetryStore.getGlobalDisabled()) return "pause";
   if (meta?.promptId === "backfill" && meta.backfillOfferId) {
-    return isBackfillChunkAuthorized(meta, context) ? "send" : "delete";
+    if (!isBackfillChunkAuthorized(meta, context)) return "delete";
+    const current = currentTenantFingerprint();
+    if (current && current !== backfillOfferTenant(meta.backfillOfferId)) {
+      return "delete";
+    }
+    return "send";
   }
   return queueDisposition(context);
 }
@@ -695,7 +712,10 @@ async function uploadDeltaChunk(bodyPath, deviceId, timeoutMs = TRANSCRIPT_TIMEO
   try {
     if (
       chunkDisposition(meta, context) !== "send" ||
-      !chunkTransmissionAllowed(meta, context)
+      !chunkTransmissionAllowed(meta, context) ||
+      // Check the token this request carries, not a later re-read of it.
+      (meta.promptId === "backfill" && meta.backfillOfferId &&
+        !backfillTenantMatches(meta, token))
     ) {
       logBackfillChunk(meta, "upload_deferred", {
         reason: "policy_changed_before_request",

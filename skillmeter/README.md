@@ -58,7 +58,9 @@ removes tool-result and image blocks before the shared sanitizer runs.
 Historical consent neither requires nor enables ongoing organization/repository
 telemetry. An accepted historical offer can upload while live telemetry is OFF;
 the global switch still pauses both. Queue cleanup preserves only historical
-chunks belonging to the accepted offer and its scope.
+chunks belonging to the accepted offer and its scope. Those chunks upload only
+to the tenant whose license accepted the offer; after a sign-in to another
+tenant they are deleted unsent.
 
 The upload runs in the background. When every historical chunk has been
 acknowledged by the backend or has exhausted its retries, SkillMeter announces

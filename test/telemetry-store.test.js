@@ -138,6 +138,7 @@ test("backfill upload records detailed attempt and success diagnostics", async (
     repository_ids: ["aaaaaaaaaaaa"],
     repository_keys: [repoKey],
     upload_authorized: true,
+    tenant_fingerprint: require("../skillmeter/scripts/lib/tenant").currentTenantFingerprint(),
     created_at: Date.now(),
     updated_at: Date.now(),
   });
