@@ -26,15 +26,20 @@ const { observeSessionCwd } = require("./lib/cwd-context");
 // ---------------------------------------------------------------------------
 
 // Move the transcript cursor to the tail of a period that was not recorded, so
-// that content from it is never sent later.
+// that content from it is never sent later. Without a license there is no
+// repository to hold a cursor, so the transcript itself is marked.
 function keepTranscriptCursorAtTail(input, repoScopeDecision) {
-  if (!input.transcript_path || !repoScopeDecision.repoKey) return;
+  if (!input.transcript_path) return;
   try {
-    const { advanceCursorToTranscriptTail } = require("./lib/transfer");
-    advanceCursorToTranscriptTail(input.transcript_path, {
-      repoKey: repoScopeDecision.repoKey,
-      org: repoScopeDecision.remoteOrg,
-    });
+    const transfer = require("./lib/transfer");
+    if (repoScopeDecision.repoKey) {
+      transfer.advanceCursorToTranscriptTail(input.transcript_path, {
+        repoKey: repoScopeDecision.repoKey,
+        org: repoScopeDecision.remoteOrg,
+      });
+    } else if (repoScopeDecision.classification === "not_activated") {
+      transfer.markUnlicensedTranscript(input.transcript_path);
+    }
   } catch {}
 }
 
@@ -225,8 +230,8 @@ async function runHook(eventName, buildData, options = {}) {
       });
     }
     // Keep the transcript cursor at the disabled-period tail. If the user
-    // enables this repository later, content written before that explicit
-    // choice must not become an accidental first upload.
+    // enables this repository or signs in later, content written before that
+    // explicit choice must not become an accidental first upload.
     keepTranscriptCursorAtTail(input, repoScopeDecision);
     await runOptionalCallback(
       eventName,

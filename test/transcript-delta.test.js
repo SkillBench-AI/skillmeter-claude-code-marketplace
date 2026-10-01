@@ -218,6 +218,40 @@ test("writeCursor/readCursor round-trip", () => {
   assert.equal(transfer.readCursor("missing.jsonl", TEST_REPOSITORY), null);
 });
 
+// Blocks far smaller than a record make every record cross a block edge.
+test("transcriptTailUuid: newest uuid across block edges, past a partial line and metadata", () => {
+  const file = path.join(DATA_DIR, "tail.jsonl");
+  writeFile(file, [
+    JSON.stringify({ uuid: "older", message: { content: "été ".repeat(40) } }),
+    JSON.stringify({ uuid: "newest", message: { content: "naïve ".repeat(40) } }),
+    JSON.stringify({ type: "permission-mode", permissionMode: "default" }),
+    '{"uuid":"unfinished","message":',
+  ].join("\n"));
+  for (const blockBytes of [7, 100, 64 * 1024]) {
+    assert.equal(transfer.transcriptTailUuid(file, blockBytes), "newest", `blocks of ${blockBytes}`);
+  }
+});
+
+test("transcriptTailUuid: empty without a uuid or a file", () => {
+  const file = path.join(DATA_DIR, "no-uuid.jsonl");
+  writeFile(file, JSON.stringify({ type: "permission-mode" }) + "\n");
+  assert.equal(transfer.transcriptTailUuid(file, 5), "");
+  assert.equal(transfer.transcriptTailUuid(path.join(DATA_DIR, "absent.jsonl")), "");
+});
+
+test("a signed-out mark ages out with other stale files", () => {
+  const marks = path.join(DATA_DIR, "logs", "unlicensed-transcripts");
+  for (const name of ["old.jsonl", "recent.jsonl"]) {
+    const file = path.join(DATA_DIR, name);
+    writeFile(file, JSON.stringify({ uuid: name }) + "\n");
+    assert.equal(transfer.markUnlicensedTranscript(file), true);
+  }
+  const monthAgo = (Date.now() - 31 * 24 * 60 * 60 * 1000) / 1000;
+  fs.utimesSync(path.join(marks, "old.jsonl.json"), monthAgo, monthAgo);
+  transfer.cleanupStaleFiles();
+  assert.deepEqual(fs.readdirSync(marks), ["recent.jsonl.json"]);
+});
+
 test("sealDeltaChunk writes body+meta and listDeltaChunks finds it", () => {
   const before = transfer.listDeltaChunks().length;
   const body = transfer.sealDeltaChunk("seal.jsonl", ['{"uuid":"a"}'], {
