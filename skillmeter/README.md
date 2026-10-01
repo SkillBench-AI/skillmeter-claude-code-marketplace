@@ -71,6 +71,12 @@ start.
 An import that fails before queuing anything is announced the same way; one
 that queued chunks reports through the completion notice.
 
+Each accepted import also sends the backend one `BackfillCompleted` event when
+it ends, with `outcome` set to `success` (every chunk acknowledged, or nothing
+to import), `partial_success` (some chunks or sessions did not make it) or
+`failed` (nothing acknowledged). It carries counts and the import's identifier
+only, and is sent under the same consent and tenant as the import's chunks.
+
 `/skillmeter:backfill status` distinguishes queued chunks from chunks acknowledged
 by the backend. A queued snapshot alone does not prove delivery.
 

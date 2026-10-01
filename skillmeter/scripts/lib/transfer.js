@@ -61,9 +61,11 @@ const {
 const { cleanupStaleSessionContexts } = require("./cwd-context");
 const {
   backfillOfferTenant,
+  isBackfillOfferAccepted,
   isBackfillRunning,
   isBackfillUploadAuthorized,
 } = require("./backfill-state");
+const { listBackfillEvents, readBackfillEvent } = require("./backfill-event");
 const { currentTenantFingerprint, tenantFingerprint } = require("./tenant");
 
 // Async gzip for transcript uploads — keeps the hook's event loop responsive
@@ -1191,6 +1193,94 @@ async function retryUnauthorizedOnce(files, results, upload) {
   return merged;
 }
 
+/**
+ * Send queued BackfillCompleted events. Each belongs to an accepted import and
+ * goes only where its chunks may: the offer must still be kept, the signed-in
+ * tenant must be the one that accepted it, and its organization must still be
+ * licensed. Signed out, paused, or with a stale token it waits; another tenant
+ * or a dropped offer deletes it unsent. Returns the number sent.
+ */
+async function drainBackfillEvents(timeoutMs = EVENT_TIMEOUT) {
+  const files = listBackfillEvents();
+  if (files.length === 0) return 0;
+  const lock = acquireQueueDrainLock("backfill-events");
+  if (!lock) return 0;
+  let sent = 0;
+  try {
+    for (const file of files) {
+      const entry = readBackfillEvent(file);
+      if (!entry) {
+        try { fs.unlinkSync(file); } catch {}
+        continue;
+      }
+      if (telemetryStore.getGlobalDisabled()) return sent;
+      if (!isChunkEligible(entry.retry, Date.now())) continue;
+
+      const expectedTenant = backfillOfferTenant(entry.offerId);
+      const currentTenant = currentTenantFingerprint();
+      if (
+        !isBackfillOfferAccepted(entry.offerId) ||
+        !expectedTenant ||
+        (currentTenant && currentTenant !== expectedTenant)
+      ) {
+        appendBackfillLog("event_dropped", { offerId: entry.offerId });
+        try { fs.unlinkSync(file); } catch {}
+        continue;
+      }
+      if (!credstore.getAllowedGitHubOrgs().includes(entry.org)) continue;
+
+      await ensureFreshLicense(credstore.getDeviceId());
+      const token = credstore.getLicenseTokenUncached();
+      if (!token || isJwtExpired(token)) continue;
+      // The token this request carries, not a later re-read of it.
+      if (tenantFingerprint(token, credstore.getHashSalt()) !== expectedTenant) continue;
+      const endpoint = getEndpointFromTokenAllowExpired(token);
+      if (!endpoint) continue;
+
+      const body = Buffer.from(JSON.stringify(entry.event) + "\n");
+      let error = "";
+      try {
+        const res = await fetch(`${endpoint}/logs/claude`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-ndjson",
+            "Content-Encoding": "gzip",
+            "X-Plugin-Version": PLUGIN_VERSION,
+            "X-Idempotency-Key": `backfill-completed:${entry.offerId}`,
+            "Authorization": `Bearer ${token}`,
+          },
+          body: zlib.gzipSync(body),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+        if (res.ok) {
+          try { fs.unlinkSync(file); } catch {}
+          appendBackfillLog("event_sent", {
+            offerId: entry.offerId,
+            outcome: entry.event.data?.outcome,
+          });
+          sent++;
+          continue;
+        }
+        // A rejected token spends no attempt; the next drain refreshes it.
+        if (res.status === 401) continue;
+        error = `HTTP ${res.status}`;
+      } catch (err) {
+        error = err.message;
+      }
+      const retry = recordUploadFailure(entry.retry, { error });
+      if (isChunkExhausted(retry)) {
+        appendBackfillLog("event_abandoned", { offerId: entry.offerId, error });
+        try { fs.unlinkSync(file); } catch {}
+      } else {
+        try { atomicWriteJson(file, { ...entry, retry }); } catch {}
+      }
+    }
+    return sent;
+  } finally {
+    releaseQueueDrainLock(lock);
+  }
+}
+
 // Drain both queues once. Record an upload-result sentinel so the next
 // SessionStart can surface a one-line notice: success when anything uploaded,
 // or a failure (with the error) when nothing uploaded but a real transmission
@@ -1199,6 +1289,8 @@ async function retryUnauthorizedOnce(files, results, upload) {
 async function drainQueuesOnce(timeoutMs) {
   const ev = await drainFailedLogs(timeoutMs);
   const dc = await drainDeltaChunks(timeoutMs);
+  // After the chunks: settling the import's last chunk queues its event.
+  try { await drainBackfillEvents(timeoutMs); } catch {}
   const events = ev.ok;
   const transcripts = dc.ok;
   const errors = [...ev.errors, ...dc.errors];
@@ -1326,6 +1418,7 @@ module.exports = {
   spawnDetachedDrain,
   drainFailedLogs,
   drainDeltaChunks,
+  drainBackfillEvents,
   drainQueuesOnce,
   cleanupStaleFiles,
   purgeRepositoryQueue,
