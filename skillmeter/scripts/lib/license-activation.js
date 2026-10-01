@@ -146,8 +146,8 @@ async function renewViaBroker(jwt, deviceId, expected) {
   return { outcome: "rotated", token: exchange.token, expected: current };
 }
 
-// Upload drains refresh, in whichever process runs them (a detached drain,
-// the monitor). The lock coordinates them; the status record supplies backoff
+// Upload drains refresh, in whichever detached drain process runs them. The
+// lock coordinates them; the status record supplies backoff
 // and terminal state across processes.
 
 const LICENSE_REFRESH_LOCK_FILE = path.join(LOG_DIR, ".license-refresh.lock");

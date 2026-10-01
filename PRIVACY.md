@@ -214,7 +214,7 @@ the feature is introduced.
 - uninstalling the plugin may not remove `~/.skillbench/`.
 
 To remove the retained local identity and policy files, sign out first, close
-Claude Code sessions and background monitors, and then remove the SkillMeter
+Claude Code sessions, and then remove the SkillMeter
 state directory. Removing local files does not delete data already received by
 SkillBench.
 

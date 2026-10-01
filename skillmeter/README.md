@@ -101,8 +101,8 @@ See [ADR002](../docs/adr/002-two-stage-sanitization.md) for the policy and
 ## Uploads and recovery
 
 Hooks append sanitized events to repository-bound queues. Stop and SessionEnd
-seal events and stage transcript chunks, then start a detached drain. Startup
-retries and the retry monitor handle remaining uploads. Network requests use
+seal events and stage transcript chunks, then start a detached drain. What a
+drain cannot send is retried by the next turn's drain or the next session start. Network requests use
 gzip and the license's tenant endpoint, with consent checked again before sending.
 
 Successful event batches become `.sent`; acknowledged transcript chunks are
@@ -165,7 +165,7 @@ it; the variables below point one endpoint or directory elsewhere.
 | `SKILLMETER_OAUTH_CLIENT_ID` | Public device-flow client ID; default `skillmeter-plugin` |
 | `SKILLMETER_BACKEND_URL` | Telemetry base URL override; authentication is still required |
 | `SKILLMETER_TIMEOUT` | Event upload timeout in seconds; default 10 |
-| `SKILLMETER_RETRY_DAEMON_INTERVAL_MS` | Monitor sweep interval in milliseconds; default 120000 |
+| `SKILLMETER_RETRY_BASE_MS` | Base license-refresh backoff in milliseconds; default 120000 |
 
 Configuration precedence is environment, development bundle, then production
 default. Project files such as `.claude/settings.local.json` cannot override an

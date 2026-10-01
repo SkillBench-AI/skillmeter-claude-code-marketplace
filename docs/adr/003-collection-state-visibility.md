@@ -6,7 +6,8 @@
 001 decision 4 is retired, Stop-triggered recovery exists, and the review
 threads of 2026-09-17 are folded in. Acceptance covers the design; B1
 implements decisions 1 to 4 and verifies the two Claude Code behaviours
-listed under Open items before it merges.
+listed under Open items before it merges. Amended 2026-10-01: the retry
+monitor is removed and decision 3 is retired (see the amendment at the end).
 **Related:** ADR 001 (decision 2, its Stop-recovery amendment and the local status record it requires; decision 4 is retired by the 2026-09-16 amendment), `skillmeter-codex-marketplace`, `skillmeter-vscode-extension` (parity)
 
 ## Context
@@ -359,3 +360,16 @@ statements above describe the earlier behaviour:
   `reactivation_required` (401 or 410) only.
 - There is no Stop-triggered recovery worker. Stop, SessionEnd and SessionStart
   spawn the ordinary detached drain, which refreshes before it sends.
+
+## Amendment 2026-10-01: the retry monitor is removed
+
+The plugin no longer declares a monitor, so decision 3 is retired and the
+"Monitor panel" context and observed problem 3 no longer apply. Ordinary hooks
+only append to the local queue. Stop, SessionEnd and SessionStart spawn the
+detached drain, which sends everything sealed and eligible. The monitor added
+only a retry while a session sat idle after a failed drain; that retry now
+happens at the next turn's Stop or the next session start, and queued data is
+kept until then (and ages out after seven days, as before). The per-chunk
+retry budget is now spent by turns and session starts rather than by a
+two-minute sweep. `test/delivery.test.js` covers delivery by Stop, recovery
+after an outage at the next turn, and recovery at the next session start.

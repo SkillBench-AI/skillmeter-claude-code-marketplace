@@ -167,8 +167,9 @@ const TELEMETRY_POLICY_FILE = path.join(STATE_DIR, "telemetry-policy.json");
 function getEventTimeoutMs() {
   return parseInt(process.env.SKILLMETER_TIMEOUT || "10", 10) * 1000;
 }
-function getRetryDaemonIntervalMs() {
-  return parseInt(process.env.SKILLMETER_RETRY_DAEMON_INTERVAL_MS || "", 10) || 120_000;
+// Base delay of the license refresh backoff.
+function getRetryBaseMs() {
+  return parseInt(process.env.SKILLMETER_RETRY_BASE_MS || "", 10) || 120_000;
 }
 // Per-chunk UNCOMPRESSED byte budget for delta transcript upload. Conservative
 // default so the gzipped body stays well under the backend's 6 MB request limit
@@ -192,7 +193,7 @@ module.exports = {
   getOAuthClientId,
   getBackendUrlOverride,
   getEventTimeoutMs,
-  getRetryDaemonIntervalMs,
+  getRetryBaseMs,
   getTranscriptChunkMaxBytes,
   OAUTH_SCOPE,
 };
