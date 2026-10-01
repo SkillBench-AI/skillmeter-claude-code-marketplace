@@ -47,7 +47,11 @@ historical transcripts. This is a distinct decision with its own conditions:
 3. the user has explicitly approved the one-time historical question for the
    named set of repositories shown; and
 4. this plugin's global telemetry pause is not active — it pauses
-   historical transmission just as it pauses ongoing telemetry.
+   historical transmission just as it pauses ongoing telemetry; and
+5. the current license belongs to the same SkillMeter tenant as the license
+   under which the user approved. History approved under one tenant is never
+   sent to another, even one whose license lists the same organization; a
+   sign-in to another tenant deletes it unsent.
 
 Because this consent is independent, the offer covers every repository of the
 licensed organization that the plugin can discover locally, **including
@@ -204,7 +208,8 @@ the feature is introduced.
   scope, while privacy cursors can remain to prevent later upload of content
   created while telemetry was disabled;
 - sign-out removes the license and deletes unsent repository telemetry and
-  organization audit records (an accepted history import stays queued), but
+  organization audit records (an accepted history import stays queued for a
+  sign-in to the same tenant), but
   retains the random device identifier, hashing salt, and telemetry policy;
 - uninstalling the plugin may not remove `~/.skillbench/`.
 

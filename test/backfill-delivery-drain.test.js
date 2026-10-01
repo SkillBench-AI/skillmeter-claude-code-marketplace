@@ -42,6 +42,7 @@ const {
   settleBackfillDelivery,
 } = require("../skillmeter/scripts/lib/backfill-delivery");
 const transfer = require("../skillmeter/scripts/lib/transfer");
+const { currentTenantFingerprint } = require("../skillmeter/scripts/lib/tenant");
 
 const REPOSITORY = {
   repoKey: "github.com/skillbench-ai/drain",
@@ -60,6 +61,7 @@ function startBackfill() {
     repository_ids: ["aaaaaaaaaaaa"],
     repository_keys: [REPOSITORY.repoKey],
     upload_authorized: true,
+    tenant_fingerprint: currentTenantFingerprint(),
     cutoff_at: Date.now() + 60_000,
     created_at: Date.now(),
     updated_at: Date.now(),

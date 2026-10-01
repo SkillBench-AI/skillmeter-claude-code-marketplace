@@ -75,6 +75,7 @@ test("running backfill freezes live staging without moving its cursor", () => {
     org: REPOSITORY.org,
     repositoryIds: ["aaaaaaaaaaaa"],
     repositoryKeys: [REPOSITORY.repoKey],
+    tenantFingerprint: "0123456789abcdef01234567",
   });
   assert.equal(running.started, true);
   assert.equal(backfillState.isBackfillUploadAuthorized({

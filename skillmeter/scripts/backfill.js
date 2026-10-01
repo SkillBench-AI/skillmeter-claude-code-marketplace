@@ -12,6 +12,7 @@ function loadRuntime() {
   return {
     credstore: require("./credstore"),
     backfillState: require("./lib/backfill-state"),
+    currentTenantFingerprint: require("./lib/tenant").currentTenantFingerprint,
     loadRepositoryTelemetryState:
       require("./lib/repository-telemetry").loadRepositoryTelemetryState,
     appendBackfillLog: require("./lib/backfill-log").appendBackfillLog,
@@ -113,6 +114,7 @@ async function accept(args, runtime) {
     org,
     repositoryIds: [...new Set(ids)],
     repositoryKeys: selected.map((repository) => repository.repoKey),
+    tenantFingerprint: runtime.currentTenantFingerprint(),
   });
   if (!started.started) fail("the backfill offer is no longer available.");
   const history = historySummary(runtime, started.state, selected);
