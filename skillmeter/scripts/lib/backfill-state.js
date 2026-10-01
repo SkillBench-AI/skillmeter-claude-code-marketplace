@@ -283,6 +283,16 @@ function isBackfillUploadAuthorized({
   );
 }
 
+// Whether the user accepted this offer and it is still kept: the current offer
+// once started, or an earlier one retained in prior_offers.
+function isBackfillOfferAccepted(offerId) {
+  const state = readBackfillState();
+  if (!state || !offerId) return false;
+  if (state.upload_authorized === true && state.offer_id === offerId) return true;
+  return (Array.isArray(state.prior_offers) ? state.prior_offers : [])
+    .some((offer) => offer && offer.offer_id === offerId);
+}
+
 // The tenant an accepted offer was consented to, or "" when unknown (an offer
 // accepted before tenants were recorded, or no such offer).
 function backfillOfferTenant(offerId) {
@@ -370,6 +380,7 @@ module.exports = {
   markBackfillDeclined,
   beginBackfill,
   backfillOfferTenant,
+  isBackfillOfferAccepted,
   updateBackfillProgress,
   finishBackfill,
   markBackfillDelivered,

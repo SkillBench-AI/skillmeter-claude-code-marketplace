@@ -101,6 +101,11 @@ device flow, and sent that token to the activation service.
 - when separately approved, sanitized historical prompt and response records
   through a fixed transcript UUID boundary; historical tool-result and image
   blocks are removed before sanitization;
+- once an approved historical import ends, one summary record for it: its
+  random import identifier, whether it succeeded, partly succeeded or failed,
+  session, repository and upload counts, and its cutoff and completion times.
+  It contains no transcript content, paths or error text, and is sent only
+  under the same approval and SkillMeter tenant as the import;
 - repository classification and pseudonymous path/repository identifiers.
 
 ### Claude Code environment and configuration

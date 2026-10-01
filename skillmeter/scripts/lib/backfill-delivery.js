@@ -19,10 +19,19 @@ const { BACKFILL_RESULT_FILE, REPOSITORIES_LOG_DIR } = require("./paths");
 const { QUARANTINE_SUFFIX } = require("./chunk-retry");
 const { appendBackfillLog } = require("./backfill-log");
 const { sentChunkCount } = require("./backfill-report");
+const { queueBackfillCompleted } = require("./backfill-event");
 const {
   markBackfillDelivered,
   readBackfillState,
 } = require("./backfill-state");
+
+function deviceId() {
+  try {
+    return require("../credstore").getDeviceId();
+  } catch {
+    return "";
+  }
+}
 
 const META_SUFFIX = ".meta.json";
 const SET_ASIDE_SUFFIX = `${META_SUFFIX}${QUARANTINE_SUFFIX}`;
@@ -124,7 +133,26 @@ function settleBackfillDelivery() {
     unsentChunks: result.unsentChunks,
     setAsideChunks: result.setAsideChunks,
   });
+  try { queueBackfillCompleted(marked.state, deviceId(), result); } catch {}
   return result;
+}
+
+/**
+ * Queue the event for an import that finished without queuing anything:
+ * nothing to import (success) or a snapshot that failed first (failed). An
+ * import that queued chunks gets its event from settleBackfillDelivery.
+ */
+function queueUnqueuedBackfillEvent(offerId) {
+  const state = readBackfillState();
+  if (
+    !state ||
+    state.offer_id !== offerId ||
+    !["completed", "failed"].includes(state.status) ||
+    state.queued_chunks > 0
+  ) {
+    return null;
+  }
+  return queueBackfillCompleted(state, deviceId());
 }
 
 /**
@@ -242,6 +270,7 @@ module.exports = {
   dashboardUrlFromAudiences,
   ensureBackfillResultFile,
   formatBackfillNotice,
+  queueUnqueuedBackfillEvent,
   settleBackfillDelivery,
   takeBackfillNotice,
 };
