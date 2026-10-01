@@ -64,6 +64,21 @@ function queueChunk(name, meta, { quarantined = false } = {}) {
   writeJson(path.join(CHUNKS, `${name}.meta.json${suffix}`), meta);
 }
 
+// Backend acknowledgements as the drain logs them, one chunk per transcript.
+function logSent(logDir, count, { offerId = OFFER, from = 0 } = {}) {
+  fs.mkdirSync(logDir, { recursive: true });
+  for (let i = from; i < from + count; i++) {
+    fs.appendFileSync(path.join(logDir, "backfill.ndjson"), JSON.stringify({
+      schemaVersion: 1,
+      event: "upload_succeeded",
+      offerId,
+      repository: "github.com/acme/widgets",
+      transcriptId: `t-${i}.jsonl`,
+      seq: 1,
+    }) + "\n");
+  }
+}
+
 beforeEach(() => {
   fs.rmSync(path.join(DATA_DIR, "logs"), { recursive: true, force: true });
   fs.rmSync(BACKFILL_RESULT_FILE, { force: true });
@@ -101,11 +116,14 @@ test("does not settle while any chunk of the offer is still queued", () => {
 test("settles once when every chunk was acknowledged", () => {
   writeState();
   queueChunk("other", { promptId: "backfill", backfillOfferId: "offer-other" });
+  logSent(path.join(DATA_DIR, "logs"), 4);
 
   const result = settleBackfillDelivery();
   assert.equal(result.status, "delivered");
   assert.equal(result.sessions, 3);
   assert.equal(result.setAsideChunks, 0);
+  assert.equal(result.sentChunks, 4);
+  assert.equal(result.unsentChunks, 0);
   assert.deepEqual(readJson(BACKFILL_RESULT_FILE), result);
   assert.ok(backfillState.readBackfillState().delivered_at);
 
@@ -119,6 +137,35 @@ test("reports chunks that exhausted their retries as set aside", () => {
   const result = settleBackfillDelivery();
   assert.equal(result.setAsideChunks, 1);
   assert.equal(backfillState.readBackfillState().set_aside_chunks, 1);
+});
+
+// A chunk deleted unsent (its offer no longer authorized, or aged out) leaves
+// the queue just as an acknowledged one does; it must not read as sent.
+test("chunks that left the queue unsent are not announced as sent", () => {
+  writeState();
+  const logDir = path.join(DATA_DIR, "logs");
+  logSent(logDir, 2);
+  logSent(logDir, 1, { from: 0 }); // the same chunk logged twice counts once
+  logSent(logDir, 3, { offerId: "offer-other" });
+
+  const result = settleBackfillDelivery();
+  assert.equal(result.sentChunks, 2);
+  assert.equal(result.unsentChunks, 2);
+
+  const notice = takeBackfillNotice({ audiences: [] });
+  assert.match(notice.message, /\b2 upload chunks could not be sent\b/);
+  assert.doesNotMatch(notice.message, /complete/);
+  assert.match(notice.desktop, /could not be sent/);
+});
+
+test("set-aside and deleted chunks are both counted as unsent", () => {
+  writeState();
+  logSent(path.join(DATA_DIR, "logs"), 1);
+  queueChunk("b", { promptId: "backfill", backfillOfferId: OFFER }, { quarantined: true });
+
+  const result = settleBackfillDelivery();
+  assert.equal(result.setAsideChunks, 1);
+  assert.equal(result.unsentChunks, 3);
 });
 
 test("a partly failed snapshot still settles what it queued", () => {
@@ -185,6 +232,18 @@ test("notice wording covers full delivery, set-aside chunks and the dashboard li
   assert.match(partial.message, /\b2 upload chunks could not be sent\b/);
   assert.match(partial.message, /\/skillmeter:backfill status\b/);
   assert.equal(formatBackfillNotice({ status: "none" }, null), null);
+
+  // Counted results: unsent chunks decide, whatever the set-aside count says.
+  const counted = formatBackfillNotice(
+    { status: "delivered", sessions: 3, sentChunks: 4, unsentChunks: 0, setAsideChunks: 0 },
+    null
+  );
+  assert.match(counted.message, /history import complete: 3 sessions sent/);
+  const dropped = formatBackfillNotice(
+    { status: "delivered", sessions: 3, sentChunks: 1, unsentChunks: 3, setAsideChunks: 0 },
+    null
+  );
+  assert.match(dropped.message, /\b3 upload chunks could not be sent\b/);
 });
 
 test("the dashboard link is derived only from a tenant meter audience", () => {
@@ -270,6 +329,7 @@ test("SessionStart watches the sentinel and announces an import that finished of
     created_at: Date.now(),
     updated_at: Date.now(),
   });
+  logSent(path.join(dataDir, "logs"), 4);
   const cwd = makeTempDir("skm-backfill-hook-cwd-");
   const script = path.resolve(__dirname, "../skillmeter/scripts/session_start.js");
   const start = () => runNode(script, [], {
