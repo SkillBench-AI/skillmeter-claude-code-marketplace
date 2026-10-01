@@ -23,9 +23,12 @@ test("a sign-in during the session sends only what follows it", async (t) => {
   await s.turn("out-1");
   await s.turn("out-2");
   s.signIn();
-  await s.turn("in");
-  await s.drained(() => c.transcript().includes("in-a"));
-  assert.deepEqual(c.transcript(), ["in-u", "in-a"]);
+  await s.turn("in-1");
+  await s.drained(() => c.transcript().includes("in-1-a"));
+  await s.turn("in-2");
+  await s.drained(() => c.transcript().includes("in-2-a"));
+  // Each turn once: the mark no longer applies once the cursor is past it.
+  assert.deepEqual(c.transcript(), ["in-1-u", "in-1-a", "in-2-u", "in-2-a"]);
 });
 
 test("a resumed session signed in part-way sends neither its history nor what came before sign-in", async (t) => {
