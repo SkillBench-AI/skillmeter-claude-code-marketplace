@@ -4,10 +4,11 @@
 **Status:** Accepted (PR #111, 2026-09-25). Revised the same day against
 `main` (0.37.0): the backfill monitor is gone, sign-in is broker-only and ADR
 001 decision 4 is retired, Stop-triggered recovery exists, and the review
-threads of 2026-09-17 are folded in. Acceptance covers the design; B1
-implements decisions 1 to 4 and verifies the two Claude Code behaviours
-listed under Open items before it merges. Amended 2026-10-01: the retry
-monitor is removed and decision 3 is retired (see the amendment at the end).
+threads of 2026-09-17 are folded in. Acceptance covers the design.
+Amended 2026-10-01 (see the amendments at the end): the retry monitor is
+removed and decision 3 retired; sign-in after an ended session; decision 1
+implemented as the resolver; decision 4 implemented as the card. Decision 2
+(notices) is not implemented.
 **Related:** ADR 001 (decision 2, its Stop-recovery amendment and the local status record it requires; decision 4 is retired by the 2026-09-16 amendment), `skillmeter-codex-marketplace`, `skillmeter-vscode-extension` (parity)
 
 ## Context
@@ -445,3 +446,26 @@ a drain has something to send, not every ten minutes. Decision 1's "until A3
 ships" no longer applies: ADR 001 decision 3 is implemented. The open items on
 a token restored by another client and on the shared-credential ownership rule
 lapse with the shared session.
+
+## Amendment 2026-10-01: the card follows the collection state
+
+Decision 4 is implemented. SessionStart chooses its card from
+`lib/collection-state.js`, after its own terminal clear and with the gate it
+already resolved:
+
+| State | Card |
+| --- | --- |
+| `paused` | its own card: telemetry off, paused for every repository; next command `/skillmeter:telemetry enable-global` |
+| `signed_out`, `never_signed_in`, `token_missing`, `revoked` | the sign-in card, with the reason line from decision 5; `revoked` adds "Contact your administrator." |
+| `delivery_paused` | the sign-in-expired card of the earlier amendment |
+| `unconfigured` | the existing setup card while an organization or repository choice is pending; nothing for a repository outside the licensed organizations, organization or repository telemetry the user turned off, or no working directory. A license that names no organization puts every repository outside them, so that client never records and is never told at session start |
+| `recording` | the "telemetry on" card, unchanged |
+
+The pause comes first because it silences every other reading (decision 1).
+A paused client with an ended session or no license is not asked to sign in,
+since signing in would not start capture. Decision 5 gains a row: `paused`,
+`paused for every repository`, with `/skillmeter:telemetry enable-global` as
+its next command rather than `/skillmeter:signin`. A card that says telemetry
+is off appears only in states where hooks record no repository telemetry; where
+excluded hooks still send the exclusion audit, the repository setup card says
+so itself.
