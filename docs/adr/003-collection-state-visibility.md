@@ -445,3 +445,24 @@ a drain has something to send, not every ten minutes. Decision 1's "until A3
 ships" no longer applies: ADR 001 decision 3 is implemented. The open items on
 a token restored by another client and on the shared-credential ownership rule
 lapse with the shared session.
+
+## Amendment 2026-10-01: the card follows the collection state
+
+Decision 4 is implemented. SessionStart chooses its card from
+`lib/collection-state.js`, after its own terminal clear and with the gate it
+already resolved:
+
+| State | Card |
+| --- | --- |
+| `paused` | its own card: telemetry off, paused for every repository; next command `/skillmeter:telemetry enable-global` |
+| `signed_out`, `never_signed_in`, `token_missing`, `revoked` | the sign-in card, with the reason line from decision 5; `revoked` adds "Contact your administrator." |
+| `delivery_paused` | the sign-in-expired card of the earlier amendment |
+| `unconfigured` | the existing setup card while an organization or repository choice is pending; nothing for a repository outside the licensed organizations, telemetry the user turned off, or no working directory |
+| `recording` | the "telemetry on" card, unchanged |
+
+The pause comes first because it silences every other reading (decision 1).
+A paused client with an ended session or no license is not asked to sign in,
+since signing in would not start capture. Decision 5 gains a row: `paused`,
+`paused for every repository`, with `/skillmeter:telemetry enable-global` as
+its next command rather than `/skillmeter:signin`. A card that says telemetry
+is off appears only in states where hooks record nothing.
