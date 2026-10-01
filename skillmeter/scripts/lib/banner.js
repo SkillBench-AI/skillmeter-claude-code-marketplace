@@ -136,12 +136,18 @@ const SIGNIN_REASONS = Object.freeze({
 });
 
 // Shown at SessionStart when no license is stored. `state` names the reason.
+// A revoked license is restored by an administrator, not by the user's choice.
 function signInRequiredBanner(state = "") {
   const lines = ["[ ACTION REQUIRED ]", ""];
   if (SIGNIN_REASONS[state]) lines.push(`Reason        ${SIGNIN_REASONS[state]}`);
-  lines.push("Sign in to verify this repository.", "Telemetry remains OFF until you choose.");
-  if (state === "revoked") lines.push("Contact your administrator.");
-  lines.push("", "→ /skillmeter:signin");
+  lines.push(
+    "Sign in to verify this repository.",
+    state === "revoked"
+      ? "Telemetry remains OFF. Contact your administrator."
+      : "Telemetry remains OFF until you choose.",
+    "",
+    "→ /skillmeter:signin"
+  );
   return card(lines);
 }
 
