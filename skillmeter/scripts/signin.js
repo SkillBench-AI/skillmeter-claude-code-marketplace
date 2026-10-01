@@ -178,7 +178,7 @@ async function main() {
   const lifetimeS = Number(device.expires_in) > 0 ? Number(device.expires_in) : DEFAULT_DEVICE_CODE_LIFETIME_S;
   credstore.writeSigninPending(lifetimeS * 1000, expected);
 
-  const expiresMin = Math.round(device.expires_in / 60);
+  const expiresMin = Math.round(lifetimeS / 60);
   const clipboardCopied = copyToClipboard(device.user_code);
 
   // verification_uri_complete already carries the code, so the page can fill

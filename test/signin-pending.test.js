@@ -35,7 +35,7 @@ function fixture() {
   const env = { PATH: process.env.PATH, TMPDIR: os.tmpdir(), HOME: root, SKILLMETER_STATE_DIR: state, CLAUDE_PLUGIN_DATA: data };
 
   const signinEnv = { ...env, SKILLMETER_BROKER_URL: "https://id.test", SKILLMETER_ACTIVATE_URL: "https://activation.test/activate" };
-  const preloadFor = ({ tty, activateStatus = 200, overtakenAt = "" }, name) => {
+  const preloadFor = ({ tty, activateStatus = 200, overtakenAt = "", expiresIn = 600 }, name) => {
     const preload = path.join(root, name);
     const other = overtakenAt ? preloadFor({ tty: false }, "preload-other.cjs") : "";
     const overtake = `cpReal.spawnSync(process.execPath, ["-r", ${JSON.stringify(other)}, ${JSON.stringify(path.join(SCRIPTS, "signin.js"))}], { env: process.env });`;
@@ -55,7 +55,7 @@ function fixture() {
         let status = 200, payload;
         if (target.endsWith("/device/auth")) {
           ${overtakenAt === "device/auth" ? overtake : ""}
-          payload = { device_code: "dc", user_code: "ABCDEFGH", verification_uri: "https://fixture.invalid", expires_in: 600, interval: 0.001 };
+          payload = { device_code: "dc", user_code: "ABCDEFGH", verification_uri: "https://fixture.invalid", ${expiresIn === null ? "" : `expires_in: ${expiresIn},`} interval: 0.001 };
         } else if (target.endsWith("/oauth2/token")) payload = { id_token: "fixture-id", refresh_token: "fixture-refresh" };
         else if (target.endsWith("/activate")) {
           ${overtakenAt === "activate" ? overtake : ""}
@@ -110,6 +110,16 @@ function fixture() {
     session: () => readSession(state, { dataDir: data }),
   };
 }
+
+test("a broker that omits expires_in prints a real expiry, from the same default the marker uses", () => {
+  const f = fixture();
+  const out = f.signin({ tty: true, expiresIn: null });
+  assert.equal(out.status, 0, out.stderr);
+  assert.doesNotMatch(out.stdout, /NaN/);
+  // The printed figure comes from the same default the marker's lifetime uses,
+  // so the user is never told an expiry the marker does not enforce.
+  assert.match(out.stdout, /Code expires in 15 minutes\./);
+});
 
 test("the device flow leaves a pending result that lasts as long as the device code", () => {
   const f = fixture();
