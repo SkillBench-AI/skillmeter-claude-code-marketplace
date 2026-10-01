@@ -5,8 +5,10 @@
  *
  * Shape (schema_version 1):
  *   last_attempt_at       ms epoch of the last refresh or re-activation attempt
- *   last_success_at       ms epoch of the last success
- *   last_outcome          "rotated" | "transient_failure" | "terminal"
+ *   last_success_at       ms epoch of the last sign-in or renewal. Kept across
+ *                         sign-ins, sign-outs and session changes: it is the
+ *                         evidence that this client was ever signed in
+ *   last_outcome          "signed_in" | "rotated" | "transient_failure" | "terminal"
  *   last_error            { kind, status, message } for the last failure, or null
  *   consecutive_failures  failures since the last success
  *   next_retry_at         ms epoch before which no refresh is attempted, or null
@@ -90,7 +92,12 @@ function readLicenseStatus() {
   // reporting: starting a sign-in changes the session, and must not make an
   // ended or revoked session read as healthy.
   if (raw.auth_context && raw.auth_context !== authContext()) {
-    return { ...emptyStatus(), revision: raw.revision || 0, last_terminal_reason: lastTerminalReason(raw) };
+    return {
+      ...emptyStatus(),
+      revision: raw.revision || 0,
+      last_terminal_reason: lastTerminalReason(raw),
+      last_success_at: raw.last_success_at ?? null,
+    };
   }
   return { ...emptyStatus(), ...raw };
 }
@@ -323,19 +330,27 @@ function clearTerminal({ source = "session_start" } = {}) {
 
 /**
  * /skillmeter:signin entry point, before the browser step: start from a clean
- * record. The last terminal reason is kept until the sign-in completes.
+ * record. The last terminal reason is kept until the sign-in completes, and
+ * the last success as the evidence of an earlier sign-in.
  */
 function clearLicenseStatus({ source = "signin" } = {}) {
   return updateLicenseStatus((prev) => ({
     ...emptyStatus(),
     last_terminal_reason: lastTerminalReason(prev),
+    last_success_at: prev.last_success_at,
     updated_by: source,
   }));
 }
 
-/** A sign-in committed a new license: a clean record. */
-function recordSignin({ source = "signin" } = {}) {
-  return updateLicenseStatus(() => ({ ...emptyStatus(), updated_by: source }));
+/** A sign-in committed a new license: a clean record that counts as a success. */
+function recordSignin({ source = "signin", now = Date.now() } = {}) {
+  return updateLicenseStatus(() => ({
+    ...emptyStatus(),
+    last_attempt_at: now,
+    last_success_at: now,
+    last_outcome: "signed_in",
+    updated_by: source,
+  }));
 }
 
 module.exports = {

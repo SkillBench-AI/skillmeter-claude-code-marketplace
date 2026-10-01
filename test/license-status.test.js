@@ -109,7 +109,7 @@ test("success resets the counters and clears terminal", () => {
   assert.equal(s.updated_by, "session_start");
 });
 
-test("clearTerminal keeps history but re-arms retries; clearLicenseStatus wipes", () => {
+test("clearTerminal keeps history but re-arms retries; clearLicenseStatus wipes all but the last success", () => {
   ls.recordRefreshSuccess({ source: "daemon", now: 100 });
   ls.recordTerminal({ source: "daemon", reason: ls.TERMINAL_REASONS.REACTIVATION_REQUIRED, now: 200 });
   let s = ls.clearTerminal({ source: "session_start" });
@@ -120,8 +120,36 @@ test("clearTerminal keeps history but re-arms retries; clearLicenseStatus wipes"
   assert.equal(s.last_error.kind, "reactivation_required", "last error kept for notices");
 
   s = ls.clearLicenseStatus({ source: "signin" });
-  assert.equal(s.last_success_at, null);
   assert.equal(s.last_error, null);
+  assert.equal(s.last_outcome, null);
+  assert.equal(s.last_success_at, 100, "the evidence of a sign-in is not wiped");
+});
+
+test("a record from another session reads as empty except for the last success", () => {
+  ls.recordRefreshSuccess({ source: "drain", now: 300 });
+  ls.recordTerminal({ source: "drain", reason: ls.TERMINAL_REASONS.REACTIVATION_REQUIRED, now: 400 });
+  writeJson(sessionPath(stateDir), { auth_generation: "another-session" });
+  const s = ls.readLicenseStatus();
+  assert.equal(s.terminal, null, "another session's terminal state cannot block this one");
+  assert.equal(s.last_outcome, null);
+  assert.equal(s.last_success_at, 300);
+  // Written back on the next update, under this session.
+  ls.recordRefreshFailure({ source: "drain", now: 500, baseMs: BASE, capMs: CAP });
+  assert.equal(ls.readLicenseStatus().last_success_at, 300);
+  fs.rmSync(sessionPath(stateDir));
+});
+
+test("recordSignin starts a clean record that counts as a success", () => {
+  ls.recordRefreshFailure({ source: "drain", now: 10, baseMs: BASE, capMs: CAP });
+  ls.recordTerminal({ source: "drain", reason: ls.TERMINAL_REASONS.REACTIVATION_REQUIRED, now: 20 });
+  const s = ls.recordSignin({ source: "signin", now: 30 });
+  assert.equal(s.last_success_at, 30);
+  assert.equal(s.last_attempt_at, 30);
+  assert.equal(s.last_outcome, "signed_in");
+  assert.equal(s.terminal, null);
+  assert.equal(s.last_error, null);
+  assert.equal(s.consecutive_failures, 0);
+  assert.equal(s.next_retry_at, null);
 });
 
 test("the last terminal reason outlives SessionStart, a started sign-in and a session change", () => {

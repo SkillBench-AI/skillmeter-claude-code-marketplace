@@ -4,7 +4,8 @@
 // device flow waits for browser approval, and the flow's outcome replaces it.
 // The sign-in notice ignores `pending`, and the slash command reports a sign-in
 // in progress instead of starting a new one, which would discard the waiting
-// sign-in.
+// sign-in. A committed sign-in also counts as a success in the status record,
+// which is how the collection state tells a lost license from a fresh install.
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
@@ -189,11 +190,23 @@ test("a failed sign-in that was overtaken leaves the newer one's marker", () => 
   assert.match(f.slashCommand(), /sign-in in progress/);
 });
 
-test("a finished sign-in replaces pending with success", () => {
+test("a finished sign-in replaces pending with success and records a success", () => {
   const f = fixture();
   const result = f.signin({ tty: true });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(f.sentinel().status, "success");
+  assert.equal(f.status().last_outcome, "signed_in");
+  assert.equal(typeof f.status().last_success_at, "number");
+});
+
+test("a background sign-in, the path /skillmeter:signin takes, also records a success", () => {
+  const f = fixture();
+  assert.equal(f.signin({ tty: false }).status, 0);
+  const poll = f.pollInBackground();
+  assert.equal(poll.status, 0, poll.stderr);
+  assert.equal(f.sentinel().status, "success");
+  assert.equal(f.status().last_outcome, "signed_in");
+  assert.equal(typeof f.status().last_success_at, "number");
 });
 
 test("a failed sign-in replaces pending with failure", () => {
