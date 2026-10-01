@@ -94,14 +94,15 @@ function client({ policy = { orgs: { [ORG]: true }, repositories: { [REPO_KEY]: 
 const title = (card) => (card.match(/\[ ([A-Z ]+) \]/) || [null, "no card"])[1];
 
 const CASES = [
-  { name: "never signed in", expect: ["never_signed_in", "ACTION REQUIRED", /Reason {8}not signed in/], records: false },
+  { name: "never signed in", expect: ["never_signed_in", "ACTION REQUIRED", /Reason {8}not signed in/], unlike: /administrator/, records: false },
   { name: "signed out", setup: `signIn(${JSON.stringify(license())}); cs.signOut();`,
-    expect: ["signed_out", "ACTION REQUIRED", /Reason {8}signed out/], records: false },
+    expect: ["signed_out", "ACTION REQUIRED", /Reason {8}signed out/], unlike: /administrator/, records: false },
   { name: "signed out, then a sign-in started and abandoned",
     setup: `signIn(${JSON.stringify(license())}); cs.signOut(); startSigninAndAbandon();`,
-    expect: ["token_missing", "ACTION REQUIRED", /Reason {8}license token missing/], records: false },
+    expect: ["token_missing", "ACTION REQUIRED", /Reason {8}license token missing/], unlike: /administrator/, records: false },
   { name: "revoked", setup: `signIn(${JSON.stringify(license())}); revoke();`,
-    expect: ["revoked", "ACTION REQUIRED", /Reason {8}organization license inactive[\s\S]*[Cc]ontact your administrator/], records: false },
+    expect: ["revoked", "ACTION REQUIRED", /Reason {8}organization license inactive[\s\S]*Telemetry remains OFF\. Contact your administrator\./],
+    unlike: /until you choose/, records: false },
   { name: "session ended, license stored", setup: `signIn(${JSON.stringify(license())}); endSession();`,
     expect: ["delivery_paused", "ACTION REQUIRED", /Sign-in expired\. Uploads are paused/], records: true },
   // The ended session is the reason whatever this repository's setting: the
@@ -144,6 +145,7 @@ for (const c of CASES) {
     const card = f.card();
     assert.equal(title(card), cardTitle);
     assert.match(card, body);
+    if (c.unlike) assert.doesNotMatch(card, c.unlike);
     const recorded = f.records();
     assert.equal(recorded, c.records, "what the capture hook actually does");
     // The card's wording must be true about capture. Only "off" and "on" claim
