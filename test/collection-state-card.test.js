@@ -32,11 +32,14 @@ const SETUP = `
   const startSigninAndAbandon = () => { cs.markEngaged(); ls.clearLicenseStatus({ source: "signin" }); };
 `;
 
-function client({ policy = { orgs: { [ORG]: true }, repositories: { [REPO_KEY]: true } }, setup = "", owner = ORG }) {
+function client({ policy = { orgs: { [ORG]: true }, repositories: { [REPO_KEY]: true } }, setup = "", owner = ORG, cwdMissing = false }) {
   const root = makeTempDir("skm-card-");
   const state = path.join(root, "state");
   const data = path.join(root, "data");
   const repo = path.join(root, "widgets");
+  // The working directory the hooks are given; one that no longer exists when
+  // `cwdMissing`.
+  const cwd = cwdMissing ? path.join(root, "gone") : repo;
   writeFile(path.join(repo, ".git", "config"), `[remote "origin"]\n\turl = https://github.com/${owner}/widgets.git\n`);
   writeCredentials(state, { device_id: "CARD-DEVICE", hash_salt: "0123456789abcdef0123456789abcdef" }, { dataDir: data });
   writeTelemetryPolicy(state, policy);
@@ -72,16 +75,16 @@ function client({ policy = { orgs: { [ORG]: true }, repositories: { [REPO_KEY]: 
   return {
     state: () => JSON.parse(node(["-e", `
       const { readCollectionState } = require(${JSON.stringify(path.join(SCRIPTS, "lib/collection-state.js"))});
-      process.stdout.write(JSON.stringify(readCollectionState({ cwd: ${JSON.stringify(repo)} })));
+      process.stdout.write(JSON.stringify(readCollectionState({ cwd: ${JSON.stringify(cwd)} })));
     `])),
     card: () => JSON.parse(node([path.join(SCRIPTS, "session_start.js")], {
-      input: JSON.stringify({ session_id: "card", cwd: repo, source: "startup" }),
+      input: JSON.stringify({ session_id: "card", cwd, source: "startup" }),
     }).trim().split("\n").pop()).systemMessage || "",
     records: () => {
       const before = queuedEvents();
       node([path.join(SCRIPTS, "hook.js"), "UserPromptSubmit"], {
-        cwd: repo,
-        input: JSON.stringify({ session_id: "card", cwd: repo, prompt: "hello" }),
+        cwd: cwdMissing ? root : repo,
+        input: JSON.stringify({ session_id: "card", cwd, prompt: "hello" }),
       });
       return queuedEvents() > before;
     },
@@ -101,6 +104,11 @@ const CASES = [
     expect: ["revoked", "ACTION REQUIRED", /Reason {8}organization license inactive[\s\S]*[Cc]ontact your administrator/], records: false },
   { name: "session ended, license stored", setup: `signIn(${JSON.stringify(license())}); endSession();`,
     expect: ["delivery_paused", "ACTION REQUIRED", /Sign-in expired\. Uploads are paused/], records: true },
+  // The ended session is the reason whatever this repository's setting: the
+  // card is about uploads, and makes no claim that this repository records.
+  { name: "session ended, in a repository not chosen", policy: { orgs: { [ORG]: true } },
+    setup: `signIn(${JSON.stringify(license())}); endSession();`,
+    expect: ["delivery_paused", "ACTION REQUIRED", /Sign-in expired\. Uploads are paused/], records: false },
   { name: "paused", policy: { enabled: false, orgs: { [ORG]: true }, repositories: { [REPO_KEY]: true } },
     setup: `signIn(${JSON.stringify(license())});`,
     expect: ["paused", "TELEMETRY PAUSED", /\/skillmeter:telemetry enable-global/], records: false },
@@ -118,6 +126,10 @@ const CASES = [
     setup: `signIn(${JSON.stringify(license())});`, expect: ["unconfigured", "no card", /^$/], records: false },
   { name: "repository outside the licensed organization", owner: "someone-else", setup: `signIn(${JSON.stringify(license())});`,
     expect: ["unconfigured", "no card", /^$/], records: false },
+  { name: "repository telemetry turned off", policy: { orgs: { [ORG]: true }, repositories: { [REPO_KEY]: false } },
+    setup: `signIn(${JSON.stringify(license())});`, expect: ["unconfigured", "no card", /^$/], records: false },
+  { name: "no working directory", cwdMissing: true, setup: `signIn(${JSON.stringify(license())});`,
+    expect: ["unconfigured", "no card", /^$/], records: false },
   { name: "recording", setup: `signIn(${JSON.stringify(license())});`,
     expect: ["recording", "TELEMETRY ON", /Sanitized telemetry is active/], records: true },
   { name: "recording on an expired license", setup: `signIn(${JSON.stringify(license(-3600))});`,
@@ -134,9 +146,10 @@ for (const c of CASES) {
     assert.match(card, body);
     const recorded = f.records();
     assert.equal(recorded, c.records, "what the capture hook actually does");
-    // The card's wording must be true about capture.
+    // The card's wording must be true about capture. Only "off" and "on" claim
+    // anything about it; "uploads are paused" is about delivery.
     if (/OFF|PAUSED/.test(card)) assert.equal(recorded, false, "a card that says off is shown only where nothing is recorded");
-    if (/TELEMETRY ON|Uploads are paused/.test(card)) assert.equal(recorded, true);
+    if (/TELEMETRY ON/.test(card)) assert.equal(recorded, true, "a card that says on is shown only where something is recorded");
     if (state === "paused") assert.doesNotMatch(card, /\/skillmeter:signin/, "the pause is the reason, whatever else holds");
   });
 }
