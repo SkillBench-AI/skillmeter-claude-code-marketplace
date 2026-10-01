@@ -191,6 +191,29 @@ test("files: sign-out, then a sign-in that is started and abandoned", () => {
   assert.equal(readCollectionState().state, STATES.SIGNED_OUT);
 });
 
+// Renewal waits for a drain with something to send, so an idle client usually
+// holds an expired license. Presence decides, as it does for capture.
+test("files: an expired stored license still reads as signed in", () => {
+  const expired = makeJwt({ exp: Math.floor(Date.now() / 1000) - 3600, org: { login: ORG }, orgs: [ORG] });
+  credstore.markEngaged();
+  credstore.commitSignin({ jwt: expired, onCommit: () => licenseStatus.recordSignin() });
+  assert.deepEqual(readCollectionState({ cwd: checkout(ORG) }), { state: STATES.RECORDING, reason: "project_enabled" });
+  assert.equal(readCollectionState().state, STATES.UNCONFIGURED, "and without a directory");
+});
+
+// The kept reason outlives a sign-out and a sign-in that starts, so an ended
+// session can lose its license. Nothing uploads without one either, so the
+// missing license is what the state reports.
+test("files: an ended session that then loses its license reads token_missing, not delivery_paused", () => {
+  signIn();
+  licenseStatus.recordTerminal({ source: "drain", reason: licenseStatus.TERMINAL_REASONS.REACTIVATION_REQUIRED, status: 400 });
+  assert.equal(readCollectionState().state, STATES.DELIVERY_PAUSED);
+  // The license removed without a sign-out: a corrupt or deleted session file.
+  writeFile(sessionPath(stateDir), JSON.stringify({ auth_generation: "unrelated" }));
+  assert.equal(licenseStatus.isSessionEnded(), true, "the reason is still kept");
+  assert.equal(readCollectionState().state, STATES.TOKEN_MISSING);
+});
+
 test("files: a 402 reads as revoked, also after SessionStart cleared the terminal state", () => {
   signIn();
   const expected = credstore.recoverySnapshot();
