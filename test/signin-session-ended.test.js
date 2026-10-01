@@ -13,7 +13,7 @@ const path = require("path");
 const os = require("os");
 const { spawnSync } = require("child_process");
 
-const { accountDir, makeTempDir, makeJwt, writeCredentials, readSession, writeFile } = require("../testing/helpers");
+const { accountDir, makeTempDir, makeJwt, writeCredentials, readSession, writeFile, writeTelemetryPolicy } = require("../testing/helpers");
 
 const SCRIPTS = path.resolve(__dirname, "../skillmeter/scripts");
 const LICENSE_STATUS = path.join(SCRIPTS, "lib/license-status.js");
@@ -85,6 +85,35 @@ function fixture() {
     return JSON.parse(result.stdout).hookSpecificOutput.additionalContext;
   };
 
+  // A checkout of a repository whose organization and repository telemetry are on.
+  const enabledRepository = () => {
+    const repo = path.join(root, "widgets");
+    writeFile(path.join(repo, ".git", "config"), `[remote "origin"]\n\turl = https://github.com/acme/widgets.git\n`);
+    writeTelemetryPolicy(state, { orgs: { acme: true }, repositories: { "github.com/acme/widgets": true } });
+    return repo;
+  };
+
+  // The SessionStart hook in `cwd`; returns the title of the card it shows.
+  const sessionStart = (cwd) => {
+    const result = spawnSync(process.execPath, [path.join(SCRIPTS, "session_start.js")], {
+      encoding: "utf8",
+      timeout: 10_000,
+      cwd: root,
+      env: {
+        ...env,
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        XDG_CONFIG_HOME: path.join(root, ".config"),
+        SKILLMETER_BROKER_URL: "https://id.test",
+        // Nothing may upload anywhere real.
+        SKILLMETER_BACKEND_URL: "http://127.0.0.1:9",
+      },
+      input: JSON.stringify({ session_id: "ended-session", cwd, source: "startup" }),
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const message = JSON.parse(result.stdout.trim().split("\n").pop()).systemMessage || "";
+    return (message.match(/\[ ([A-Z ]+) \]/) || [null, "no card"])[1];
+  };
+
   const urls = () => (fs.existsSync(calls) ? fs.readFileSync(calls, "utf8").trim().split("\n") : []);
   const session = () => readSession(state, { dataDir: data });
   const statusFile = path.join(accountDir(state, data), "license-status.json");
@@ -95,7 +124,7 @@ function fixture() {
     assert.equal(result.status, "pending");
     fs.writeFileSync(sentinel, JSON.stringify({ ...result, expires_at: Date.now() - 1 }));
   };
-  return { stale, status, signin, slashCommand, urls, session, statusFile, expirePending };
+  return { stale, status, signin, slashCommand, enabledRepository, sessionStart, urls, session, statusFile, expirePending };
 }
 
 const END_SESSION = "ls.recordTerminal({ source: \"drain\", reason: ls.TERMINAL_REASONS.REACTIVATION_REQUIRED, status: 400 });";
@@ -179,4 +208,16 @@ test("a completed background sign-in ends it", () => {
   assert.equal(poll.status, 0, poll.stderr);
   assert.equal(f.session().refresh_token, "fixture-new-refresh");
   assert.match(f.slashCommand(), /sign-in state JSON/);
+});
+
+test("the SessionStart card asks for sign-in in every session until a sign-in completes", () => {
+  const f = fixture();
+  const repo = f.enabledRepository();
+  assert.equal(f.sessionStart(repo), "TELEMETRY ON");
+  f.status(END_SESSION);
+  assert.equal(f.sessionStart(repo), "ACTION REQUIRED");
+  // That SessionStart cleared `terminal`; no refresh writes it again.
+  assert.equal(f.sessionStart(repo), "ACTION REQUIRED", "the next session too");
+  assert.equal(f.signin().status, 0);
+  assert.equal(f.sessionStart(repo), "TELEMETRY ON");
 });
