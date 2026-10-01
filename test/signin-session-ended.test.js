@@ -94,25 +94,53 @@ function fixture() {
     return repo;
   };
 
+  const hookEnv = {
+    ...env,
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    XDG_CONFIG_HOME: path.join(root, ".config"),
+    SKILLMETER_BROKER_URL: "https://id.test",
+    // Nothing may upload anywhere real.
+    SKILLMETER_BACKEND_URL: "http://127.0.0.1:9",
+  };
+
   // The SessionStart hook in `cwd`; returns the title of the card it shows.
+  // lastCard() is that card's full text.
+  let lastCard = "";
   const sessionStart = (cwd) => {
     const result = spawnSync(process.execPath, [path.join(SCRIPTS, "session_start.js")], {
       encoding: "utf8",
       timeout: 10_000,
       cwd: root,
-      env: {
-        ...env,
-        GIT_CONFIG_GLOBAL: "/dev/null",
-        XDG_CONFIG_HOME: path.join(root, ".config"),
-        SKILLMETER_BROKER_URL: "https://id.test",
-        // Nothing may upload anywhere real.
-        SKILLMETER_BACKEND_URL: "http://127.0.0.1:9",
-      },
+      env: hookEnv,
       input: JSON.stringify({ session_id: "ended-session", cwd, source: "startup" }),
     });
     assert.equal(result.status, 0, result.stderr);
-    const message = JSON.parse(result.stdout.trim().split("\n").pop()).systemMessage || "";
-    return (message.match(/\[ ([A-Z ]+) \]/) || [null, "no card"])[1];
+    lastCard = JSON.parse(result.stdout.trim().split("\n").pop()).systemMessage || "";
+    return (lastCard.match(/\[ ([A-Z ]+) \]/) || [null, "no card"])[1];
+  };
+
+  // Whether a prompt in `cwd` is recorded: the real capture hook runs, and the
+  // repository queues gain an event.
+  const queuedEvents = () => {
+    const queues = path.join(data, "logs", "repositories");
+    if (!fs.existsSync(queues)) return 0;
+    return fs.readdirSync(queues).flatMap((id) =>
+      fs.readdirSync(path.join(queues, id))
+        .filter((name) => /^events\.jsonl/.test(name))
+        .map((name) => fs.readFileSync(path.join(queues, id, name), "utf8").split("\n").filter(Boolean).length)
+    ).reduce((sum, count) => sum + count, 0);
+  };
+  const recordsPrompt = (cwd) => {
+    const before = queuedEvents();
+    const result = spawnSync(process.execPath, [path.join(SCRIPTS, "hook.js"), "UserPromptSubmit"], {
+      encoding: "utf8",
+      timeout: 10_000,
+      cwd,
+      env: hookEnv,
+      input: JSON.stringify({ session_id: "ended-session", cwd, prompt: "hello" }),
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return queuedEvents() > before;
   };
 
   const urls = () => (fs.existsSync(calls) ? fs.readFileSync(calls, "utf8").trim().split("\n") : []);
@@ -125,7 +153,10 @@ function fixture() {
     assert.equal(result.status, "pending");
     fs.writeFileSync(sentinel, JSON.stringify({ ...result, expires_at: Date.now() - 1 }));
   };
-  return { stale, status, signin, slashCommand, enabledRepository, sessionStart, urls, session, statusFile, expirePending };
+  return {
+    stale, status, signin, slashCommand, enabledRepository, sessionStart, recordsPrompt, urls, session, statusFile, expirePending,
+    lastCard: () => lastCard,
+  };
 }
 
 const END_SESSION = "ls.recordTerminal({ source: \"drain\", reason: ls.TERMINAL_REASONS.REACTIVATION_REQUIRED, status: 400 });";
@@ -232,4 +263,22 @@ test("after a sign-out, /skillmeter:signin does not report the ended session", (
   const context = f.slashCommand();
   assert.match(context, /^Sign-in is required\./m);
   assert.doesNotMatch(context, /session ended/);
+});
+
+// Capture keys on a stored license (ADR 001, decision 3), and an ended session
+// keeps its license. The card may say telemetry is off only where hooks record
+// nothing.
+test("the sign-in card says telemetry is off only when hooks record nothing", () => {
+  const f = fixture();
+  const repo = f.enabledRepository();
+  f.status(END_SESSION);
+  assert.equal(f.sessionStart(repo), "ACTION REQUIRED");
+  assert.equal(f.recordsPrompt(repo), true, "an ended session's license still records");
+  assert.doesNotMatch(f.lastCard(), /OFF/);
+  assert.match(f.lastCard(), /Uploads are paused/);
+
+  f.status(`require(${JSON.stringify(CREDSTORE)}).signOut();`);
+  assert.equal(f.sessionStart(repo), "ACTION REQUIRED");
+  assert.equal(f.recordsPrompt(repo), false, "a signed-out client records nothing");
+  assert.match(f.lastCard(), /remains OFF/);
 });

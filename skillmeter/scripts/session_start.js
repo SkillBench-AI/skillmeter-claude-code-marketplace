@@ -7,6 +7,7 @@ const {
 } = require("./lib/transfer");
 const {
   clearTerminal,
+  isSessionEnded,
   lastTerminalReason,
   readLicenseStatus,
   TERMINAL_REASONS,
@@ -37,6 +38,7 @@ const {
 const { getLicenseAudiences } = require("./lib/jwt");
 const {
   signInRequiredBanner,
+  sessionEndedBanner,
   telemetryConsentRequiredBanner,
   telemetryRepositoryRequiredBanner,
   telemetryActiveBanner,
@@ -133,7 +135,9 @@ function runSessionStartHook() {
           credstore.markUploadNotified();
         }
       }
-      if (!credstore.isSignedIn() || signInRequiredToRecover()) {
+      if (credstore.isSignedIn() && isSessionEnded()) {
+        lines.push(sessionEndedBanner());
+      } else if (!credstore.isSignedIn() || signInRequiredToRecover()) {
         lines.push(signInRequiredBanner());
       } else if (gate.mode === "org_consent_required") {
         lines.push(telemetryConsentRequiredBanner(repoScopeDecision.remoteOrg));

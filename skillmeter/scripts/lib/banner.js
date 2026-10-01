@@ -138,6 +138,20 @@ function signInRequiredBanner() {
   ]);
 }
 
+// Shown at SessionStart when the broker ended the session while a license is
+// still stored. Hooks keep recording on a stored license (ADR 001, decision 3),
+// so only uploads wait for a new sign-in.
+function sessionEndedBanner() {
+  return card([
+    "[ ACTION REQUIRED ]",
+    "",
+    "Sign-in expired. Uploads are paused",
+    "until you sign in again.",
+    "",
+    "→ /skillmeter:signin",
+  ]);
+}
+
 // Shown at SessionStart when telemetry is actively capturing this session.
 function telemetryActiveBanner(org) {
   const lines = [
@@ -171,6 +185,7 @@ function telemetryFailedNotice(error) {
 module.exports = {
   signinStatusBanner,
   signInRequiredBanner,
+  sessionEndedBanner,
   telemetryConsentRequiredBanner,
   telemetryRepositoryRequiredBanner,
   signinRepositoryInventoryBanner,
