@@ -108,6 +108,17 @@ async function main() {
   // Existing and new users receive the same one-time backfill lifecycle.
   try { initializeBackfillLifecycle(); } catch {}
 
+  // A device flow is waiting for browser approval. A new intent here would
+  // discard it, and the license on disk says nothing about it yet.
+  if (credstore.isSigninPending()) {
+    addContext(
+      "SkillMeter sign-in in progress. Approve the code in the browser, then " +
+      "run /skillmeter:signin again to confirm. To start over instead:\n" +
+      RUN_INSTRUCTION
+    );
+    return;
+  }
+
   // A session the broker ended can leave a license that is still valid. It is
   // not a sign-in to report, and the sign-in command must still find the
   // ended session, so nothing is reset here.

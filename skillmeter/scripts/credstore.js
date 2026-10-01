@@ -243,6 +243,14 @@ function readSigninResult() {
   return safeReadJson(SIGNIN_RESULT_FILE, null);
 }
 
+// A device flow is waiting for browser approval: /skillmeter:signin wrote
+// `pending` when it started, and neither a final result nor the device code's
+// expiry has ended it.
+function isSigninPending(now = Date.now()) {
+  const result = readSigninResult();
+  return result?.status === "pending" && typeof result.expires_at === "number" && now < result.expires_at;
+}
+
 // Pre-create the sentinel so SessionStart `watchPaths` can register it before
 // the first sign-in (some file watchers only fire on modify, not create).
 function ensureSigninResultFile() {
@@ -462,6 +470,7 @@ module.exports = {
   SIGNIN_RESULT_FILE,
   writeSigninResult,
   readSigninResult,
+  isSigninPending,
   ensureSigninResultFile,
   // Upload result sentinel (for the SessionStart "telemetry sent" notice)
   writeUploadResult,

@@ -88,7 +88,14 @@ function fixture() {
   const urls = () => (fs.existsSync(calls) ? fs.readFileSync(calls, "utf8").trim().split("\n") : []);
   const session = () => readSession(state, { dataDir: data });
   const statusFile = path.join(accountDir(state, data), "license-status.json");
-  return { stale, status, signin, slashCommand, urls, session, statusFile };
+  // Let the device code of a started sign-in run out.
+  const expirePending = () => {
+    const sentinel = path.join(accountDir(state, data), "signin-result.json");
+    const result = JSON.parse(fs.readFileSync(sentinel, "utf8"));
+    assert.equal(result.status, "pending");
+    fs.writeFileSync(sentinel, JSON.stringify({ ...result, expires_at: Date.now() - 1 }));
+  };
+  return { stale, status, signin, slashCommand, urls, session, statusFile, expirePending };
 }
 
 const END_SESSION = "ls.recordTerminal({ source: \"drain\", reason: ls.TERMINAL_REASONS.REACTIVATION_REQUIRED, status: 400 });";
@@ -145,10 +152,18 @@ test("a sign-in that starts and is abandoned leaves the session ended", () => {
   // ! bin/signin: a new intent, the record cleared, the browser step never done.
   const started = f.signin({ tty: false });
   assert.equal(started.status, 0, started.stderr);
-  assert.notEqual(f.session().auth_generation, "before-the-command");
+  const intent = f.session().auth_generation;
+  assert.notEqual(intent, "before-the-command");
   assert.equal(f.session().license_jwt, f.stale, "the old license is still stored");
 
-  const context = f.slashCommand();
+  // Confirming before the browser step is done: no new intent, no stale report.
+  let context = f.slashCommand();
+  assert.match(context, /sign-in in progress/);
+  assert.match(context, /! .*bin\/signin/);
+  assert.equal(f.session().auth_generation, intent, "the waiting sign-in is not discarded");
+
+  f.expirePending();
+  context = f.slashCommand();
   assert.match(context, /session ended\. Sign-in is required\./);
   assert.doesNotMatch(context, /sign-in state JSON/);
   // The sign-in command, run again, still signs in, and that ends it.

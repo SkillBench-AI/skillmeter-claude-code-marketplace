@@ -36,6 +36,8 @@ for (const stream of [process.stdout, process.stderr]) {
 // (env > settings > dev-bundle > prod default).
 
 const BACKGROUND_LOG = path.join(STATE_DIR, "activate-poll.log");
+// Used when the broker does not say how long its device code lives.
+const DEFAULT_DEVICE_CODE_LIFETIME_S = 15 * 60;
 
 function log(msg) {
   process.stderr.write(msg + "\n");
@@ -114,6 +116,8 @@ async function runBackgroundPoll(deviceId, deviceCode, interval, generation) {
       recordSignin({ source: "signin" });
       credstore.writeSigninResult({ status: "success" });
     } })) {
+      // A newer sign-in or a sign-out took over. Its own result, or the
+      // pending result's expiry, ends the wait.
       log(`[${new Date().toISOString()}] sign-in discarded: authentication changed during poll`);
       process.exit(0);
     }
@@ -171,6 +175,8 @@ async function main() {
 
   // Straight to the device grant.
   const device = await requestDeviceCode();
+  const lifetimeS = Number(device.expires_in) > 0 ? Number(device.expires_in) : DEFAULT_DEVICE_CODE_LIFETIME_S;
+  credstore.writeSigninResult({ status: "pending", expires_at: Date.now() + lifetimeS * 1000 }, expected);
 
   const expiresMin = Math.round(device.expires_in / 60);
   const clipboardCopied = copyToClipboard(device.user_code);
@@ -220,13 +226,17 @@ async function runForegroundPoll(deviceId, device, expected) {
     const { idToken, refreshToken } = await pollDeviceToken(device.device_code, device.interval || 5);
     const licenseJwt = await exchangeForLicense(idToken, deviceId);
     stop();
-    if (!credstore.commitSignin({ jwt: licenseJwt, refreshToken, expected, onCommit: () => recordSignin({ source: "signin" }) })) {
+    if (!credstore.commitSignin({ jwt: licenseJwt, refreshToken, expected, onCommit: () => {
+      recordSignin({ source: "signin" });
+      credstore.writeSigninResult({ status: "success" });
+    } })) {
       say("Sign-in discarded: authentication changed during issuance.");
       process.exit(0);
     }
     showSigninStatus();
   } catch (err) {
     stop();
+    credstore.writeSigninResult({ status: "failure", error: err.message }, expected);
     say(`Sign-in failed: ${err.message}`);
     process.exit(1);
   }

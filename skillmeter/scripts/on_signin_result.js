@@ -41,7 +41,8 @@ function emit(obj) {
 
 async function main() {
   const result = credstore.readSigninResult();
-  if (!result || result.status === "none") return;
+  // `pending` marks a device flow in progress; only its outcome is reported.
+  if (!result || result.status === "none" || result.status === "pending") return;
 
   // Only notify once per distinct result.
   let lastTs = null;
