@@ -4,9 +4,9 @@
  *
  * The filesystem is the source of truth. Hooks append to the active
  * `events.jsonl`, final-session hooks seal it to `events.jsonl.<ts>`, and a
- * detached drain (spawned by Stop, SessionEnd and SessionStart) or the retry
- * monitor uploads sealed event logs plus queued transcript delta chunks,
- * refreshing the license just before it sends.
+ * detached drain (spawned by Stop, SessionEnd and SessionStart) uploads sealed
+ * event logs plus queued transcript delta chunks, refreshing the license just
+ * before it sends. Whatever a drain cannot send waits for the next one.
  */
 
 const fs = require("fs");
@@ -403,7 +403,7 @@ function cursorPath(transcriptId, repository) {
 }
 
 // Uncached (direct disk) read so a cursor advanced by one process is seen by
-// another (Stop vs detached drain vs monitor), matching getLicenseTokenUncached.
+// another (Stop vs detached drain), matching getLicenseTokenUncached.
 function readCursor(transcriptId, repository) {
   return safeReadJson(cursorPath(transcriptId, repository), null);
 }
@@ -800,10 +800,9 @@ async function drainDeltaChunks(timeoutMs) {
     const queued = listDeltaChunks();
     if (queued.length === 0) return { ok: 0, errors: [] };
     // Chunks that failed recently are waiting out their per-chunk backoff.
-    // Skipping them here is what bounds the retry rate: drains are spawned by
-    // the Stop hook as well as by the retry daemon, so without this a chunk the
-    // backend always rejects is re-sent at whatever rate turns end — and, via
-    // the monitor's notifications, those two feed each other.
+    // Skipping them here is what bounds the retry rate: the Stop hook spawns a
+    // drain at the end of every turn, so without this a chunk the backend
+    // always rejects is re-sent at whatever rate turns end.
     const now = Date.now();
     const files = queued.filter((file) =>
       isChunkEligible(
@@ -1132,12 +1131,6 @@ function listSealedEventLogs() {
   return files;
 }
 
-// Total queued (un-uploaded) artifacts: sealed event logs + delta transcript
-// chunks. Used by the retry daemon to detect drain progress for backoff.
-function queuedFileCount() {
-  return listSealedEventLogs().length + listDeltaChunks().length;
-}
-
 // Tally { ok, error } results from a batch into { ok: <count>, errors: [...] }.
 function tally(results) {
   let ok = 0;
@@ -1334,7 +1327,6 @@ module.exports = {
   drainFailedLogs,
   drainDeltaChunks,
   drainQueuesOnce,
-  queuedFileCount,
   cleanupStaleFiles,
   purgeRepositoryQueue,
   purgeOrganizationQueues,

@@ -12,8 +12,5 @@
     "telemetry",
     "analytics",
     "usage"
-  ],
-  "experimental": {
-    "monitors": "./monitors/monitors.json"
-  }
+  ]
 }

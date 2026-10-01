@@ -1,6 +1,6 @@
 /**
  * Resolve persistent plugin data from CLAUDE_PLUGIN_DATA or the installed layout.
- * Hooks receive the variable; monitors pass its substituted value explicitly.
+ * Hooks receive the variable.
  * Skill commands start with node to match their tool grant, so they rely on
  * derivation from the caller's resolved plugin root.
  *

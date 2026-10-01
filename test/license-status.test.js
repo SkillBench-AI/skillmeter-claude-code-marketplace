@@ -13,7 +13,7 @@ const { makeTempDir, setTestEnv, accountDir } = require("../testing/helpers");
 
 const stateDir = makeTempDir("skm-license-status-");
 setTestEnv("SKILLMETER_STATE_DIR", stateDir);
-setTestEnv("SKILLMETER_RETRY_DAEMON_INTERVAL_MS", "120000");
+setTestEnv("SKILLMETER_RETRY_BASE_MS", "120000");
 
 const ls = require("../skillmeter/scripts/lib/license-status");
 
