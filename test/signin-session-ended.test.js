@@ -17,6 +17,7 @@ const { accountDir, makeTempDir, makeJwt, writeCredentials, readSession, writeFi
 
 const SCRIPTS = path.resolve(__dirname, "../skillmeter/scripts");
 const LICENSE_STATUS = path.join(SCRIPTS, "lib/license-status.js");
+const CREDSTORE = path.join(SCRIPTS, "credstore.js");
 
 // A signed-in client whose license is valid for ten more minutes.
 function fixture() {
@@ -220,4 +221,15 @@ test("the SessionStart card asks for sign-in in every session until a sign-in co
   assert.equal(f.sessionStart(repo), "ACTION REQUIRED", "the next session too");
   assert.equal(f.signin().status, 0);
   assert.equal(f.sessionStart(repo), "TELEMETRY ON");
+});
+
+// The last terminal reason survives a sign-out. Only a stored license makes it
+// "your session ended"; a signed-out user is simply asked to sign in.
+test("after a sign-out, /skillmeter:signin does not report the ended session", () => {
+  const f = fixture();
+  f.status(END_SESSION + `require(${JSON.stringify(CREDSTORE)}).signOut();`);
+  assert.equal(f.status("process.stdout.write(String(ls.isSessionEnded()));"), "true", "the reason is still recorded");
+  const context = f.slashCommand();
+  assert.match(context, /^Sign-in is required\./m);
+  assert.doesNotMatch(context, /session ended/);
 });
