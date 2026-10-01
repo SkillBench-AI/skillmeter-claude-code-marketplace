@@ -15,3 +15,4 @@ supersede with a new ADR rather than rewriting history. Every ADR carries a
 | [004](004-shared-consent.md) | One consent record shared by every client on a machine | 2026-09-25 | Accepted; ADR 006 proposes superseding its shared-record decisions |
 | [005](005-per-client-session.md) | Per-client sessions: a Hydra refresh token, with the license as a cache | 2026-09-27 | Proposed; implemented in Claude 0.40.0 and 0.40.1 and Codex 0.11.0 |
 | [006](006-per-client-consent.md) | Per-client consent records | 2026-09-28 | Proposed; implemented in Codex 0.12.1 |
+| [007](007-upgrade-compatibility.md) | Upgrade compatibility evidence: pinned released code as regression input | 2026-09-26 | Proposed |

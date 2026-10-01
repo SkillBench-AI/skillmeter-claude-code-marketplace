@@ -1,10 +1,12 @@
-# ADR 005: Upgrade compatibility evidence
+# Upgrade Compatibility Evidence
 
-Status: proposed
+**Date:** 2026-09-26
+**Status:** Proposed
+**Related:** ADR 005 (per-client sessions), ADR 006 (per-client consent)
 
 Plugin versions, durable local formats and transport formats are separate
 contracts. A passing new-install test does not establish upgrade compatibility.
-Both plugins retain pinned released implementations as regression inputs, using
+This plugin retains pinned released implementations as regression inputs, using
 synthetic state only. A release transition is covered only at the boundaries its
 tests exercise; a green fixture matrix is not a promise of complete production
 compatibility or permission to replay historical data.
@@ -33,21 +35,21 @@ not an adopted version-retirement schedule.
 
 ## Current automated boundary
 
-`skillmeter/test/released-upgrades.test.js` loads actual planner and data-root
-resolver code from the immutable revisions in `compatibility/releases.json`.
+`test/released-upgrades.test.js` loads actual planner and data-root resolver code
+from the immutable revisions in `test/compatibility/releases.json`.
 It persists old cursors, then checks candidate append/reset planning, distinct
 authored repeats and persistent data-root identity after install-directory
 replacement. It does not run released hooks, authorization, pending-queue drain,
 shared-policy migration, server storage or an installer. Those require additional
 contracts; do not infer their acceptance from these pure-module checks.
 
-CI fetches full repository history and runs these tests on Node 20 and 22. Missing
+CI fetches full repository history and runs these tests on Node 22 and 24. Missing
 historical objects or a version/pin mismatch fail the tests rather than skip
 coverage. Local shallow clones must fetch the pinned objects before running
 `node --test`. Tests perform no network calls and never load real credentials or
 plugin data. Git history is trusted code, reviewed before adding a pin.
 
-The Codex repository maintains its own released-queue fixtures under the same
-contract. Cross-repository collector/reader verification remains a separate gate.
+Each client owns its local state (ADR 005, ADR 006), so the Codex repository
+keeps its own released fixtures and decides its own coverage. Cross-repository collector/reader verification remains a separate gate.
 Required branch/release checks and hosted cross-repository execution must be
 configured explicitly; this ADR does not imply they are already enabled.

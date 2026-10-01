@@ -5,9 +5,9 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs"), os = require("node:os"), path = require("node:path");
 const { releasedCode } = require("./compatibility/released-code.cjs");
 const releases = require("./compatibility/releases.json");
-const candidate = require("../scripts/lib/transcript-delta");
-const resolver = require("../scripts/lib/plugin-data-root");
-const repository = path.resolve(__dirname, "../..");
+const candidate = require("../skillmeter/scripts/lib/transcript-delta");
+const resolver = require("../skillmeter/scripts/lib/plugin-data-root");
+const repository = path.resolve(__dirname, "..");
 const row = (uuid, text) => ({ type: "assistant", uuid, message: { content: text } });
 const messages = plan => plan.chunks.flatMap(chunk => chunk.lines.map(JSON.parse)).map(record => record.message.content);
 
