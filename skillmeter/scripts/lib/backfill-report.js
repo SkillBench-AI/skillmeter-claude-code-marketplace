@@ -71,6 +71,18 @@ function transcriptReport(state) {
     );
 }
 
+// Chunks of the offer the backend acknowledged with a 2xx, each counted once
+// even if its success was logged twice. `backfill status` reports the same.
+function sentChunkCount(offerId) {
+  const sent = new Set();
+  for (const record of readRecords()) {
+    if (record.offerId !== offerId || record.event !== "upload_succeeded") continue;
+    sent.add(`${record.repository}\0${record.transcriptId}\0${record.seq}`);
+  }
+  return sent.size;
+}
+
 module.exports = {
+  sentChunkCount,
   transcriptReport,
 };

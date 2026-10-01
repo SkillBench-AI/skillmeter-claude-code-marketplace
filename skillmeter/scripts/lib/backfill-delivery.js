@@ -4,9 +4,11 @@
  *
  * Completion is read from the queue on disk rather than from counters: a
  * process that dies between an acknowledged upload and a counter update would
- * otherwise leave the import unfinished forever. A chunk is settled when the
- * backend acknowledged it (the pair is deleted) or when it exhausted its retries
- * (the pair carries the quarantine suffix).
+ * otherwise leave the import unfinished forever. A chunk is settled when it
+ * leaves the queue or exhausts its retries (the pair carries the quarantine
+ * suffix). Leaving the queue does not mean it was sent: a chunk whose offer is
+ * no longer authorized, or that aged out, is deleted unsent. So the notice
+ * counts sent chunks from the backend acknowledgements in the backfill log.
  */
 
 const fs = require("fs");
@@ -16,6 +18,7 @@ const { atomicWriteJson, safeReadJson } = require("./io");
 const { BACKFILL_RESULT_FILE, REPOSITORIES_LOG_DIR } = require("./paths");
 const { QUARANTINE_SUFFIX } = require("./chunk-retry");
 const { appendBackfillLog } = require("./backfill-log");
+const { sentChunkCount } = require("./backfill-report");
 const {
   markBackfillDelivered,
   readBackfillState,
@@ -99,11 +102,16 @@ function settleBackfillDelivery() {
   });
   if (!marked.delivered) return null;
 
+  const queuedChunks = marked.state.queued_chunks || 0;
+  const sentChunks = Math.min(sentChunkCount(state.offer_id), queuedChunks);
   const result = {
     status: "delivered",
     offerId: state.offer_id,
     sessions: marked.state.processed_transcripts || 0,
-    queuedChunks: marked.state.queued_chunks || 0,
+    queuedChunks,
+    sentChunks,
+    // Set aside after exhausting retries, or deleted unsent.
+    unsentChunks: queuedChunks - sentChunks,
     setAsideChunks: counts.setAside,
     ts: marked.state.delivered_at,
   };
@@ -112,6 +120,8 @@ function settleBackfillDelivery() {
     offerId: result.offerId,
     sessions: result.sessions,
     queuedChunks: result.queuedChunks,
+    sentChunks: result.sentChunks,
+    unsentChunks: result.unsentChunks,
     setAsideChunks: result.setAsideChunks,
   });
   return result;
@@ -183,14 +193,17 @@ function formatBackfillNotice(result, dashboardUrl) {
   }
   if (!result || result.status !== "delivered") return null;
   const sessions = result.sessions || 0;
-  const setAside = result.setAsideChunks || 0;
-  if (setAside > 0) {
+  // A result written before sent chunks were counted knows only set-aside ones.
+  const unsent = Number.isFinite(result.unsentChunks)
+    ? result.unsentChunks
+    : result.setAsideChunks || 0;
+  if (unsent > 0) {
     return {
       message:
         `SkillMeter: history import finished: ${plural(sessions, "session")} processed, ` +
-        `${plural(setAside, "upload chunk")} could not be sent. ` +
+        `${plural(unsent, "upload chunk")} could not be sent. ` +
         "Run /skillmeter:backfill status for details.",
-      desktop: `History import finished: ${plural(setAside, "upload chunk")} could not be sent`,
+      desktop: `History import finished: ${plural(unsent, "upload chunk")} could not be sent`,
     };
   }
   const summary = `history import complete: ${plural(sessions, "session")} sent`;

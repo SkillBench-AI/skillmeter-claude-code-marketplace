@@ -62,10 +62,12 @@ chunks belonging to the accepted offer and its scope. Those chunks upload only
 to the tenant whose license accepted the offer; after a sign-in to another
 tenant they are deleted unsent.
 
-The upload runs in the background. When every historical chunk has been
-acknowledged by the backend or has exhausted its retries, SkillMeter announces
-the import once, with a desktop notification where the terminal supports it. If
-no session is open at that moment, the notice appears at the next session start.
+The upload runs in the background. When no historical chunk is left to send,
+SkillMeter announces the import once, with a desktop notification where the
+terminal supports it. The notice says complete only when the backend
+acknowledged every chunk; otherwise it gives the number that could not be sent.
+If no session is open at that moment, the notice appears at the next session
+start.
 An import that fails before queuing anything is announced the same way; one
 that queued chunks reports through the completion notice.
 
