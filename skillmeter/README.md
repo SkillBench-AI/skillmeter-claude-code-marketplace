@@ -58,14 +58,24 @@ removes tool-result and image blocks before the shared sanitizer runs.
 Historical consent neither requires nor enables ongoing organization/repository
 telemetry. An accepted historical offer can upload while live telemetry is OFF;
 the global switch still pauses both. Queue cleanup preserves only historical
-chunks belonging to the accepted offer and its scope.
+chunks belonging to the accepted offer and its scope. Those chunks upload only
+to the tenant whose license accepted the offer; after a sign-in to another
+tenant they are deleted unsent.
 
-The upload runs in the background. When every historical chunk has been
-acknowledged by the backend or has exhausted its retries, SkillMeter announces
-the import once, with a desktop notification where the terminal supports it. If
-no session is open at that moment, the notice appears at the next session start.
+The upload runs in the background. When no historical chunk is left to send,
+SkillMeter announces the import once, with a desktop notification where the
+terminal supports it. The notice says complete only when the backend
+acknowledged every chunk; otherwise it gives the number that could not be sent.
+If no session is open at that moment, the notice appears at the next session
+start.
 An import that fails before queuing anything is announced the same way; one
 that queued chunks reports through the completion notice.
+
+Each accepted import also sends the backend one `BackfillCompleted` event when
+it ends, with `outcome` set to `success` (every chunk acknowledged, or nothing
+to import), `partial_success` (some chunks or sessions did not make it) or
+`failed` (nothing acknowledged). It carries counts and the import's identifier
+only, and is sent under the same consent and tenant as the import's chunks.
 
 `/skillmeter:backfill status` distinguishes queued chunks from chunks acknowledged
 by the backend. A queued snapshot alone does not prove delivery.
@@ -99,8 +109,8 @@ See [ADR002](../docs/adr/002-two-stage-sanitization.md) for the policy and
 ## Uploads and recovery
 
 Hooks append sanitized events to repository-bound queues. Stop and SessionEnd
-seal events and stage transcript chunks, then start a detached drain. Startup
-retries and the retry monitor handle remaining uploads. Network requests use
+seal events and stage transcript chunks, then start a detached drain. What a
+drain cannot send is retried by the next turn's drain or the next session start. Network requests use
 gzip and the license's tenant endpoint, with consent checked again before sending.
 
 Successful event batches become `.sent`; acknowledged transcript chunks are
@@ -163,7 +173,7 @@ it; the variables below point one endpoint or directory elsewhere.
 | `SKILLMETER_OAUTH_CLIENT_ID` | Public device-flow client ID; default `skillmeter-plugin` |
 | `SKILLMETER_BACKEND_URL` | Telemetry base URL override; authentication is still required |
 | `SKILLMETER_TIMEOUT` | Event upload timeout in seconds; default 10 |
-| `SKILLMETER_RETRY_DAEMON_INTERVAL_MS` | Monitor sweep interval in milliseconds; default 120000 |
+| `SKILLMETER_RETRY_BASE_MS` | Base license-refresh backoff in milliseconds; default 120000 |
 
 Configuration precedence is environment, development bundle, then production
 default. Project files such as `.claude/settings.local.json` cannot override an

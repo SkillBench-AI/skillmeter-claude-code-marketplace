@@ -6,40 +6,20 @@
  * batch to the current license tenant (sorted org set + JWT audience).
  */
 
-const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 
 const credstore = require("../credstore");
 const { atomicWriteJson, safeReadJson } = require("./io");
-const { getLicenseAudiences, getLicenseOrgs } = require("./jwt");
 const {
   ORGANIZATION_AUDIT_LOG_DIR,
   organizationAuditQueuePaths,
 } = require("./paths");
 const { sanitizeEventData } = require("./sanitize");
+const { currentTenantFingerprint, tenantFingerprint } = require("./tenant");
 const telemetryStore = require("./telemetry-store");
 
 const QUEUE_SCHEMA_VERSION = 1;
-
-function tenantFingerprint(token, hashSalt) {
-  if (!token || !hashSalt) return "";
-  const orgs = [...new Set(getLicenseOrgs(token))].sort();
-  if (orgs.length === 0) return "";
-  const audiences = getLicenseAudiences(token);
-  const identity = JSON.stringify({ audiences, orgs });
-  return crypto.createHmac("sha256", hashSalt)
-    .update(identity)
-    .digest("hex")
-    .slice(0, 24);
-}
-
-function currentTenantFingerprint() {
-  return tenantFingerprint(
-    credstore.getLicenseTokenUncached(),
-    credstore.getHashSalt()
-  );
-}
 
 function currentOrganizationAuditContext({ create = false } = {}) {
   const fingerprint = currentTenantFingerprint();

@@ -12,7 +12,7 @@ function clearSessionContext(input) {
 }
 
 // Seal and stage locally, then start a detached drain so network waits do not
-// consume the SessionEnd hook timeout. Startup and monitor retries remain available.
+// consume the SessionEnd hook timeout. The next SessionStart retries what is left.
 runHook("SessionEnd", (input) => ({
   reason: input.reason,
 }), {

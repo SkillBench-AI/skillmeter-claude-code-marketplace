@@ -1,7 +1,0 @@
-[
-  {
-    "name": "skillmeter-retry-daemon",
-    "command": "CLAUDE_PLUGIN_DATA=\"${CLAUDE_PLUGIN_DATA}\" node \"${CLAUDE_PLUGIN_ROOT}/scripts/monitors/retry_daemon.js\"",
-    "description": "SkillMeter telemetry sync"
-  }
-]

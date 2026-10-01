@@ -42,6 +42,7 @@ const {
   settleBackfillDelivery,
 } = require("../skillmeter/scripts/lib/backfill-delivery");
 const transfer = require("../skillmeter/scripts/lib/transfer");
+const { currentTenantFingerprint } = require("../skillmeter/scripts/lib/tenant");
 
 const REPOSITORY = {
   repoKey: "github.com/skillbench-ai/drain",
@@ -60,6 +61,7 @@ function startBackfill() {
     repository_ids: ["aaaaaaaaaaaa"],
     repository_keys: [REPOSITORY.repoKey],
     upload_authorized: true,
+    tenant_fingerprint: currentTenantFingerprint(),
     cutoff_at: Date.now() + 60_000,
     created_at: Date.now(),
     updated_at: Date.now(),
@@ -132,6 +134,37 @@ test("the drain that uploads the last historical chunk announces the import", as
   assert.equal(result.sessions, 1);
   assert.equal(result.setAsideChunks, 0);
   assert.ok(logEvents().includes("delivery_completed"));
+});
+
+test("the same drain pass reports the finished import to the collector", async () => {
+  startBackfill();
+  stageHistory("reported");
+  backfillState.finishBackfill(OFFER, "completed", {
+    processed_transcripts: 1,
+    queued_chunks: 1,
+  });
+
+  const posts = [];
+  const realFetch = global.fetch;
+  global.fetch = async (url, options) => {
+    const lines = require("zlib").gunzipSync(options.body).toString().trim().split("\n");
+    posts.push({ url: String(url), lines: lines.map(JSON.parse) });
+    return { ok: true, status: 202, text: async () => "" };
+  };
+  try {
+    await transfer.drainQueuesOnce(5_000);
+  } finally {
+    global.fetch = realFetch;
+  }
+  assert.deepEqual(posts.map((p) => p.url), [
+    "https://collector.skillbench.example/logs/claude/transcript",
+    "https://collector.skillbench.example/logs/claude",
+  ]);
+  const event = posts[1].lines[0];
+  assert.equal(event.hook_event_name, "BackfillCompleted");
+  assert.equal(event.data.outcome, "success");
+  assert.equal(event.data.sent_chunks, 1);
+  assert.ok(logEvents().includes("event_sent"));
 });
 
 test("a drain that empties the queue before the snapshot ends leaves it to the worker", async () => {

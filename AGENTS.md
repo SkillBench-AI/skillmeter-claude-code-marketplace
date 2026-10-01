@@ -30,10 +30,10 @@ concise English for readers who do not know the team's internal history.
 - Keep queues in persistent plugin data, never the install/cache directory.
   Resolve paths through `lib/paths.js` and `lib/plugin-data-root.js`; fail when
   no persistent data root can be established.
-- Hooks receive plugin environment variables. Monitors pass substituted
-  `CLAUDE_PLUGIN_DATA` explicitly. Skill commands must start with `node` to match
-  `Bash(node *)`; they derive the data root from the resolved installation path.
-  Do not assume skill/monitor subprocesses inherit `CLAUDE_PLUGIN_ROOT`.
+- Hooks receive plugin environment variables. Skill commands must start with
+  `node` to match `Bash(node *)`; they derive the data root from the resolved
+  installation path. Do not assume skill subprocesses inherit
+  `CLAUDE_PLUGIN_ROOT`.
 - Tests live in `test/` and fixtures in `testing/` at the repository root,
   outside the shipped `skillmeter/` directory, so they never reach users.
 - Use `testing/helpers.js` for synthetic state. It loads bootstrap
@@ -70,7 +70,7 @@ is the model for length and tone.
   joining two changes. No retry counts, line counts, algorithms, file or
   module names, policy or schema versions, or ADR references.
 - **After updating**: always `1. claude plugin update skillmeter@skillbench`
-  and `2. Quit and reopen Claude Code` (hooks and monitors load per session).
+  and `2. Quit and reopen Claude Code` (hooks load per session).
   Add a sign-in step only when the release requires one. Do not add sentences
   about what is not needed.
 - **Known limitations**: only what this release adds or changes, under the

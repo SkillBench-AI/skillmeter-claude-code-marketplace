@@ -11,7 +11,7 @@ const scripts = path.resolve(__dirname, "../skillmeter/scripts");
 // Exercise real hook/refresh/queue code in separate processes: recording while
 // the license is expired, and the drain that refreshes before it sends. Only
 // the clock and network are substituted; most cases also stub the detached
-// launch. No monitor or real token is used.
+// launch. No real token is used.
 function fixture({ realSpawn = false } = {}) {
   const root = makeTempDir("skm-expiry-");
   const state = path.join(root, "state");
@@ -75,7 +75,7 @@ global.fetch = async (url, options) => {
         TEST_FRESH: makeJwt({ ...claims, exp: Math.floor(now / 1000) + 900 }),
         SKILLMETER_ACTIVATE_URL: "https://activation.test/activate",
         SKILLMETER_BACKEND_URL: "", SKILLMETER_BROKER_URL: "",
-        SKILLMETER_RETRY_DAEMON_INTERVAL_MS: "", SKILLMETER_TIMEOUT: "", ...extra,
+        SKILLMETER_RETRY_BASE_MS: "", SKILLMETER_TIMEOUT: "", ...extra,
       },
     });
     assert.equal(result.status, 0, result.stderr || String(result.error));
