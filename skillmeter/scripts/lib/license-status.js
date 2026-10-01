@@ -1,13 +1,17 @@
 /**
  * This client's refresh status, next to its session in the account directory
- * (ADR 005) and shared across its sessions. Refresh and sign-in update it; the upload drains read it for backoff and SessionStart for
- * its sign-in banner, without a network request.
+ * (ADR 005) and shared across its sessions. Refresh and sign-in update it; the
+ * upload drains read it for backoff, SessionStart for its sign-in banner and
+ * lib/collection-state for the collection state, without a network request.
+ * It is the history of refresh and sign-in, not the current state: nothing
+ * records a license that disappears, and the collection state reads the
+ * session for that.
  *
  * Shape (schema_version 1):
  *   last_attempt_at       ms epoch of the last refresh or re-activation attempt
  *   last_success_at       ms epoch of the last sign-in or renewal. Kept across
  *                         sign-ins, sign-outs and session changes: it is the
- *                         evidence that this client was ever signed in
+ *                         evidence that this client was ever signed in (ADR 003)
  *   last_outcome          "signed_in" | "rotated" | "transient_failure" | "terminal"
  *   last_error            { kind, status, message } for the last failure, or null
  *   consecutive_failures  failures since the last success
@@ -88,9 +92,10 @@ function readLicenseStatus() {
     return emptyStatus();
   }
   // A record from another session reads as empty, so its backoff and terminal
-  // state cannot block this one. The last terminal reason is kept for
-  // reporting: starting a sign-in changes the session, and must not make an
-  // ended or revoked session read as healthy.
+  // state cannot block this one. The last terminal reason and the last
+  // success are kept for reporting: starting a sign-in changes the session,
+  // and must not make an ended or revoked session read as healthy, nor a
+  // client that was signed in read as a fresh install.
   if (raw.auth_context && raw.auth_context !== authContext()) {
     return {
       ...emptyStatus(),

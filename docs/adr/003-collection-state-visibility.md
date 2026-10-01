@@ -398,3 +398,50 @@ failure, a sign-out, a newer sign-in, a revocation or the expiry ends it. No
 "discarded" result is written. A poller that stops without a result is not
 detected, so the in-progress status offers starting over. This closes the open
 item on the sentinel.
+
+## Amendment 2026-10-01: the resolver, after per-client sessions and without a monitor
+
+Decision 1 is implemented in `lib/collection-state.js`, with these changes:
+
+- The session fields are read from `session.json`, not `credentials.json`.
+  Since ADR 005 and ADR 006 the session, the evidence of a sign-in and consent
+  are per client, so "on this device" in decisions 1 and 2 means this client;
+  another client on the same device may still be collecting.
+- The order is `paused`, `signed_out`, `revoked`, `token_missing`,
+  `never_signed_in`, `delivery_paused`, `unconfigured`, `recording`. A 402
+  drops the license, so `revoked` precedes the missing-license states, and a
+  missing license precedes `delivery_paused`: without one nothing uploads
+  either.
+- `revoked` and `delivery_paused` read `last_terminal_reason` (previous
+  amendment); `delivery_paused` applies to `reactivation_required` only.
+- The evidence of a prior sign-in is `last_success_at`. A completed sign-in
+  records one, and starting a sign-in, clearing the record or changing session
+  keeps it. Before, every sign-in erased it, and a record from a previous
+  session read as empty.
+- A stored license counts by presence, not freshness, as it does for capture:
+  an expired license that waits for its next renewal reads as signed in.
+- `unconfigured` is every signed-in outcome of the capture gate that does not
+  capture, including a repository outside the licensed organizations,
+  organization telemetry off and no working directory. The result carries the
+  gate mode as its reason.
+- Nothing records `token_missing`: the resolver derives it from `session.json`
+  and `last_success_at`. The status record is the history of refresh and
+  sign-in, not the current state, and can still say `rotated` or `signed_in`
+  for a client that holds no license.
+
+Withdrawn, because they describe the monitor #174 removed or a record that no
+longer tracks the current state:
+
+- decision 1's "the daemon" among the resolver's users, and its paragraph on
+  the daemon recording `token_missing` and reconciling the record;
+- decision 2's "daemon's routine rewrite of `credentials.json` on each
+  refresh" and "the monitor's exit … is a moment signal";
+- in Consequences, "the status record is always current" and the bullet on
+  what waits "when the daemon has exited".
+
+Also out of date: decision 2's `watchPaths` would name `session.json`, not
+`credentials.json`, and that file changes on a renewal, which happens only when
+a drain has something to send, not every ten minutes. Decision 1's "until A3
+ships" no longer applies: ADR 001 decision 3 is implemented. The open items on
+a token restored by another client and on the shared-credential ownership rule
+lapse with the shared session.
