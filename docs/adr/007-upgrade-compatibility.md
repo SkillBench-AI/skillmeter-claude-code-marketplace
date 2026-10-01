@@ -43,6 +43,13 @@ replacement. It does not run released hooks, authorization, pending-queue drain,
 shared-policy migration, server storage or an installer. Those require additional
 contracts; do not infer their acceptance from these pure-module checks.
 
+Amended 2026-10-01: the fixtures assert only what crosses a version boundary,
+which is the candidate continuing a released cursor (next seq, no reset, repeats
+kept) and resolving the same data directory as the released resolver. Planning
+and derivation that run only candidate code, such as reset baselines and the
+derived path, are tested once in `test/transcript-delta.test.js` and
+`test/plugin-data-root.test.js`, not once per pin.
+
 CI fetches full repository history and runs these tests on Node 22 and 24. Missing
 historical objects or a version/pin mismatch fail the tests rather than skip
 coverage. Local shallow clones must fetch the pinned objects before running

@@ -17,37 +17,25 @@ for (const release of releases) {
     const previous = require(path.join(location, "scripts/lib/transcript-delta"));
     const prefix = [row("first", "earlier work")];
     const oldPlan = previous.buildChunkPlan(prefix, null, "fixture");
-    // Persist exactly the released planner's cursor and serialized pending lines.
-    const state = fs.mkdtempSync(path.join(os.tmpdir(), "claude-upgrade-state-"));
-    t.after(() => fs.rmSync(state, { recursive: true, force: true }));
-    const cursorFile = path.join(state, "cursor.json"), pendingFile = path.join(state, "pending.jsonl");
-    fs.writeFileSync(cursorFile, JSON.stringify(oldPlan.newCursor));
-    fs.writeFileSync(pendingFile, oldPlan.chunks.flatMap(chunk => chunk.lines).join("\n") + "\n");
-    const pendingBefore = fs.readFileSync(pendingFile);
+    // Only cross-version behaviour lives here; candidate-only planning and
+    // derivation are covered once in transcript-delta and plugin-data-root tests.
+    // The cursor round-trips through JSON exactly as the released writer stored it.
+    const cursor = JSON.parse(JSON.stringify(oldPlan.newCursor));
     const input = [...prefix, row("second", "unstaged work"), row("third", "repeated work"), row("fourth", "repeated work")];
-    const next = candidate.buildChunkPlan(input, JSON.parse(fs.readFileSync(cursorFile)), "fixture");
+    const next = candidate.buildChunkPlan(input, cursor, "fixture");
     assert.deepEqual(messages(next), ["unstaged work", "repeated work", "repeated work"]);
     assert.equal(next.chunks[0].seq, oldPlan.newCursor.seq + 1);
     assert.ok(next.chunks.every(chunk => chunk.reset === false));
-    assert.deepEqual(fs.readFileSync(pendingFile), pendingBefore);
-    assert.deepEqual(candidate.buildChunkPlan(input, next.newCursor, "fixture"), { chunks: [], newCursor: null });
-    const reset = candidate.buildChunkPlan([row("replacement", "rewritten source")], next.newCursor, "fixture");
-    assert.equal(reset.chunks[0].reset, true);
-    assert.equal(reset.chunks[0].resetBaselineSeq, next.newCursor.seq + 1);
-    assert.deepEqual(messages(reset), ["rewritten source"]);
 
     const oldResolver = require(path.join(location, "scripts/lib/plugin-data-root"));
-    const config = path.join(state, "config");
+    const config = fs.mkdtempSync(path.join(os.tmpdir(), "claude-upgrade-config-"));
+    t.after(() => fs.rmSync(config, { recursive: true, force: true }));
     fs.mkdirSync(path.join(config, "plugins/data"), { recursive: true });
     const oldInstall = path.join(config, "plugins/cache/fixture-market/skillmeter", release.version);
     const newInstall = path.join(config, "plugins/cache/fixture-market/skillmeter/candidate");
+    // A new install must find the data directory the released version wrote to.
     const oldData = oldResolver.resolvePluginDataRoot(oldInstall, {});
-    assert.equal(oldData, resolver.resolvePluginDataRoot(newInstall, {}));
-    assert.equal(oldData, path.join(config, "plugins/data/skillmeter-fixture-market"));
-    fs.mkdirSync(oldData, { recursive: true });
-    fs.writeFileSync(path.join(oldData, "queue-marker"), "synthetic state");
-    fs.mkdirSync(oldInstall, { recursive: true });
-    fs.rmSync(oldInstall, { recursive: true });
-    assert.equal(fs.readFileSync(path.join(resolver.resolvePluginDataRoot(newInstall, {}), "queue-marker"), "utf8"), "synthetic state");
+    assert.ok(oldData, "released resolver found no data directory");
+    assert.equal(resolver.resolvePluginDataRoot(newInstall, {}), oldData);
   });
 }
