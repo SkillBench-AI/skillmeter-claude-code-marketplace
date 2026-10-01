@@ -126,15 +126,34 @@ function signinStatusBanner(org, consent, repositoryEnabled = false) {
   ]);
 }
 
-// Shown at SessionStart when no valid license JWT is detected.
-function signInRequiredBanner() {
+// Why sign-in is required, by collection state (ADR 003, decision 5). Every
+// one of these holds no license, so hooks record nothing.
+const SIGNIN_REASONS = Object.freeze({
+  never_signed_in: "not signed in",
+  signed_out: "signed out",
+  token_missing: "license token missing",
+  revoked: "organization license inactive",
+});
+
+// Shown at SessionStart when no license is stored. `state` names the reason.
+function signInRequiredBanner(state = "") {
+  const lines = ["[ ACTION REQUIRED ]", ""];
+  if (SIGNIN_REASONS[state]) lines.push(`Reason        ${SIGNIN_REASONS[state]}`);
+  lines.push("Sign in to verify this repository.", "Telemetry remains OFF until you choose.");
+  if (state === "revoked") lines.push("Contact your administrator.");
+  lines.push("", "→ /skillmeter:signin");
+  return card(lines);
+}
+
+// Shown at SessionStart while the global pause is on. The pause stops capture
+// and uploads in every repository, so it is the reason whatever else holds.
+function pausedBanner() {
   return card([
-    "[ ACTION REQUIRED ]",
+    "[ TELEMETRY PAUSED ]",
     "",
-    "Sign in to verify this repository.",
-    "Telemetry remains OFF until you choose.",
+    "Status        OFF — paused for every repository",
     "",
-    "→ /skillmeter:signin",
+    "→ /skillmeter:telemetry enable-global",
   ]);
 }
 
@@ -186,6 +205,7 @@ module.exports = {
   signinStatusBanner,
   signInRequiredBanner,
   sessionEndedBanner,
+  pausedBanner,
   telemetryConsentRequiredBanner,
   telemetryRepositoryRequiredBanner,
   signinRepositoryInventoryBanner,
