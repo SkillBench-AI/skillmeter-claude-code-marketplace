@@ -461,7 +461,7 @@ already resolved:
 | `paused` | its own card: telemetry off, paused for every repository; next command `/skillmeter:telemetry enable-global` |
 | `signed_out`, `never_signed_in`, `token_missing`, `revoked` | the sign-in card, with the reason line from decision 5; `revoked` adds "Contact your administrator." |
 | `delivery_paused` | the sign-in-expired card of the earlier amendment |
-| `unconfigured` | the existing setup card while an organization or repository choice is pending; nothing for a repository outside the licensed organizations, telemetry the user turned off, or no working directory |
+| `unconfigured` | the existing setup card while an organization or repository choice is pending; nothing for a repository outside the licensed organizations, organization or repository telemetry the user turned off, or no working directory. A license that names no organization puts every repository outside them, so that client never records and is never told |
 | `recording` | the "telemetry on" card, unchanged |
 
 The pause comes first because it silences every other reading (decision 1).
