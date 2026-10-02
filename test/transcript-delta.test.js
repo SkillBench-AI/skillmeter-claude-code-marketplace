@@ -241,19 +241,23 @@ test("transcriptTailUuid: empty without a uuid or a file", () => {
 
 test("a signed-out mark ages out unless a cursor for its transcript remains", () => {
   const marks = path.join(DATA_DIR, "logs", "unlicensed-transcripts");
-  for (const name of ["old.jsonl", "recent.jsonl", "old-cursored.jsonl"]) {
+  for (const name of ["old.jsonl", "recent.jsonl", "old-cursored.jsonl", "old-cursored-elsewhere.jsonl"]) {
     const file = path.join(DATA_DIR, name);
     writeFile(file, JSON.stringify({ uuid: name }) + "\n");
     assert.equal(transfer.markUnlicensedTranscript(file), true);
   }
+  // Cursors in two repositories: whichever is listed first, both count.
   transfer.writeCursor({ transcriptId: "old-cursored.jsonl", lastUuid: "u", seq: 1, updatedAt: 0 }, TEST_REPOSITORY);
+  transfer.writeCursor({ transcriptId: "old-cursored-elsewhere.jsonl", lastUuid: "u", seq: 1, updatedAt: 0 },
+    { repoKey: "github.com/skillbench-ai/elsewhere", org: "skillbench-ai" });
   const monthAgo = (Date.now() - 31 * 24 * 60 * 60 * 1000) / 1000;
-  for (const name of ["old.jsonl.json", "old-cursored.jsonl.json"]) {
+  for (const name of ["old.jsonl.json", "old-cursored.jsonl.json", "old-cursored-elsewhere.jsonl.json"]) {
     fs.utimesSync(path.join(marks, name), monthAgo, monthAgo);
   }
   transfer.cleanupStaleFiles();
   // A cursor for the transcript can still be behind the mark.
-  assert.deepEqual(fs.readdirSync(marks).sort(), ["old-cursored.jsonl.json", "recent.jsonl.json"]);
+  assert.deepEqual(fs.readdirSync(marks).sort(),
+    ["old-cursored-elsewhere.jsonl.json", "old-cursored.jsonl.json", "recent.jsonl.json"]);
 });
 
 test("sealDeltaChunk writes body+meta and listDeltaChunks finds it", () => {
