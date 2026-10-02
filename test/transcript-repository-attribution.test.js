@@ -83,6 +83,27 @@ test("a turn that visits a repository turned off is not sent", async (t) => {
   assert.deepEqual(c.transcript(), ["after-u", "after-a"]);
 });
 
+test("a turn that visits a repository the license does not cover is not sent", async (t) => {
+  const { c, s } = await start(t, { policy: BOTH });
+  await s.turn("mixed", { during: async () => { s.cd("foreign"); await s.tool("peek"); s.cd("repo"); } });
+  await s.turn("after");
+  await s.drained(() => c.transcript().includes("after-a"));
+  assert.deepEqual(c.transcript(), ["after-u", "after-a"]);
+});
+
+// Turned on while the session is elsewhere: nothing seen it collect since.
+test("another repository's Stop sends nothing for one last seen turned off", async (t) => {
+  const { c, s } = await start(t, { policy: { orgs: { [ORG]: true }, repositories: { [REPO_KEY]: false, [OTHER_KEY]: true } } });
+  await s.turn("off");
+  s.late("tail");
+  s.setPolicy(BOTH);
+  s.cd("other");
+  await s.turn("g");
+  await s.drained(() => c.transcript().includes("g-a"));
+  assert.deepEqual(c.sentFor(REPO_KEY), []);
+  assert.deepEqual(c.sentFor(OTHER_KEY), ["g-u", "g-a"]);
+});
+
 test("a resumed session does not send its earlier turns in a repository it returns to", async (t) => {
   const c = await collector();
   t.after(c.close);
