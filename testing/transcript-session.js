@@ -152,16 +152,21 @@ function session(collectorUrl, { orgs = [ORG], policy, history = [], signedIn = 
     throw new Error("drain did not finish in time");
   }
 
+  const queue = (repoKey) => path.join(data, "logs", "repositories",
+    crypto.createHmac("sha256", IDENTITY.hash_salt).update(repoKey).digest("hex").slice(0, 12));
   // The repository's event log, the file a hook writes before anything else.
-  const eventLog = path.join(data, "logs", "repositories",
-    crypto.createHmac("sha256", IDENTITY.hash_salt).update(REPO_KEY).digest("hex").slice(0, 12),
-    "events.jsonl");
+  const eventLog = path.join(queue(REPO_KEY), "events.jsonl");
 
   return {
     drained,
     signIn,
     signOut,
     setPolicy: (next) => writeTelemetryPolicy(state, next),
+    // A repository's transcript cursor, or null.
+    cursor(repoKey) {
+      const file = path.join(queue(repoKey), "transcripts", "cursors", `${SESSION_ID}.jsonl.json`);
+      return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : null;
+    },
     // Make the event write fail, as a full disk would, and undo it.
     breakEventLog: () => { fs.rmSync(eventLog, { force: true }); fs.mkdirSync(eventLog, { recursive: true }); },
     repairEventLog: () => fs.rmSync(eventLog, { recursive: true, force: true }),
