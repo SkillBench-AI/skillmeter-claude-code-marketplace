@@ -27,11 +27,13 @@ const { observeSessionCwd } = require("./lib/cwd-context");
 
 // Move the transcript cursor to the tail of a period that was not recorded, so
 // that content from it is never sent later. Without a license there is no
-// repository to hold a cursor, so the transcript itself is marked.
+// repository to hold a cursor, so the transcript itself is marked. Inside a
+// repository the turn is marked too, so it is never sent for another one.
 function keepTranscriptCursorAtTail(input, repoScopeDecision) {
   if (!input.transcript_path) return;
   try {
     const transfer = require("./lib/transfer");
+    if (repoScopeDecision.repoRoot) transfer.markUnrecordedTurn(input, repoScopeDecision);
     if (repoScopeDecision.repoKey) {
       transfer.advanceCursorToTranscriptTail(input.transcript_path, {
         repoKey: repoScopeDecision.repoKey,
@@ -361,6 +363,14 @@ async function runHook(eventName, buildData, options = {}) {
     process.exit(0);
   }
   console.error(`[skillmeter] ${eventName}: logged (session=${sessionId.slice(0, 8)}…)`);
+  // The first recorded hook in a repository marks the turn its transcript
+  // starts from there.
+  try {
+    require("./lib/transfer").startTranscriptAtTurn(input, {
+      repoKey: repoScopeDecision.repoKey,
+      org: repoScopeDecision.remoteOrg,
+    });
+  } catch {}
 
   await runOptionalCallback(
     eventName,
