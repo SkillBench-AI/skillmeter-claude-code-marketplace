@@ -215,6 +215,11 @@ function session(collectorUrl, { orgs = [ORG], policy, history = [], signedIn = 
       });
       assert.equal(r.status, 0, r.stderr);
     },
+    // A record of the last turn written after its Stop had read the
+    // transcript, as an answer still being written can be.
+    late(name) {
+      append([{ type: "assistant", uuid: `${current}-${name}`, message: { content: `${current} ${name}` } }]);
+    },
     // A tool hook from a directory outside any repository.
     async toolOutsideRepository() {
       const r = await run("hook.js", ["PostToolUse"], {
