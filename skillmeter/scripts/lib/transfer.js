@@ -40,6 +40,7 @@ const {
   buildChunkPlan,
 } = require("./transcript-delta");
 const { getRepoScopeDecision } = require("./repo-scope");
+const { hashHmac } = require("./sanitize");
 const {
   PLUGIN_ROOT,
   LOG_DIR,
@@ -927,7 +928,7 @@ function stageTranscriptDelta(transcriptPath, promptId, deviceId, repository) {
 
   const { objs } = parseJsonl(raw);
   const places = transcriptPlaces();
-  const destinations = turnDestinations(objs, places.of);
+  const destinations = turnDestinations(objs, places.of, unrecordedTurns(transcriptId));
   let chunks = stageRepositoryTurns(objs, destinations, transcriptId, promptId, repository);
   // A turn's own Stop may not stage it: the turn ended outside any repository,
   // or its last lines were written after that Stop read the transcript. Every
@@ -1233,6 +1234,71 @@ function markUnlicensedTranscript(transcriptPath) {
     console.error(`[skillmeter] Transcript mark write failed: ${err.message}`);
     return false;
   }
+}
+
+// A hook that runs inside a repository that is not recording marks its turn,
+// by prompt id, with that repository. Staging never sends a marked turn for
+// another repository, even once the marked one records: whether it was
+// recording is decided when the turn was written. The mark holds the prompt id
+// and an HMAC of the repository, never a path or content, and is appended so
+// that hooks running at once cannot lose one. Local only.
+const UNRECORDED_TURN_DIR = path.join(LOG_DIR, "unrecorded-turns");
+
+function unrecordedTurnPath(transcriptId) {
+  return path.join(UNRECORDED_TURN_DIR, `${transcriptId}.ndjson`);
+}
+
+function readUnrecordedTurns(transcriptId) {
+  const marks = new Map();
+  let raw;
+  try {
+    raw = fs.readFileSync(unrecordedTurnPath(transcriptId), "utf8");
+  } catch {
+    return marks;
+  }
+  for (const entry of parseJsonl(raw).objs) {
+    if (typeof entry?.promptId !== "string" || typeof entry.place !== "string") continue;
+    if (!marks.has(entry.promptId)) marks.set(entry.promptId, new Set());
+    marks.get(entry.promptId).add(entry.place);
+  }
+  return marks;
+}
+
+function markUnrecordedTurn(input, repoScopeDecision) {
+  const promptId = input?.prompt_id;
+  const repository = repoScopeDecision?.repoKey ||
+    (repoScopeDecision?.repoRoot ? `root:${repoScopeDecision.repoRoot}` : "");
+  if (!input?.transcript_path || typeof promptId !== "string" || !promptId || !repository) {
+    return false;
+  }
+  const transcriptId = path.basename(input.transcript_path);
+  const place = hashHmac(repository, credstore.getOrCreateHashSalt());
+  if (!place) return false;
+  if (readUnrecordedTurns(transcriptId).get(promptId)?.has(place)) return true;
+  try {
+    fs.mkdirSync(UNRECORDED_TURN_DIR, { recursive: true, mode: 0o700 });
+    fs.appendFileSync(
+      unrecordedTurnPath(transcriptId),
+      JSON.stringify({ promptId, place }) + "\n",
+      { mode: 0o600 }
+    );
+    return true;
+  } catch (err) {
+    console.error(`[skillmeter] Unrecorded turn mark failed: ${err.message}`);
+    return false;
+  }
+}
+
+// For turnDestinations: was this turn marked in a repository other than `key`?
+function unrecordedTurns(transcriptId) {
+  const marks = readUnrecordedTurns(transcriptId);
+  const salt = credstore.getOrCreateHashSalt();
+  return (promptId, key) => {
+    const places = marks.get(promptId);
+    if (!places) return false;
+    const own = key ? hashHmac(key, salt) : "";
+    return [...places].some((place) => place !== own);
+  };
 }
 
 // Where the live delta starts: after the cursor, or after the signed-out mark
@@ -1558,6 +1624,12 @@ function cleanupStaleFiles() {
 
   const cursored = transcriptsWithCursors();
   candidates.push(...uncursoredTranscriptMarks(UNLICENSED_MARK_DIR, ".json", cursored));
+  // An unrecorded-turn mark matters only while its transcript can be resumed.
+  try {
+    for (const f of fs.readdirSync(UNRECORDED_TURN_DIR)) {
+      candidates.push(path.join(UNRECORDED_TURN_DIR, f));
+    }
+  } catch {}
 
   if (fs.existsSync(LOG_DIR)) {
     try {
@@ -1612,6 +1684,7 @@ module.exports = {
   stageTranscriptSnapshot,
   advanceCursorToTranscriptTail,
   startTranscriptAtTurn,
+  markUnrecordedTurn,
   markUnlicensedTranscript,
   transcriptTailUuid,
   listDeltaChunks,

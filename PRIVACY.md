@@ -219,6 +219,11 @@ the feature is introduced.
   not upload earlier content. These markers are never sent. They are kept
   while any repository holds a transcript cursor for that session, and are
   otherwise removed once they are 30 days old;
+- while a repository is not collecting, the plugin records, for each session
+  transcript, the prompt identifiers of the turns that ran in it, with a
+  hashed repository identifier, so that those turns are never sent for
+  another repository. These records hold no content or paths, are never sent,
+  and are removed once they are 30 days old;
 - sign-out removes the license and deletes unsent repository telemetry and
   organization audit records (an accepted history import stays queued for a
   sign-in to the same tenant), but
