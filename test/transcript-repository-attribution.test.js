@@ -118,6 +118,8 @@ test("a repository turned off while the session is elsewhere does not get its pe
   await s.drained(() => c.transcript().includes("g2-a"));
   assert.deepEqual(c.sentFor(REPO_KEY), []);
   assert.deepEqual(c.sentFor(OTHER_KEY), ["g1-u", "g1-a", "g2-u", "g2-a"]);
+  // Closed as the off path closes a period that was not recorded.
+  assert.equal(s.cursor(REPO_KEY).discarded, true);
 });
 
 test("a resumed session does not send its earlier turns in a repository it returns to", async (t) => {

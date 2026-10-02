@@ -152,10 +152,10 @@ function session(collectorUrl, { orgs = [ORG], policy, history = [], signedIn = 
     throw new Error("drain did not finish in time");
   }
 
-  const queue = path.join(data, "logs", "repositories",
-    crypto.createHmac("sha256", IDENTITY.hash_salt).update(REPO_KEY).digest("hex").slice(0, 12));
+  const queue = (repoKey) => path.join(data, "logs", "repositories",
+    crypto.createHmac("sha256", IDENTITY.hash_salt).update(repoKey).digest("hex").slice(0, 12));
   // The repository's event log, the file a hook writes before anything else.
-  const eventLog = path.join(queue, "events.jsonl");
+  const eventLog = path.join(queue(REPO_KEY), "events.jsonl");
   // Put a file where a directory belongs, so nothing can be written inside it,
   // as a stale file or a failing disk would.
   const block = (dir) => {
@@ -169,13 +169,18 @@ function session(collectorUrl, { orgs = [ORG], policy, history = [], signedIn = 
     signIn,
     signOut,
     setPolicy: (next) => writeTelemetryPolicy(state, next),
+    // A repository's transcript cursor, or null.
+    cursor(repoKey) {
+      const file = path.join(queue(repoKey), "transcripts", "cursors", `${SESSION_ID}.jsonl.json`);
+      return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : null;
+    },
     // Make the event write fail, as a full disk would, and undo it.
     breakEventLog: () => { fs.rmSync(eventLog, { force: true }); fs.mkdirSync(eventLog, { recursive: true }); },
     repairEventLog: () => fs.rmSync(eventLog, { recursive: true, force: true }),
     // Make the signed-out mark, or the repository's transcript cursor, fail
     // to be written.
     blockSignedOutMarks: () => block(path.join(data, "logs", "unlicensed-transcripts")),
-    blockCursors: () => block(path.join(queue, "transcripts", "cursors")),
+    blockCursors: () => block(path.join(queue(REPO_KEY), "transcripts", "cursors")),
     // Make the transcript unreadable to hooks while it is still written, and
     // readable again.
     hideTranscript: () => fs.chmodSync(transcript, 0o200),
