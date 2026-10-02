@@ -154,6 +154,16 @@ test("turnDestinations: a turn goes to the repository it ended in, if every one 
   ]);
 });
 
+test("turnDestinations: a turn seen not recording in another repository goes nowhere", () => {
+  const places = { "/a": { key: "A", recording: true }, "/b": { key: "B", recording: true } };
+  const turn = (promptId, cwd) => ({ type: "user", promptId, cwd });
+  const objs = [turn("in-b", "/a"), turn("in-a", "/a"), turn("untold"), turn("clean", "/a")];
+  const marked = { "in-b": "B", "in-a": "A", untold: "B" };
+  const seenUnrecorded = (promptId, key) => promptId in marked && marked[promptId] !== key;
+  assert.deepEqual(d.turnDestinations(objs, (cwd) => places[cwd], seenUnrecorded),
+    [null, "A", null, "A"]);
+});
+
 test("buildChunkPlan: keep sends only the selected records, and the cursor passes the rest", () => {
   const objs = [content("a"), content("b"), content("c")];
   const plan = d.buildChunkPlan(objs, { lastUuid: "a", seq: 2 }, SALT, { keep: (i) => i === 2 });
@@ -549,6 +559,46 @@ test("startTranscriptAtTurn: needs a prompt id and a transcript that records the
   writeFile(file, toJsonl([{ type: "user", promptId: "p1", uuid: "u" }, content("a")]));
   assert.equal(transfer.startTranscriptAtTurn({ transcript_path: file }, repository), false);
   assert.equal(transfer.readCursor("untold.jsonl", repository), null);
+});
+
+// A turn whose hook ran inside a repository that was not recording.
+test("markUnrecordedTurn: appends the prompt id and a hashed repository, once", () => {
+  const transcript = path.join(DATA_DIR, "marked.jsonl");
+  const file = path.join(DATA_DIR, "logs", "unrecorded-turns", "marked.jsonl.ndjson");
+  const mark = (prompt_id, decision) => transfer.markUnrecordedTurn({ transcript_path: transcript, prompt_id }, decision);
+  const off = { repoKey: "github.com/skillbench-ai/off", repoRoot: "/work/off" };
+  const uncovered = { repoRoot: "/work/elsewhere" };
+
+  assert.equal(mark("p1", off), true);
+  assert.equal(mark("p1", off), true);
+  assert.equal(mark("p1", uncovered), true);
+  assert.equal(mark(undefined, off), false, "a hook without a turn marks nothing");
+  assert.equal(mark("p2", {}), false, "outside any repository marks nothing");
+
+  const raw = fs.readFileSync(file, "utf8");
+  const lines = raw.trim().split("\n").map(JSON.parse);
+  assert.deepEqual(lines.map((l) => l.promptId), ["p1", "p1"], "each repository once");
+  assert.notEqual(lines[0].place, lines[1].place);
+  assert.doesNotMatch(raw, /skillbench-ai|off|work|elsewhere/, "no repository name or path");
+
+  // A partial last line, as a crash mid-write leaves, does not lose the rest.
+  fs.appendFileSync(file, '{"promptId":"p3","pla');
+  assert.equal(mark("p1", off), true);
+  assert.equal(fs.readFileSync(file, "utf8").trim().split("\n").length, 3, "p1 still known; nothing appended");
+});
+
+test("an unrecorded-turn mark ages out with other stale files", () => {
+  const dir = path.join(DATA_DIR, "logs", "unrecorded-turns");
+  const transcript = (name) => path.join(DATA_DIR, `${name}.jsonl`);
+  for (const name of ["old-turns", "recent-turns"]) {
+    transfer.markUnrecordedTurn({ transcript_path: transcript(name), prompt_id: "p" }, { repoKey: "github.com/skillbench-ai/x" });
+  }
+  const monthAgo = (Date.now() - 31 * 24 * 60 * 60 * 1000) / 1000;
+  fs.utimesSync(path.join(dir, "old-turns.jsonl.ndjson"), monthAgo, monthAgo);
+  transfer.cleanupStaleFiles();
+  const left = fs.readdirSync(dir);
+  assert.equal(left.includes("old-turns.jsonl.ndjson"), false);
+  assert.equal(left.includes("recent-turns.jsonl.ndjson"), true);
 });
 
 test("sealDeltaChunk writes body+meta and listDeltaChunks finds it", () => {

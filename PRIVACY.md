@@ -226,6 +226,11 @@ the feature is introduced.
   sent; without a position, nothing is sent until the plugin has closed the
   period at a later point. These records are never sent and are kept as long
   as the markers;
+- while a repository is not collecting, the plugin records, for each session
+  transcript, the prompt identifiers of the turns that ran in it, with a
+  hashed repository identifier, so that those turns are never sent for
+  another repository. These records hold no content or paths, are never sent,
+  and are removed once they are 30 days old;
 - sign-out removes the license and deletes unsent repository telemetry and
   organization audit records (an accepted history import stays queued for a
   sign-in to the same tenant), but

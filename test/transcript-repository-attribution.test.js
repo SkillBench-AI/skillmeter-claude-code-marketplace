@@ -201,6 +201,54 @@ test("a turn in a deleted directory outside any repository is sent for none", as
   assert.deepEqual(c.sentFor(OTHER_KEY), ["b1-u", "b1-a"]);
 });
 
+// Whether a repository was recording is decided when the turn was written:
+// turning it on before the turn is staged does not release what was read
+// there while it was off.
+
+test("a turn that read a repository while it was off is not sent once that repository is on", async (t) => {
+  const { c, s } = await start(t, { policy: OTHER_OFF });
+  await s.turn("a1");
+  await s.drained(() => c.transcript().includes("a1-a"));
+  // The turn ends outside any repository, so its own Stop stages nothing.
+  await s.turn("dip", { during: async () => { s.cd("other"); await s.tool("peek"); s.cd("repo"); await s.tool("back"); s.cd("outside"); } });
+  s.setPolicy(BOTH);
+  await s.turn("cmd");
+  s.cd("repo");
+  await s.turn("a2");
+  await s.drained(() => c.transcript().includes("a2-a"));
+  assert.deepEqual(c.sentFor(REPO_KEY), ["a1-u", "a1-a", "a2-u", "a2-a"]);
+});
+
+test("a turn that read a repository while it was off is not sent when it is turned on during the turn", async (t) => {
+  const { c, s } = await start(t, { policy: OTHER_OFF });
+  await s.turn("a1");
+  await s.drained(() => c.transcript().includes("a1-a"));
+  await s.turn("dip", { during: async () => { s.cd("other"); await s.tool("peek"); s.setPolicy(BOTH); s.cd("repo"); await s.tool("back"); } });
+  await s.turn("a2");
+  await s.drained(() => c.transcript().includes("a2-a"));
+  assert.deepEqual(c.sentFor(REPO_KEY), ["a1-u", "a1-a", "a2-u", "a2-a"]);
+});
+
+test("an interrupted turn that read a repository while it was off is not sent once it is on", async (t) => {
+  const { c, s } = await start(t, { policy: OTHER_OFF });
+  await s.turn("a1");
+  await s.drained(() => c.transcript().includes("a1-a"));
+  await s.turn("dip", { stop: false, during: async () => { s.cd("other"); await s.tool("peek"); s.cd("repo"); } });
+  s.setPolicy(BOTH);
+  await s.turn("a2");
+  await s.drained(() => c.transcript().includes("a2-a"));
+  assert.deepEqual(c.sentFor(REPO_KEY), ["a1-u", "a1-a", "a2-u", "a2-a"]);
+});
+
+// The repository itself keeps its own timing: what it records after being
+// turned on is sent for it.
+test("a repository turned on during a turn sends the rest of that turn, as before", async (t) => {
+  const { c, s } = await start(t, { policy: OTHER_OFF, dir: "other" });
+  await s.turn("on", { during: async () => { await s.tool("first"); s.setPolicy(BOTH); await s.tool("second"); } });
+  await s.drained(() => c.transcript().includes("on-a"));
+  assert.deepEqual(c.sentFor(OTHER_KEY), ["on-second", "on-a"]);
+});
+
 // What a consenting user still gets: every turn, once.
 
 test("a session in one repository throughout sends every turn once", async (t) => {

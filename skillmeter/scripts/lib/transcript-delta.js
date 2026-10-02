@@ -97,11 +97,20 @@ function startsTurn(record, promptId) {
  * recording, so a turn that names one goes nowhere either. A turn whose
  * records carry no working directory is `undefined`, left to the repository
  * staging it.
+ *
+ * `seenUnrecorded(promptId, key)` is true when a hook of that turn ran in a
+ * repository other than `key` that was not recording then. Such a turn goes
+ * nowhere even if that repository records by the time it is staged.
  */
-function turnDestinations(objs, placeOf) {
+function turnDestinations(objs, placeOf, seenUnrecorded = () => false) {
   const turns = turnNumbers(objs);
   const seen = new Map();
+  const prompts = new Map();
   for (let i = 0; i < objs.length; i++) {
+    const promptId = objs[i] && objs[i].promptId;
+    if (typeof promptId === "string" && promptId && !prompts.has(turns[i])) {
+      prompts.set(turns[i], promptId);
+    }
     const cwd = objs[i] && objs[i].cwd;
     if (typeof cwd !== "string" || !cwd) continue;
     const place = placeOf(cwd);
@@ -115,8 +124,9 @@ function turnDestinations(objs, placeOf) {
   }
   return turns.map((number) => {
     const turn = seen.get(number);
-    if (!turn) return undefined;
-    return turn.recording ? turn.key : null;
+    const key = !turn ? undefined : turn.recording ? turn.key : null;
+    const promptId = prompts.get(number);
+    return promptId && seenUnrecorded(promptId, key) ? null : key;
   });
 }
 
