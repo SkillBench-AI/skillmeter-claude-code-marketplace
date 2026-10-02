@@ -93,7 +93,7 @@ function session(collectorUrl, { orgs = [ORG], policy, history = [], signedIn = 
   // passes it to every hook.
   let here = dir;
   let current = "";
-  const signIn = () => writeCredentials(state, { ...IDENTITY, license_jwt: license(orgs) }, { dataDir: data });
+  const signIn = (licensed = orgs) => writeCredentials(state, { ...IDENTITY, license_jwt: license(licensed) }, { dataDir: data });
   const signOut = () => writeCredentials(state, { ...IDENTITY, signed_out: true }, { dataDir: data });
   if (signedIn) signIn();
   else writeCredentials(state, IDENTITY, { dataDir: data });
