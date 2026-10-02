@@ -229,6 +229,7 @@ on its own.
 | 6 | `queueDisposition()` (`repository-queue.js`), `organizationAuditDisposition()` (`organization-audit-queue.js`) | `repository-queue.js` (#52, #56) |
 | 7 | `backfill-state.js` unchanged | none |
 | 8 | privacy cursors | consent journal (#49) |
+| 8, amendment 2026-10-02 (proposed) | turn attribution (`turnDestinations`), unrecorded-turn marks (`transfer.js`) | owed: how Codex meets C7 and C8 (decision 9) |
 | 9 | this file | `docs/adr/004-shared-consent.md` |
 
 The acceptance cases below come from PR #128 and apply as written; the native
@@ -254,8 +255,8 @@ generation; those stay separate gates.
 | C4 | Consent changes between a failed upload and its retry | The retry re-checks consent; no newly revoked payload is sent. |
 | C5 | Reaffirmation or an edit to another repository | An unrelated edit preserves authorization; a reaffirmation follows C3 until a stronger contract exists. |
 | C6 | Global OFF and repository or organization A OFF together | A's payloads revoked despite the pause; B's queues and all privacy cursors retained. |
-| C7 | A session works in repository A while it is OFF or outside the license, then in B, ON | Nothing written in A then is sent, for A or for B, even if A is turned ON before it is staged. |
-| C8 | A session moves between repositories A and B, both ON | Each turn is sent once, for one of them. |
+| C7 (proposed, 2026-10-02) | A session works in repository A while it is OFF or outside the license, then in B, ON | What was written in A then is not sent for B, even if A is turned ON before it is staged; from a turn that ends in A, A once ON receives only what follows its last hook that did not record. Limits: the 2026-10-02 amendment. |
+| C8 (proposed, 2026-10-02) | A session moves between repositories A and B, both ON | Each turn is sent once, for the last of them it was recorded in. Limits: the 2026-10-02 amendment. |
 
 ## Open items
 
@@ -291,18 +292,28 @@ tree, counts as written in the recorded directory.
   A turn that moves from A to B is sent whole for B, including what it wrote
   in A. A directory outside any repository does not count, so a turn that
   steps out and back stays whole.
-- A turn is not sent at all if it was recorded in a repository that was not
-  collecting when one of its hooks ran there, in a repository that is not
-  collecting when it is staged, or in a directory that no longer exists.
+- A turn is sent for no repository if it was recorded in a directory that no
+  longer exists, or in a repository that is not collecting when the turn is
+  staged.
+- A turn is not sent for a repository if one of its hooks ran in another
+  repository that was not collecting at that moment. A turn that ends in the
+  repository that was not collecting is not held back from it: turned on
+  part-way through the turn, that repository receives what follows its last
+  hook that did not record.
 - A repository first observed collecting part-way through a transcript starts
   with the turn in which it was observed. Earlier turns are excluded,
   including a resumed session's.
 
-On Claude Code versions that write no prompt ids, turns are grouped by user
-prompts, no hook marks its turn, and the first-observation rule does not
-apply; only the state at staging protects a turn there.
+Where no mark protects a turn, only the state at staging does: if no hook of
+the turn ran in the repository that was not collecting, or its mark could
+not be written or read, a repository turned on before the turn is staged no
+longer holds it back. On Claude Code versions that write no prompt ids, turns
+are grouped by user prompts, no hook marks its turn, and the first-observation
+rule does not apply. A turn whose records name no directory is left to
+whichever repository stages it, and can be sent for more than one.
 
 This plugin's proof, alongside its privacy cursors: a hook that runs in a
 repository that is not collecting marks its turn locally with the prompt id
 and an HMAC of that repository, and staging reads these marks with the
-recorded directories.
+recorded directories. A mark is kept while any repository holds a cursor for
+its transcript.
