@@ -1756,15 +1756,14 @@ function cleanupStaleFiles() {
     } catch {}
   }
 
+  // An unrecorded-turn mark guards its turn until that turn is staged, which
+  // can take longer than 30 days, so it follows the same rule. A transcript
+  // with no cursor needs none: a repository that records it later starts at
+  // the turn it is first seen in.
   const cursored = transcriptsWithCursors();
   candidates.push(...uncursoredTranscriptMarks(UNLICENSED_MARK_DIR, ".json", cursored));
   candidates.push(...uncursoredTranscriptMarks(PENDING_BOUNDARY_DIR, ".ndjson", cursored));
-  // An unrecorded-turn mark matters only while its transcript can be resumed.
-  try {
-    for (const f of fs.readdirSync(UNRECORDED_TURN_DIR)) {
-      candidates.push(path.join(UNRECORDED_TURN_DIR, f));
-    }
-  } catch {}
+  candidates.push(...uncursoredTranscriptMarks(UNRECORDED_TURN_DIR, ".ndjson", cursored));
 
   if (fs.existsSync(LOG_DIR)) {
     try {

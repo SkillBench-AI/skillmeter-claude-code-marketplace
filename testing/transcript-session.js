@@ -204,6 +204,15 @@ function session(collectorUrl, { orgs = [ORG], policy, history = [], signedIn = 
       else fs.mkdirSync(dirs[name], { recursive: true });
     },
     rm(name) { fs.rmSync(dirs[name], { recursive: true, force: true }); },
+    // Make this session's local transcript marks look `days` old.
+    ageMarks(days) {
+      const when = (Date.now() - days * 24 * 60 * 60 * 1000) / 1000;
+      for (const name of ["unrecorded-turns", "unlicensed-transcripts"]) {
+        const dir = path.join(data, "logs", name);
+        if (!fs.existsSync(dir)) continue;
+        for (const f of fs.readdirSync(dir)) fs.utimesSync(path.join(dir, f), when, when);
+      }
+    },
     // One user turn. The prompt hook runs in the background, so the prompt
     // can already be in the transcript when it reads it. `during` runs
     // between the prompt and the answer, and may change directory. A turn the

@@ -275,6 +275,23 @@ test("a turn that read a repository outside the license is not sent once the lic
   assert.deepEqual(c.sentFor(REPO_KEY), ["a1-u", "a1-a", "a2-u", "a2-a"]);
 });
 
+// A turn can wait to be staged longer than other local files are kept: it
+// ended outside any repository, and the session is resumed a month later.
+test("a turn's mark outlives 30 days while the turn waits to be staged", async (t) => {
+  const { c, s } = await start(t, { policy: OTHER_OFF });
+  await s.turn("a1");
+  await s.drained(() => c.transcript().includes("a1-a"));
+  await s.turn("dip", { during: async () => { s.cd("other"); await s.tool("peek"); s.cd("repo"); await s.tool("back"); s.cd("outside"); } });
+  s.ageMarks(31);
+  s.setPolicy(BOTH);
+  s.cd("repo");
+  // Session start removes stale local files.
+  await s.sessionStart("resume");
+  await s.turn("a2");
+  await s.drained(() => c.transcript().includes("a2-a"));
+  assert.deepEqual(c.sentFor(REPO_KEY), ["a1-u", "a1-a", "a2-u", "a2-a"]);
+});
+
 // The repository itself keeps its own timing: what it records after being
 // turned on is sent for it.
 test("a repository turned on during a turn sends the rest of that turn, as before", async (t) => {
