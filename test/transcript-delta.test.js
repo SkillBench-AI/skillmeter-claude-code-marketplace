@@ -577,15 +577,21 @@ test("markUnrecordedTurn: appends the prompt id and a hashed repository, once", 
   assert.equal(mark("p2", {}), false, "outside any repository marks nothing");
 
   const raw = fs.readFileSync(file, "utf8");
-  const lines = raw.trim().split("\n").map(JSON.parse);
+  const lines = raw.split("\n").filter(Boolean).map(JSON.parse);
   assert.deepEqual(lines.map((l) => l.promptId), ["p1", "p1"], "each repository once");
   assert.notEqual(lines[0].place, lines[1].place);
   assert.doesNotMatch(raw, /skillbench-ai|off|work|elsewhere/, "no repository name or path");
+  assert.equal(fs.statSync(path.dirname(file)).mode & 0o777, 0o700, "a private directory");
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600, "a private file");
 
-  // A partial last line, as a crash mid-write leaves, does not lose the rest.
+  // A partial last line, as a crash mid-write leaves, loses neither the marks
+  // before it nor the next one written after it.
   fs.appendFileSync(file, '{"promptId":"p3","pla');
   assert.equal(mark("p1", off), true);
-  assert.equal(fs.readFileSync(file, "utf8").trim().split("\n").length, 3, "p1 still known; nothing appended");
+  assert.equal(mark("p4", off), true);
+  const readable = fs.readFileSync(file, "utf8").split("\n").filter(Boolean)
+    .filter((line) => { try { JSON.parse(line); return true; } catch { return false; } });
+  assert.deepEqual(readable.map((line) => JSON.parse(line).promptId), ["p1", "p1", "p4"]);
 });
 
 test("an unrecorded-turn mark ages out unless a cursor for its transcript remains", () => {
