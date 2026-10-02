@@ -103,10 +103,11 @@ test("turnNumbers: a new promptId starts a turn; its tool results and replies st
     { type: "user", promptId: "p1", message: { content: "ask" } },
     content("p1-a"),
     { type: "user", promptId: "p1", message: { content: [{ type: "tool_result" }] } },
+    { type: "user", promptId: "p1", isMeta: true, message: { content: "hook context" } },
     { type: "user", promptId: "p2", message: { content: "next" } },
     meta(),
   ];
-  assert.deepEqual(d.turnNumbers(objs), [0, 1, 1, 1, 2, 2]);
+  assert.deepEqual(d.turnNumbers(objs), [0, 1, 1, 1, 1, 2, 2]);
 });
 
 test("turnNumbers: without promptIds, a user record that is not a tool result starts a turn", () => {

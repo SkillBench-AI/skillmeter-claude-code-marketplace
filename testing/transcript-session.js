@@ -232,6 +232,11 @@ function session(collectorUrl, { orgs = [ORG], policy, history = [], signedIn = 
       });
       assert.equal(r.status, 0, r.stderr);
     },
+    // A user record Claude Code adds inside a turn, such as hook context: the
+    // turn's prompt id, but not a tool result.
+    context(name) {
+      append([{ type: "user", uuid: `${current}-${name}`, promptId: current, isMeta: true, message: { content: `${name} context` } }]);
+    },
     // A record of the last turn written after its Stop had read the
     // transcript, as an answer still being written can be.
     late(name) {
