@@ -98,8 +98,10 @@ device flow, and sent that token to the activation service.
 - assistant messages exposed by lifecycle hooks;
 - task descriptions and metadata, compact instructions, and failure messages;
 - sanitized transcript records added since the last local transcript cursor,
-  from turns that ended in that repository; a turn that also worked in a
-  repository that is not collecting is not sent;
+  from turns that ended in that repository. A turn is not sent if it was
+  recorded in a repository that was not collecting, or in a directory that no
+  longer exists. Where a turn was written is the working directory Claude
+  Code records, so a file read by path from elsewhere counts as written there;
 - when separately approved, sanitized historical prompt and response records
   through a fixed transcript UUID boundary; historical tool-result and image
   blocks are removed before sanitization;
