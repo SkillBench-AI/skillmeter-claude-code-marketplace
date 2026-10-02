@@ -18,11 +18,19 @@ const { makeJwt, makeTempDir, writeCredentials, writeFile, writeTelemetryPolicy 
 const SCRIPTS = path.resolve(__dirname, "../skillmeter/scripts");
 const ORG = "acme";
 const REPO_KEY = `github.com/${ORG}/widgets`;
+// A second repository of the same organization.
+const OTHER_KEY = `github.com/${ORG}/gadgets`;
 const IDENTITY = {
   device_id: "11111111-2222-4333-8444-555555555555",
   hash_salt: "0123456789abcdef0123456789abcdef",
 };
 const SESSION_ID = "5e551011-0000-4000-8000-000000000001";
+
+// The repository a chunk was queued for, recovered from its idempotency key.
+function queuedFor(key, body) {
+  return [REPO_KEY, OTHER_KEY].find((repoKey) =>
+    crypto.createHash("sha256").update(repoKey).update("\0").update(body).digest("hex") === key) || "";
+}
 
 // Loopback collector; records the transcript uuids it accepted.
 async function collector() {
@@ -34,7 +42,8 @@ async function collector() {
       let body = Buffer.concat(parts);
       if (/gzip/.test(req.headers["content-encoding"] || "")) body = zlib.gunzipSync(body);
       const lines = body.toString().split("\n").filter(Boolean).map(JSON.parse);
-      requests.push({ path: req.url, lines });
+      const repository = queuedFor(req.headers["x-idempotency-key"], body);
+      requests.push({ path: req.url, lines, repository });
       res.writeHead(202, { "content-type": "application/json" });
       res.end("{}");
     });
@@ -45,6 +54,10 @@ async function collector() {
     close: () => new Promise((resolve) => server.close(resolve)),
     transcript: () => requests
       .filter((r) => r.path === "/logs/claude/transcript")
+      .flatMap((r) => r.lines.map((l) => l.uuid)),
+    // The uuids sent for one repository.
+    sentFor: (repoKey) => requests
+      .filter((r) => r.path === "/logs/claude/transcript" && r.repository === repoKey)
       .flatMap((r) => r.lines.map((l) => l.uuid)),
   };
 }
@@ -57,15 +70,29 @@ const license = (orgs) => makeJwt({
 
 // `orgs` are the license's organizations; `signedIn: false` starts without a
 // license. `history` is what a resumed session's transcript already holds.
-function session(collectorUrl, { orgs = [ORG], policy, history = [], signedIn = true }) {
+// The session works in one of four directories, starting in `dir`: `repo`
+// (REPO_KEY), `other` (OTHER_KEY), `foreign` (a repository of an organization
+// the license does not cover) and `outside` (in no repository).
+function session(collectorUrl, { orgs = [ORG], policy, history = [], signedIn = true, dir = "repo" }) {
   const root = makeTempDir("skm-transcript-session-");
   const state = path.join(root, "state");
   const data = path.join(root, "data");
-  const repo = path.join(root, "repo");
-  writeFile(path.join(repo, ".git/config"), `[remote "origin"]\n\turl = https://github.com/${ORG}/widgets.git\n`);
-  // A directory in no repository, for a hook the session runs from there.
-  const outside = path.join(root, "outside");
-  fs.mkdirSync(outside);
+  const dirs = {
+    repo: path.join(root, "repo"),
+    other: path.join(root, "other"),
+    foreign: path.join(root, "foreign"),
+    outside: path.join(root, "outside"),
+  };
+  const remote = (name, url) => writeFile(path.join(dirs[name], ".git/config"), `[remote "origin"]\n\turl = ${url}\n`);
+  remote("repo", `https://github.com/${ORG}/widgets.git`);
+  remote("other", `https://github.com/${ORG}/gadgets.git`);
+  remote("foreign", "https://github.com/elsewhere/tools.git");
+  fs.mkdirSync(dirs.outside);
+  const outside = dirs.outside;
+  // Where the session is working; Claude Code writes it on every record and
+  // passes it to every hook.
+  let here = dir;
+  let current = "";
   const signIn = () => writeCredentials(state, { ...IDENTITY, license_jwt: license(orgs) }, { dataDir: data });
   const signOut = () => writeCredentials(state, { ...IDENTITY, signed_out: true }, { dataDir: data });
   if (signedIn) signIn();
@@ -76,7 +103,7 @@ function session(collectorUrl, { orgs = [ORG], policy, history = [], signedIn = 
   const claude = path.join(root, "claude");
   const transcript = path.join(claude, "projects", "repo", `${SESSION_ID}.jsonl`);
   const append = (records) => fs.appendFileSync(transcript,
-    records.map((r) => JSON.stringify({ ...r, cwd: repo }) + "\n").join(""));
+    records.map((r) => JSON.stringify({ cwd: dirs[here], ...r }) + "\n").join(""));
   fs.mkdirSync(path.dirname(transcript), { recursive: true });
   fs.writeFileSync(transcript, "");
   append(history);
@@ -96,15 +123,16 @@ function session(collectorUrl, { orgs = [ORG], policy, history = [], signedIn = 
 
   function run(script, args, input) {
     return new Promise((resolve) => {
+      const cwd = input.cwd || dirs[here];
       const child = spawn(process.execPath, [path.join(SCRIPTS, script), ...args], {
-        cwd: repo, env, stdio: ["pipe", "pipe", "pipe"],
+        cwd, env, stdio: ["pipe", "pipe", "pipe"],
       });
       let stdout = "";
       let stderr = "";
       child.stdout.on("data", (d) => { stdout += d; });
       child.stderr.on("data", (d) => { stderr += d; });
       child.on("close", (status) => resolve({ status, stdout, stderr }));
-      child.stdin.end(JSON.stringify({ session_id: SESSION_ID, cwd: repo, transcript_path: transcript, ...input }));
+      child.stdin.end(JSON.stringify({ session_id: SESSION_ID, cwd, transcript_path: transcript, ...input }));
     });
   }
   async function script(name, args) {
@@ -161,17 +189,31 @@ function session(collectorUrl, { orgs = [ORG], policy, history = [], signedIn = 
       const r = await run("session_start.js", [], { source });
       assert.equal(r.status, 0, r.stderr);
     },
+    // Change the working directory, as `cd` in a Bash tool call does.
+    cd(next) { here = next; },
     // One user turn. The prompt hook runs in the background, so the prompt
     // can already be in the transcript when it reads it. `during` runs
-    // between the prompt and the answer.
+    // between the prompt and the answer, and may change directory.
     async turn(label, { during } = {}) {
-      append([{ type: "user", uuid: `${label}-u`, message: { content: `${label} prompt` } }]);
-      const prompt = await run("hook.js", ["UserPromptSubmit"], { prompt: `${label} prompt` });
+      current = label;
+      append([{ type: "user", uuid: `${label}-u`, promptId: label, message: { content: `${label} prompt` } }]);
+      const prompt = await run("hook.js", ["UserPromptSubmit"], { prompt: `${label} prompt`, prompt_id: label });
       assert.equal(prompt.status, 0, prompt.stderr);
       if (during) await during();
       append([{ type: "assistant", uuid: `${label}-a`, message: { content: `${label} answer` } }]);
-      const stop = await run("stop.js", [], { last_assistant_message: `${label} answer` });
+      const stop = await run("stop.js", [], { last_assistant_message: `${label} answer`, prompt_id: label });
       assert.equal(stop.status, 0, stop.stderr);
+    },
+    // A tool call in the current turn: its result record, then its hook.
+    async tool(name) {
+      append([{
+        type: "user", uuid: `${current}-${name}`, promptId: current,
+        message: { content: [{ type: "tool_result", content: `${name} output` }] },
+      }]);
+      const r = await run("hook.js", ["PostToolUse"], {
+        prompt_id: current, tool_name: "Bash", tool_input: { command: name }, tool_response: {},
+      });
+      assert.equal(r.status, 0, r.stderr);
     },
     // A tool hook from a directory outside any repository.
     async toolOutsideRepository() {
@@ -208,8 +250,8 @@ function session(collectorUrl, { orgs = [ORG], policy, history = [], signedIn = 
 
 // A resumed session's transcript: the conversation it continues.
 const HISTORY = [
-  { type: "user", uuid: "before-u", message: { content: "from before this session" } },
+  { type: "user", uuid: "before-u", promptId: "before", message: { content: "from before this session" } },
   { type: "assistant", uuid: "before-a", message: { content: "from before this session" } },
 ];
 
-module.exports = { ORG, REPO_KEY, HISTORY, collector, session };
+module.exports = { ORG, REPO_KEY, OTHER_KEY, HISTORY, collector, session };

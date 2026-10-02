@@ -96,6 +96,71 @@ test("computeDelta: unknown cursor uuid -> reset from 0", () => {
 });
 
 // ---- splitLinesByBudget ----------------------------------------------------
+// ---- turns -------------------------------------------------------------------
+test("turnNumbers: a new promptId starts a turn; its tool results and replies stay in it", () => {
+  const objs = [
+    meta("attachment"),
+    { type: "user", promptId: "p1", message: { content: "ask" } },
+    content("p1-a"),
+    { type: "user", promptId: "p1", message: { content: [{ type: "tool_result" }] } },
+    { type: "user", promptId: "p2", message: { content: "next" } },
+    meta(),
+  ];
+  assert.deepEqual(d.turnNumbers(objs), [0, 1, 1, 1, 2, 2]);
+});
+
+test("turnNumbers: without promptIds, a user record that is not a tool result starts a turn", () => {
+  const objs = [
+    { type: "user", message: { content: "ask" } },
+    { type: "user", message: { content: [{ type: "tool_result" }] } },
+    content("a"),
+    { type: "user", message: { content: [{ type: "text", text: "next" }] } },
+  ];
+  assert.deepEqual(d.turnNumbers(objs), [1, 1, 1, 2]);
+});
+
+test("turnDestinations: a turn goes to the repository it ended in, if every one it touched records", () => {
+  const places = {
+    "/a": { key: "A", recording: true },
+    "/b": { key: "B", recording: true },
+    "/off": { key: "OFF", recording: false },
+    "/out": null,
+    "/gone": undefined,
+  };
+  const turn = (promptId, ...cwds) => [
+    { type: "user", promptId, cwd: cwds[0] },
+    ...cwds.slice(1).map((cwd) => ({ type: "assistant", cwd })),
+  ];
+  const objs = [
+    ...turn("moved", "/a", "/b"),
+    ...turn("stepped-out", "/a", "/out"),
+    ...turn("outside", "/out"),
+    ...turn("visited-off", "/a", "/off", "/a"),
+    ...turn("unknown", "/gone"),
+    ...turn("known-later", "/gone", "/a"),
+  ];
+  objs.splice(9, 0, meta());
+  assert.deepEqual(d.turnDestinations(objs, (cwd) => places[cwd]), [
+    "B", "B",
+    "A", "A",
+    null,
+    null, null, null,
+    undefined, undefined,
+    "A", "A",
+  ]);
+});
+
+test("buildChunkPlan: keep sends only the selected records, and the cursor passes the rest", () => {
+  const objs = [content("a"), content("b"), content("c")];
+  const plan = d.buildChunkPlan(objs, { lastUuid: "a", seq: 2 }, SALT, { keep: (i) => i === 2 });
+  assert.deepEqual(plan.chunks.map((c) => c.lines.map((l) => JSON.parse(l).uuid)), [["c"]]);
+  assert.deepEqual(plan.newCursor, { lastUuid: "c", seq: 3 });
+
+  const none = d.buildChunkPlan(objs, { lastUuid: "a", seq: 2 }, SALT, { keep: () => false });
+  assert.deepEqual(none.chunks, []);
+  assert.deepEqual(none.newCursor, { lastUuid: "c", seq: 2 });
+});
+
 test("splitLinesByBudget: groups within budget, no line loss", () => {
   const lines = ["aaaa", "bbbb", "cccc"]; // 5 bytes each incl newline
   const groups = d.splitLinesByBudget(lines, 10); // 2 lines per group
@@ -445,6 +510,41 @@ test("a pending boundary ages out unless a cursor for its transcript remains", (
   const left = fs.readdirSync(dir);
   assert.equal(left.includes("pending-old.jsonl.ndjson"), false);
   assert.equal(left.includes("pending-kept.jsonl.ndjson"), true);
+});
+
+// A repository first seen recording part-way through a transcript.
+test("startTranscriptAtTurn: starts with the turn it was seen in", () => {
+  const file = path.join(DATA_DIR, "turns.jsonl");
+  writeFile(file, toJsonl([
+    { type: "attachment", uuid: "open" },
+    { type: "user", promptId: "p1", uuid: "p1-u" },
+    content("p1-a"),
+    { type: "user", promptId: "p2", uuid: "p2-u" },
+  ]));
+  const at = (promptId, repoName) => {
+    const repository = { repoKey: `github.com/skillbench-ai/${repoName}`, org: "skillbench-ai" };
+    const started = transfer.startTranscriptAtTurn({ transcript_path: file, prompt_id: promptId }, repository);
+    return { started, cursor: transfer.readCursor("turns.jsonl", repository) };
+  };
+
+  assert.equal(at("p2", "later").cursor.lastUuid, "p1-a", "after the earlier turn");
+  assert.equal(at("p3", "unwritten").cursor.lastUuid, "p2-u", "a turn not written yet follows everything");
+  const first = at("p1", "first");
+  assert.equal(first.started, true);
+  assert.equal(first.cursor.lastUuid, null, "the first turn keeps the records that open the session");
+
+  assert.equal(at("p2", "first").started, false, "an existing cursor is kept");
+  assert.equal(at("p2", "first").cursor.lastUuid, null);
+});
+
+test("startTranscriptAtTurn: needs a prompt id and a transcript that records them", () => {
+  const repository = { repoKey: "github.com/skillbench-ai/untold", org: "skillbench-ai" };
+  const file = path.join(DATA_DIR, "untold.jsonl");
+  writeFile(file, toJsonl([{ type: "user", uuid: "u" }, content("a")]));
+  assert.equal(transfer.startTranscriptAtTurn({ transcript_path: file, prompt_id: "p1" }, repository), false);
+  writeFile(file, toJsonl([{ type: "user", promptId: "p1", uuid: "u" }, content("a")]));
+  assert.equal(transfer.startTranscriptAtTurn({ transcript_path: file }, repository), false);
+  assert.equal(transfer.readCursor("untold.jsonl", repository), null);
 });
 
 test("sealDeltaChunk writes body+meta and listDeltaChunks finds it", () => {

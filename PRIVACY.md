@@ -97,7 +97,9 @@ device flow, and sent that token to the activation service.
   identifiers;
 - assistant messages exposed by lifecycle hooks;
 - task descriptions and metadata, compact instructions, and failure messages;
-- sanitized transcript records added since the last local transcript cursor;
+- sanitized transcript records added since the last local transcript cursor,
+  from turns that ended in that repository; a turn that also worked in a
+  repository that is not collecting is not sent;
 - when separately approved, sanitized historical prompt and response records
   through a fixed transcript UUID boundary; historical tool-result and image
   blocks are removed before sanitization;
