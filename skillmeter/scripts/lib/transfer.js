@@ -1277,9 +1277,11 @@ function markUnrecordedTurn(input, repoScopeDecision) {
   if (readUnrecordedTurns(transcriptId).get(promptId)?.has(place)) return true;
   try {
     fs.mkdirSync(UNRECORDED_TURN_DIR, { recursive: true, mode: 0o700 });
+    // The leading newline ends a line a crash left partial, so this mark is
+    // never joined to it; the reader skips blank and partial lines.
     fs.appendFileSync(
       unrecordedTurnPath(transcriptId),
-      JSON.stringify({ promptId, place }) + "\n",
+      "\n" + JSON.stringify({ promptId, place }) + "\n",
       { mode: 0o600 }
     );
     return true;
