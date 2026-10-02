@@ -401,18 +401,24 @@ test("markUnrecordedTurn: appends the prompt id and a hashed repository, once", 
   assert.equal(fs.readFileSync(file, "utf8").trim().split("\n").length, 3, "p1 still known; nothing appended");
 });
 
-test("an unrecorded-turn mark ages out with other stale files", () => {
+test("an unrecorded-turn mark ages out unless a cursor for its transcript remains", () => {
   const dir = path.join(DATA_DIR, "logs", "unrecorded-turns");
   const transcript = (name) => path.join(DATA_DIR, `${name}.jsonl`);
   for (const name of ["old-turns", "recent-turns"]) {
     transfer.markUnrecordedTurn({ transcript_path: transcript(name), prompt_id: "p" }, { repoKey: "github.com/skillbench-ai/x" });
   }
+  transfer.markUnrecordedTurn({ transcript_path: transcript("old-cursored"), prompt_id: "p" }, { repoKey: "github.com/skillbench-ai/x" });
+  transfer.writeCursor({ transcriptId: "old-cursored.jsonl", lastUuid: "u", seq: 1, updatedAt: 0 }, TEST_REPOSITORY);
   const monthAgo = (Date.now() - 31 * 24 * 60 * 60 * 1000) / 1000;
-  fs.utimesSync(path.join(dir, "old-turns.jsonl.ndjson"), monthAgo, monthAgo);
+  for (const name of ["old-turns", "old-cursored"]) {
+    fs.utimesSync(path.join(dir, `${name}.jsonl.ndjson`), monthAgo, monthAgo);
+  }
   transfer.cleanupStaleFiles();
   const left = fs.readdirSync(dir);
   assert.equal(left.includes("old-turns.jsonl.ndjson"), false);
   assert.equal(left.includes("recent-turns.jsonl.ndjson"), true);
+  // A cursor for the transcript can still be behind the marked turn.
+  assert.equal(left.includes("old-cursored.jsonl.ndjson"), true);
 });
 
 test("sealDeltaChunk writes body+meta and listDeltaChunks finds it", () => {
