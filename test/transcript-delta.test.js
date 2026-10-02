@@ -402,9 +402,13 @@ test("markUnrecordedTurn: appends the prompt id and a hashed repository, once", 
   fs.appendFileSync(file, '{"promptId":"p3","pla');
   assert.equal(mark("p1", off), true);
   assert.equal(mark("p4", off), true);
-  const readable = fs.readFileSync(file, "utf8").split("\n").filter(Boolean)
-    .filter((line) => { try { JSON.parse(line); return true; } catch { return false; } });
-  assert.deepEqual(readable.map((line) => JSON.parse(line).promptId), ["p1", "p1", "p4"]);
+  const readable = () => fs.readFileSync(file, "utf8").split("\n").filter(Boolean)
+    .filter((line) => { try { JSON.parse(line); return true; } catch { return false; } })
+    .map((line) => JSON.parse(line).promptId);
+  assert.deepEqual(readable(), ["p1", "p1", "p4"], "p4 is on a line of its own");
+  // And it is read back past the partial line: marking p4 again appends nothing.
+  assert.equal(mark("p4", off), true);
+  assert.deepEqual(readable(), ["p1", "p1", "p4"]);
 });
 
 test("an unrecorded-turn mark ages out unless a cursor for its transcript remains", () => {
