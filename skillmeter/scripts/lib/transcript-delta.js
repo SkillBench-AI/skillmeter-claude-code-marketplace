@@ -93,8 +93,10 @@ function startsTurn(record, promptId) {
  * A turn belongs to the repository it ended in: the last of its records
  * written inside one. It is sent only when every repository it was written in
  * is recording; otherwise, or when it was written only outside repositories,
- * it goes nowhere (null). A turn with no known working directory is
- * `undefined`, left to the repository staging it.
+ * it goes nowhere (null). A directory that no longer exists cannot show it was
+ * recording, so a turn that names one goes nowhere either. A turn whose
+ * records carry no working directory is `undefined`, left to the repository
+ * staging it.
  */
 function turnDestinations(objs, placeOf) {
   const turns = turnNumbers(objs);
@@ -103,9 +105,9 @@ function turnDestinations(objs, placeOf) {
     const cwd = objs[i] && objs[i].cwd;
     if (typeof cwd !== "string" || !cwd) continue;
     const place = placeOf(cwd);
-    if (place === undefined) continue;
     const turn = seen.get(turns[i]) || { key: null, recording: true };
-    if (place) {
+    if (place === undefined) turn.recording = false;
+    else if (place) {
       turn.key = place.key;
       turn.recording = turn.recording && place.recording;
     }

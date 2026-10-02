@@ -136,8 +136,9 @@ test("turnDestinations: a turn goes to the repository it ended in, if every one 
     ...turn("stepped-out", "/a", "/out"),
     ...turn("outside", "/out"),
     ...turn("visited-off", "/a", "/off", "/a"),
-    ...turn("unknown", "/gone"),
-    ...turn("known-later", "/gone", "/a"),
+    ...turn("gone", "/gone"),
+    ...turn("gone-then-a", "/gone", "/a"),
+    ...turn("untold"),
   ];
   objs.splice(9, 0, meta());
   assert.deepEqual(d.turnDestinations(objs, (cwd) => places[cwd]), [
@@ -145,8 +146,11 @@ test("turnDestinations: a turn goes to the repository it ended in, if every one 
     "A", "A",
     null,
     null, null, null,
-    undefined, undefined,
-    "A", "A",
+    // A directory that no longer exists may have been one not recording.
+    null, null,
+    null, null,
+    // No working directory recorded: left to the repository staging it.
+    undefined,
   ]);
 });
 

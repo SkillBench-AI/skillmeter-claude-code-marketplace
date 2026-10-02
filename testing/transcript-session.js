@@ -124,8 +124,9 @@ function session(collectorUrl, { orgs = [ORG], policy, history = [], signedIn = 
   function run(script, args, input) {
     return new Promise((resolve) => {
       const cwd = input.cwd || dirs[here];
+      // A hook still runs after its directory is deleted; the process needs one.
       const child = spawn(process.execPath, [path.join(SCRIPTS, script), ...args], {
-        cwd, env, stdio: ["pipe", "pipe", "pipe"],
+        cwd: fs.existsSync(cwd) ? cwd : root, env, stdio: ["pipe", "pipe", "pipe"],
       });
       let stdout = "";
       let stderr = "";
@@ -176,25 +177,36 @@ function session(collectorUrl, { orgs = [ORG], policy, history = [], signedIn = 
     },
     // Change the working directory, as `cd` in a Bash tool call does.
     cd(next) { here = next; },
+    // Another working directory: a clone with this remote, or a plain one.
+    addDir(name, url) {
+      dirs[name] = path.join(root, name);
+      if (url) remote(name, url);
+      else fs.mkdirSync(dirs[name], { recursive: true });
+    },
+    rm(name) { fs.rmSync(dirs[name], { recursive: true, force: true }); },
     // One user turn. The prompt hook runs in the background, so the prompt
     // can already be in the transcript when it reads it. `during` runs
-    // between the prompt and the answer, and may change directory.
-    async turn(label, { during } = {}) {
+    // between the prompt and the answer, and may change directory. A turn the
+    // user interrupts (`stop: false`) runs no Stop hook.
+    async turn(label, { during, stop = true } = {}) {
       current = label;
       append([{ type: "user", uuid: `${label}-u`, promptId: label, message: { content: `${label} prompt` } }]);
       const prompt = await run("hook.js", ["UserPromptSubmit"], { prompt: `${label} prompt`, prompt_id: label });
       assert.equal(prompt.status, 0, prompt.stderr);
       if (during) await during();
       append([{ type: "assistant", uuid: `${label}-a`, message: { content: `${label} answer` } }]);
-      const stop = await run("stop.js", [], { last_assistant_message: `${label} answer`, prompt_id: label });
-      assert.equal(stop.status, 0, stop.stderr);
+      if (!stop) return;
+      const r = await run("stop.js", [], { last_assistant_message: `${label} answer`, prompt_id: label });
+      assert.equal(r.status, 0, r.stderr);
     },
-    // A tool call in the current turn: its result record, then its hook.
-    async tool(name) {
+    // A tool call in the current turn: its result record, then its hook
+    // unless `hook: false`.
+    async tool(name, { hook = true } = {}) {
       append([{
         type: "user", uuid: `${current}-${name}`, promptId: current,
         message: { content: [{ type: "tool_result", content: `${name} output` }] },
       }]);
+      if (!hook) return;
       const r = await run("hook.js", ["PostToolUse"], {
         prompt_id: current, tool_name: "Bash", tool_input: { command: name }, tool_response: {},
       });
