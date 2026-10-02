@@ -254,6 +254,8 @@ generation; those stay separate gates.
 | C4 | Consent changes between a failed upload and its retry | The retry re-checks consent; no newly revoked payload is sent. |
 | C5 | Reaffirmation or an edit to another repository | An unrelated edit preserves authorization; a reaffirmation follows C3 until a stronger contract exists. |
 | C6 | Global OFF and repository or organization A OFF together | A's payloads revoked despite the pause; B's queues and all privacy cursors retained. |
+| C7 | A session works in repository A, OFF or outside the license, then in B, ON | Nothing written in A is sent, for A or for B. |
+| C8 | A session moves between repositories A and B, both ON | Each turn is sent once, for one of them. |
 
 ## Open items
 
@@ -267,3 +269,27 @@ generation; those stay separate gates.
 - A durable revocation generation that distinguishes reaffirmation from an
   OFF/ON cycle would replace the hold in decision 6; its schema is a separate
   decision.
+
+## Amendment 2026-10-02: transcripts that span repositories
+
+**Status:** Proposed.
+
+A session can change directory, so one transcript can hold turns written in
+several repositories. Decision 8 did not say whose consent governs content
+written in one repository and staged while the session is in another. It
+does now, for every client (acceptance cases C7 and C8):
+
+- Content written in one repository is never sent for another.
+- Content written in a repository that is not collecting is never sent, even
+  inside a turn that belongs to a repository that is.
+- A repository first observed collecting part-way through a transcript
+  excludes what came before that observation, as decision 8 already requires
+  of a transcript.
+
+This plugin's proof, alongside its privacy cursors: a turn, the records that
+share a prompt id, belongs to the repository it ended in, judged by the
+working directory Claude Code writes on each record. A directory outside any
+repository does not count, so a turn that steps out and back stays whole. A
+turn that also wrote in a repository that is not collecting is not sent. Where
+Claude Code does not follow a `cd` (outside the launch directory tree), the
+recorded directory is the one attributed.
