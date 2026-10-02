@@ -139,6 +139,25 @@ test("a resumed session does not send its earlier turns in a repository it retur
   assert.deepEqual(c.sentFor(REPO_KEY), ["in-u", "in-a"]);
 });
 
+// Claude Code adds user records inside a turn (hook context, skill text) that
+// share its prompt id. They do not start a turn, so the turn stays whole.
+test("a turn that visits a repository turned off is not sent past a record added inside it", async (t) => {
+  const { c, s } = await start(t, { policy: OTHER_OFF });
+  await s.turn("mixed", { during: async () => { s.cd("other"); await s.tool("peek"); s.cd("repo"); s.context("note"); } });
+  await s.turn("after");
+  await s.drained(() => c.transcript().includes("after-a"));
+  assert.deepEqual(c.transcript(), ["after-u", "after-a"]);
+});
+
+// No hook ran there, so only the records say where the turn read.
+test("a turn whose records name a repository the license does not cover is not sent", async (t) => {
+  const { c, s } = await start(t, { policy: BOTH });
+  await s.turn("mixed", { during: async () => { s.cd("foreign"); await s.tool("peek", { hook: false }); s.cd("repo"); } });
+  await s.turn("after");
+  await s.drained(() => c.transcript().includes("after-a"));
+  assert.deepEqual(c.transcript(), ["after-u", "after-a"]);
+});
+
 // A directory that no longer exists cannot show it was recording.
 
 test("a turn that read a deleted clone of a repository turned off is not sent", async (t) => {
