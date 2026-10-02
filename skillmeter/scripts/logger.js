@@ -361,6 +361,14 @@ async function runHook(eventName, buildData, options = {}) {
     process.exit(0);
   }
   console.error(`[skillmeter] ${eventName}: logged (session=${sessionId.slice(0, 8)}…)`);
+  // The first recorded hook in a repository marks the turn its transcript
+  // starts from there.
+  try {
+    require("./lib/transfer").startTranscriptAtTurn(input, {
+      repoKey: repoScopeDecision.repoKey,
+      org: repoScopeDecision.remoteOrg,
+    });
+  } catch {}
 
   await runOptionalCallback(
     eventName,

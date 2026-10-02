@@ -32,7 +32,15 @@ const {
   quarantinePathFor,
   recordUploadFailure,
 } = require("./chunk-retry");
-const { parseJsonl, lastContentUuid, buildChunkPlan } = require("./transcript-delta");
+const {
+  parseJsonl,
+  lastContentUuid,
+  turnNumbers,
+  turnDestinations,
+  buildChunkPlan,
+} = require("./transcript-delta");
+const { getRepoScopeDecision } = require("./repo-scope");
+const { resolveTelemetryGate } = require("./telemetry-policy");
 const {
   PLUGIN_ROOT,
   LOG_DIR,
@@ -893,9 +901,11 @@ async function drainDeltaChunks(timeoutMs) {
 
 /**
  * Stage a transcript delta: seal the lines added since the cursor's uuid as
- * durable chunks, then advance the cursor. The cursor advances only after every
- * chunk seals, so a partial failure re-sends the full delta next Stop (chunks
- * are idempotent by uuid). Returns { chunks: <#sealed> }.
+ * durable chunks, then advance the cursor. Only the turns that belong to this
+ * repository are sealed (turnDestinations); the cursor moves past the rest.
+ * The cursor advances only after every chunk seals, so a partial failure
+ * re-sends the full delta next Stop (chunks are idempotent by uuid). Returns
+ * { chunks: <#sealed> }.
  */
 function stageTranscriptDelta(transcriptPath, promptId, deviceId, repository) {
   if (!repository?.repoKey) return { chunks: 0 };
@@ -916,16 +926,33 @@ function stageTranscriptDelta(transcriptPath, promptId, deviceId, repository) {
     return { chunks: 0 };
   }
 
-  const cursor = readCursor(transcriptId, repository);
   const { objs } = parseJsonl(raw);
-  const hashSalt = credstore.getOrCreateHashSalt();
+  const places = transcriptPlaces();
+  const destinations = turnDestinations(objs, places.of);
+  let chunks = stageRepositoryTurns(objs, destinations, transcriptId, promptId, repository);
+  // A turn's own Stop may not stage it: the turn ended outside any repository,
+  // or its last lines were written after that Stop read the transcript. Every
+  // other repository already recording this transcript takes its turns here.
+  for (const other of places.recording()) {
+    if (other.repoKey === repository.repoKey) continue;
+    const cursor = readCursor(transcriptId, other);
+    if (!cursor || cursor.discarded) continue;
+    chunks += stageRepositoryTurns(objs, destinations, transcriptId, promptId, other);
+  }
+  return { chunks };
+}
 
-  const plan = buildChunkPlan(objs, liveDeltaStart(objs, cursor, transcriptId), hashSalt, {
+// Stage, for one repository, the turns after its cursor that belong to it.
+function stageRepositoryTurns(objs, destinations, transcriptId, promptId, repository) {
+  const cursor = readCursor(transcriptId, repository);
+  const plan = buildChunkPlan(objs, liveDeltaStart(objs, cursor, transcriptId), credstore.getOrCreateHashSalt(), {
     seqStart: (cursor && cursor.seq) || 0,
     maxUncompressedBytes: getTranscriptChunkMaxBytes(),
+    keep: (index) =>
+      destinations[index] === undefined || destinations[index] === repository.repoKey,
   });
 
-  if (!plan.newCursor) return { chunks: 0 }; // empty delta — cursor untouched
+  if (!plan.newCursor) return 0; // empty delta — cursor untouched
 
   let sealed = 0;
   for (const chunk of plan.chunks) {
@@ -948,7 +975,52 @@ function stageTranscriptDelta(transcriptPath, promptId, deviceId, repository) {
       updatedAt: Date.now(),
     }, repository);
   }
-  return { chunks: sealed };
+  return sealed;
+}
+
+// Working directories as transcript staging sees them, each resolved once:
+// the repository and whether it records, null outside any repository, or
+// undefined for a directory that no longer exists.
+function transcriptPlaces() {
+  const cache = new Map();
+  const of = (cwd) => {
+    if (!cache.has(cwd)) cache.set(cwd, transcriptPlace(cwd));
+    return cache.get(cwd);
+  };
+  const recording = () => [...new Map([...cache.values()]
+    .filter((place) => place?.recording)
+    .map((place) => [place.key, place.repository])).values()];
+  return { of, recording };
+}
+
+function transcriptPlace(cwd) {
+  let decision;
+  try {
+    if (!path.isAbsolute(cwd) || !fs.statSync(cwd).isDirectory()) return undefined;
+    decision = getRepoScopeDecision(cwd);
+  } catch {
+    return undefined;
+  }
+  if (!decision?.repoRoot) return null;
+  // A repository outside the license's organizations, or without a GitHub
+  // identity, is still a repository: it never records.
+  if (!decision.repoKey) return { key: `root:${decision.repoRoot}`, recording: false };
+  return {
+    key: decision.repoKey,
+    repository: { repoKey: decision.repoKey, org: decision.remoteOrg },
+    recording: repositoryRecording(decision),
+  };
+}
+
+// The capture gate the hooks apply, plus the sending rule.
+function repositoryRecording(decision) {
+  return resolveTelemetryGate({
+    globalDisabled: telemetryStore.getGlobalDisabled(),
+    signedIn: credstore.isSignedIn(),
+    repoOrgOwned: decision.allowed,
+    orgConsent: telemetryStore.getOrganizationConsent(decision.remoteOrg),
+    projectOptIn: telemetryStore.getRepositoryOverride(decision.repoKey),
+  }).capture && credstore.isTelemetryTransmissionAllowed(decision.repoKey);
 }
 
 /**
@@ -1072,6 +1144,36 @@ function initializeTranscriptCursor(input, deviceId, repository) {
   return advanceCursorToTranscriptTail(input?.transcript_path, repository, {
     onlyWhenMissing: true,
   });
+}
+
+// A repository first seen recording part-way through a transcript starts with
+// the turn it was seen in: what came before was written before that
+// observation. The hook knows its turn only by its prompt id, and the
+// transcript only when its records carry one.
+function startTranscriptAtTurn(input, repository) {
+  const transcriptPath = input?.transcript_path;
+  if (!transcriptPath || !input.prompt_id || !repository?.repoKey) return false;
+  const transcriptId = path.basename(transcriptPath);
+  if (readCursor(transcriptId, repository)) return false;
+  let objs;
+  try {
+    objs = parseJsonl(fs.readFileSync(transcriptPath, "utf8")).objs;
+  } catch {
+    return false;
+  }
+  if (!objs.some((record) => typeof record?.promptId === "string")) return false;
+  // Not written yet: the whole transcript came before this turn.
+  const first = objs.findIndex((record) => record?.promptId === input.prompt_id);
+  const before = first === -1 ? objs : objs.slice(0, first);
+  // Records before the first prompt open the session; they are no earlier
+  // turn, and a null cursor still starts from them.
+  const earlierTurn = turnNumbers(before).some((turn) => turn > 0);
+  return writeCursor({
+    transcriptId,
+    lastUuid: earlierTurn ? lastContentUuid(before) : null,
+    seq: 0,
+    updatedAt: Date.now(),
+  }, repository);
 }
 
 // Without a license there is no repository queue to hold a cursor, so a hook
@@ -1513,6 +1615,7 @@ module.exports = {
   stageTranscriptDelta,
   stageTranscriptSnapshot,
   advanceCursorToTranscriptTail,
+  startTranscriptAtTurn,
   markUnlicensedTranscript,
   transcriptTailUuid,
   listDeltaChunks,

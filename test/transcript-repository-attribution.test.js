@@ -1,0 +1,155 @@
+"use strict";
+
+// A session can move between directories, and one transcript then holds turns
+// from several places. Each turn is sent only for the repository it ended in,
+// and only when every repository it was written in is recording. Directories
+// outside any repository do not count.
+
+const { test } = require("node:test");
+const assert = require("node:assert/strict");
+
+const { ORG, REPO_KEY, OTHER_KEY, HISTORY, collector, session } = require("../testing/transcript-session");
+
+const BOTH = { orgs: { [ORG]: true }, repositories: { [REPO_KEY]: true, [OTHER_KEY]: true } };
+const OTHER_OFF = { orgs: { [ORG]: true }, repositories: { [REPO_KEY]: true, [OTHER_KEY]: false } };
+
+async function start(t, options) {
+  const c = await collector();
+  t.after(c.close);
+  const s = session(c.url, options);
+  await s.sessionStart("startup");
+  return { c, s };
+}
+
+// What is not sent.
+
+test("a turn outside any repository is not sent once the session enters one", async (t) => {
+  const { c, s } = await start(t, { policy: BOTH, dir: "outside" });
+  await s.turn("out");
+  s.cd("repo");
+  await s.turn("in");
+  await s.drained(() => c.transcript().includes("in-a"));
+  assert.deepEqual(c.transcript(), ["in-u", "in-a"]);
+});
+
+test("a turn outside any repository is not sent on the return to one", async (t) => {
+  const { c, s } = await start(t, { policy: BOTH });
+  await s.turn("rec");
+  await s.drained(() => c.transcript().includes("rec-a"));
+  s.cd("outside");
+  await s.turn("out");
+  s.cd("repo");
+  await s.turn("in");
+  await s.drained(() => c.transcript().includes("in-a"));
+  assert.deepEqual(c.transcript(), ["rec-u", "rec-a", "in-u", "in-a"]);
+});
+
+test("a turn in another enabled repository is sent once, for that repository", async (t) => {
+  const { c, s } = await start(t, { policy: BOTH, dir: "other" });
+  await s.turn("gadgets");
+  await s.drained(() => c.transcript().includes("gadgets-a"));
+  s.cd("repo");
+  await s.turn("in");
+  await s.drained(() => c.transcript().includes("in-a"));
+  assert.deepEqual(c.sentFor(OTHER_KEY), ["gadgets-u", "gadgets-a"]);
+  assert.deepEqual(c.sentFor(REPO_KEY), ["in-u", "in-a"]);
+});
+
+test("a turn in a repository turned off is not sent for another", async (t) => {
+  const { c, s } = await start(t, { policy: OTHER_OFF, dir: "other" });
+  await s.turn("off");
+  s.cd("repo");
+  await s.turn("in");
+  await s.drained(() => c.transcript().includes("in-a"));
+  assert.deepEqual(c.transcript(), ["in-u", "in-a"]);
+});
+
+test("a turn in a repository the license does not cover is not sent for another", async (t) => {
+  const { c, s } = await start(t, { policy: BOTH, dir: "foreign" });
+  await s.turn("foreign");
+  s.cd("repo");
+  await s.turn("in");
+  await s.drained(() => c.transcript().includes("in-a"));
+  assert.deepEqual(c.transcript(), ["in-u", "in-a"]);
+});
+
+// A turn that reads a repository turned off is not sent at all, even though it
+// began and ended in an enabled one: what it read there would go with it.
+test("a turn that visits a repository turned off is not sent", async (t) => {
+  const { c, s } = await start(t, { policy: OTHER_OFF });
+  await s.turn("mixed", { during: async () => { s.cd("other"); await s.tool("peek"); s.cd("repo"); } });
+  await s.turn("after");
+  await s.drained(() => c.transcript().includes("after-a"));
+  assert.deepEqual(c.transcript(), ["after-u", "after-a"]);
+});
+
+test("a resumed session does not send its earlier turns in a repository it returns to", async (t) => {
+  const c = await collector();
+  t.after(c.close);
+  // The history was written in the repository; this session resumes elsewhere.
+  const s = session(c.url, { policy: BOTH, history: HISTORY });
+  s.cd("other");
+  await s.sessionStart("resume");
+  await s.turn("gadgets");
+  s.cd("repo");
+  await s.turn("in");
+  await s.drained(() => c.transcript().includes("in-a"));
+  assert.deepEqual(c.sentFor(OTHER_KEY), ["gadgets-u", "gadgets-a"]);
+  assert.deepEqual(c.sentFor(REPO_KEY), ["in-u", "in-a"]);
+});
+
+// What a consenting user still gets: every turn, once.
+
+test("a session in one repository throughout sends every turn once", async (t) => {
+  const { c, s } = await start(t, { policy: BOTH });
+  for (const label of ["one", "two", "three"]) {
+    await s.turn(label, { during: () => s.tool("run") });
+    await s.drained(() => c.transcript().includes(`${label}-a`));
+  }
+  assert.deepEqual(c.sentFor(REPO_KEY), [
+    "one-u", "one-run", "one-a", "two-u", "two-run", "two-a", "three-u", "three-run", "three-a",
+  ]);
+});
+
+test("a turn that steps outside the repository and back is sent whole", async (t) => {
+  const { c, s } = await start(t, { policy: BOTH });
+  await s.turn("span", { during: async () => { s.cd("outside"); await s.tool("ls"); s.cd("repo"); } });
+  await s.drained(() => c.transcript().includes("span-a"));
+  assert.deepEqual(c.sentFor(REPO_KEY), ["span-u", "span-ls", "span-a"]);
+});
+
+test("a turn that moves to another enabled repository is sent once, for the one it ended in", async (t) => {
+  const { c, s } = await start(t, { policy: BOTH });
+  await s.turn("move", { during: async () => { s.cd("other"); await s.tool("build"); } });
+  await s.drained(() => c.transcript().includes("move-a"));
+  await s.turn("there");
+  await s.drained(() => c.transcript().includes("there-a"));
+  assert.deepEqual(c.sentFor(OTHER_KEY), ["move-u", "move-build", "move-a", "there-u", "there-a"]);
+  assert.deepEqual(c.sentFor(REPO_KEY), []);
+});
+
+test("returning to a repository that was recording sends each turn once, where it was written", async (t) => {
+  const { c, s } = await start(t, { policy: BOTH });
+  await s.turn("a1");
+  await s.drained(() => c.transcript().includes("a1-a"));
+  s.cd("other");
+  await s.turn("b1");
+  await s.drained(() => c.transcript().includes("b1-a"));
+  s.cd("repo");
+  await s.turn("a2");
+  await s.drained(() => c.transcript().includes("a2-a"));
+  assert.deepEqual(c.sentFor(REPO_KEY), ["a1-u", "a1-a", "a2-u", "a2-a"]);
+  assert.deepEqual(c.sentFor(OTHER_KEY), ["b1-u", "b1-a"]);
+});
+
+// The turn's own Stop runs outside any repository and sends nothing. The next
+// Stop, in another repository, sends it for the repository it was written in.
+test("a turn that ends outside any repository is sent for the repository it worked in", async (t) => {
+  const { c, s } = await start(t, { policy: BOTH, dir: "outside" });
+  await s.turn("work", { during: async () => { s.cd("repo"); await s.tool("edit"); s.cd("outside"); } });
+  s.cd("other");
+  await s.turn("next");
+  await s.drained(() => c.transcript().includes("next-a") && c.transcript().includes("work-a"));
+  assert.deepEqual(c.sentFor(REPO_KEY), ["work-u", "work-edit", "work-a"]);
+  assert.deepEqual(c.sentFor(OTHER_KEY), ["next-u", "next-a"]);
+});
