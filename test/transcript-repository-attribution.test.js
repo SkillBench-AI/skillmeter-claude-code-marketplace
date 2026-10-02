@@ -13,6 +13,7 @@ const { ORG, REPO_KEY, OTHER_KEY, HISTORY, collector, session } = require("../te
 const BOTH = { orgs: { [ORG]: true }, repositories: { [REPO_KEY]: true, [OTHER_KEY]: true } };
 const OTHER_OFF = { orgs: { [ORG]: true }, repositories: { [REPO_KEY]: true, [OTHER_KEY]: false } };
 const OTHER_ON_ONLY = { orgs: { [ORG]: true }, repositories: { [REPO_KEY]: false, [OTHER_KEY]: true } };
+const WIDGETS_URL = `https://github.com/${ORG}/widgets.git`;
 const GADGETS_URL = `https://github.com/${ORG}/gadgets.git`;
 const FOREIGN_URL = "https://github.com/elsewhere/tools.git";
 
@@ -299,6 +300,20 @@ test("a repository turned on during a turn sends the rest of that turn, as befor
   await s.turn("on", { during: async () => { await s.tool("first"); s.setPolicy(BOTH); await s.tool("second"); } });
   await s.drained(() => c.transcript().includes("on-a"));
   assert.deepEqual(c.sentFor(OTHER_KEY), ["on-second", "on-a"]);
+});
+
+// A known loss, chosen over the leak: once the directory is gone it cannot
+// show which repository it was, so a turn that removes the clone or worktree
+// it worked in is not sent, even for a repository that records.
+test("a turn that removes the clone it worked in is not sent", async (t) => {
+  const { c, s } = await start(t, { policy: BOTH });
+  s.addDir("clone", WIDGETS_URL);
+  await s.turn("a1");
+  await s.drained(() => c.transcript().includes("a1-a"));
+  await s.turn("wt", { during: async () => { s.cd("clone"); await s.tool("edit"); s.cd("repo"); s.rm("clone"); await s.tool("cleanup"); } });
+  await s.turn("a2");
+  await s.drained(() => c.transcript().includes("a2-a"));
+  assert.deepEqual(c.sentFor(REPO_KEY), ["a1-u", "a1-a", "a2-u", "a2-a"]);
 });
 
 // What a consenting user still gets: every turn, once.
