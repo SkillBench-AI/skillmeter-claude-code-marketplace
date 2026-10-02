@@ -1376,9 +1376,36 @@ async function drainQueuesOnce(timeoutMs) {
   return { events, transcripts, errors };
 }
 
+// Transcript ids any repository holds a cursor for.
+function transcriptsWithCursors() {
+  const ids = new Set();
+  for (const context of listRepositoryQueueContexts()) {
+    try {
+      for (const f of fs.readdirSync(context.cursors)) {
+        if (f.endsWith(".json")) ids.add(f.slice(0, -".json".length));
+      }
+    } catch {}
+  }
+  return ids;
+}
+
+// The transcript marks in `dir`, one file per transcript named
+// <transcriptId><suffix>, that may age out. A mark holds back what a cursor
+// behind it would send, and cursors are never removed, so a mark is kept
+// while any repository holds a cursor for its transcript.
+function uncursoredTranscriptMarks(dir, suffix, cursored) {
+  try {
+    return fs.readdirSync(dir)
+      .filter((f) => !(f.endsWith(suffix) && cursored.has(f.slice(0, -suffix.length))))
+      .map((f) => path.join(dir, f));
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Delete event logs already delivered (the `.sent` markers), chunks that spent
- * their retry budget long ago, and old signed-out transcript marks.
+ * their retry budget long ago, and old transcript marks no cursor still needs.
  * Unsent repository-bound chunks and cursors are intentionally retained.
  */
 function cleanupStaleFiles() {
@@ -1431,12 +1458,8 @@ function cleanupStaleFiles() {
     } catch {}
   }
 
-  // A signed-out mark matters only while its transcript can be resumed.
-  try {
-    for (const f of fs.readdirSync(UNLICENSED_MARK_DIR)) {
-      candidates.push(path.join(UNLICENSED_MARK_DIR, f));
-    }
-  } catch {}
+  const cursored = transcriptsWithCursors();
+  candidates.push(...uncursoredTranscriptMarks(UNLICENSED_MARK_DIR, ".json", cursored));
 
   if (fs.existsSync(LOG_DIR)) {
     try {
