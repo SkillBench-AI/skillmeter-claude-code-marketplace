@@ -13,6 +13,8 @@ const { ORG, REPO_KEY, OTHER_KEY, HISTORY, collector, session } = require("../te
 const BOTH = { orgs: { [ORG]: true }, repositories: { [REPO_KEY]: true, [OTHER_KEY]: true } };
 const OTHER_OFF = { orgs: { [ORG]: true }, repositories: { [REPO_KEY]: true, [OTHER_KEY]: false } };
 const OTHER_ON_ONLY = { orgs: { [ORG]: true }, repositories: { [REPO_KEY]: false, [OTHER_KEY]: true } };
+const GADGETS_URL = `https://github.com/${ORG}/gadgets.git`;
+const FOREIGN_URL = "https://github.com/elsewhere/tools.git";
 
 async function start(t, options) {
   const c = await collector();
@@ -135,6 +137,68 @@ test("a resumed session does not send its earlier turns in a repository it retur
   await s.drained(() => c.transcript().includes("in-a"));
   assert.deepEqual(c.sentFor(OTHER_KEY), ["gadgets-u", "gadgets-a"]);
   assert.deepEqual(c.sentFor(REPO_KEY), ["in-u", "in-a"]);
+});
+
+// A directory that no longer exists cannot show it was recording.
+
+test("a turn that read a deleted clone of a repository turned off is not sent", async (t) => {
+  const { c, s } = await start(t, { policy: OTHER_OFF });
+  s.addDir("clone", GADGETS_URL);
+  await s.turn("mixed", { during: async () => { s.cd("clone"); await s.tool("peek"); s.cd("repo"); s.rm("clone"); } });
+  await s.turn("after");
+  await s.drained(() => c.transcript().includes("after-a"));
+  assert.deepEqual(c.transcript(), ["after-u", "after-a"]);
+});
+
+test("a turn that read a deleted clone the license does not cover is not sent", async (t) => {
+  const { c, s } = await start(t, { policy: BOTH });
+  s.addDir("clone", FOREIGN_URL);
+  await s.turn("mixed", { during: async () => { s.cd("clone"); await s.tool("peek"); s.cd("repo"); s.rm("clone"); } });
+  await s.turn("after");
+  await s.drained(() => c.transcript().includes("after-a"));
+  assert.deepEqual(c.transcript(), ["after-u", "after-a"]);
+});
+
+test("a turn in a clone turned off is not sent once the clone is removed", async (t) => {
+  const { c, s } = await start(t, { policy: OTHER_OFF });
+  await s.turn("a1");
+  await s.drained(() => c.transcript().includes("a1-a"));
+  s.addDir("clone", GADGETS_URL);
+  s.cd("clone");
+  await s.turn("peek");
+  s.cd("repo");
+  s.rm("clone");
+  await s.turn("a2");
+  await s.drained(() => c.transcript().includes("a2-a"));
+  assert.deepEqual(c.transcript(), ["a1-u", "a1-a", "a2-u", "a2-a"]);
+});
+
+// No hook ran in the clone, so only the records say where the turn read.
+test("a turn whose records name a deleted clone is not sent", async (t) => {
+  const { c, s } = await start(t, { policy: OTHER_OFF });
+  s.addDir("clone", GADGETS_URL);
+  await s.turn("mixed", { during: async () => { s.cd("clone"); await s.tool("peek", { hook: false }); s.cd("repo"); s.rm("clone"); } });
+  await s.turn("after");
+  await s.drained(() => c.transcript().includes("after-a"));
+  assert.deepEqual(c.transcript(), ["after-u", "after-a"]);
+});
+
+test("a turn in a deleted directory outside any repository is sent for none", async (t) => {
+  const { c, s } = await start(t, { policy: BOTH });
+  await s.turn("a1");
+  await s.drained(() => c.transcript().includes("a1-a"));
+  s.cd("other");
+  await s.turn("b1");
+  await s.drained(() => c.transcript().includes("b1-a"));
+  s.addDir("scratch");
+  s.cd("scratch");
+  await s.turn("out");
+  s.rm("scratch");
+  s.cd("repo");
+  await s.turn("a2");
+  await s.drained(() => c.transcript().includes("a2-a"));
+  assert.deepEqual(c.sentFor(REPO_KEY), ["a1-u", "a1-a", "a2-u", "a2-a"]);
+  assert.deepEqual(c.sentFor(OTHER_KEY), ["b1-u", "b1-a"]);
 });
 
 // What a consenting user still gets: every turn, once.
