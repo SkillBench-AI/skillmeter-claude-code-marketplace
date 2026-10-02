@@ -240,6 +240,22 @@ test("an interrupted turn that read a repository while it was off is not sent on
   assert.deepEqual(c.sentFor(REPO_KEY), ["a1-u", "a1-a", "a2-u", "a2-a"]);
 });
 
+test("a turn that read a repository outside the license is not sent once the license covers it", async (t) => {
+  const { c, s } = await start(t, { policy: BOTH });
+  await s.turn("a1");
+  await s.drained(() => c.transcript().includes("a1-a"));
+  await s.turn("dip", { during: async () => { s.cd("foreign"); await s.tool("peek"); s.cd("repo"); await s.tool("back"); s.cd("outside"); } });
+  s.signIn([ORG, "elsewhere"]);
+  s.setPolicy({
+    orgs: { [ORG]: true, elsewhere: true },
+    repositories: { [REPO_KEY]: true, [OTHER_KEY]: true, "github.com/elsewhere/tools": true },
+  });
+  s.cd("repo");
+  await s.turn("a2");
+  await s.drained(() => c.transcript().includes("a2-a"));
+  assert.deepEqual(c.sentFor(REPO_KEY), ["a1-u", "a1-a", "a2-u", "a2-a"]);
+});
+
 // The repository itself keeps its own timing: what it records after being
 // turned on is sent for it.
 test("a repository turned on during a turn sends the rest of that turn, as before", async (t) => {
