@@ -40,7 +40,6 @@ const {
   buildChunkPlan,
 } = require("./transcript-delta");
 const { getRepoScopeDecision } = require("./repo-scope");
-const { resolveTelemetryGate } = require("./telemetry-policy");
 const {
   PLUGIN_ROOT,
   LOG_DIR,
@@ -934,11 +933,17 @@ function stageTranscriptDelta(transcriptPath, promptId, deviceId, repository) {
   // A turn's own Stop may not stage it: the turn ended outside any repository,
   // or its last lines were written after that Stop read the transcript. Every
   // other repository already recording this transcript takes its turns here.
-  for (const other of places.recording()) {
+  // One no longer recording is closed like any period that is not recorded.
+  for (const place of places.repositories()) {
+    const other = place.repository;
     if (other.repoKey === repository.repoKey) continue;
     const cursor = readCursor(transcriptId, other);
     if (!cursor || cursor.discarded) continue;
-    chunks += stageRepositoryTurns(objs, destinations, transcriptId, promptId, other);
+    if (place.recording) {
+      chunks += stageRepositoryTurns(objs, destinations, transcriptId, promptId, other);
+    } else {
+      advanceCursorToTranscriptTail(transcriptPath, other);
+    }
   }
   return { chunks };
 }
@@ -1004,10 +1009,11 @@ function transcriptPlaces() {
     if (!cache.has(cwd)) cache.set(cwd, transcriptPlace(cwd));
     return cache.get(cwd);
   };
-  const recording = () => [...new Map([...cache.values()]
-    .filter((place) => place?.recording)
-    .map((place) => [place.key, place.repository])).values()];
-  return { of, recording };
+  // Each licensed repository the transcript was written in, once.
+  const repositories = () => [...new Map([...cache.values()]
+    .filter((place) => place?.repository)
+    .map((place) => [place.key, place])).values()];
+  return { of, repositories };
 }
 
 function transcriptPlace(cwd) {
@@ -1025,19 +1031,9 @@ function transcriptPlace(cwd) {
   return {
     key: decision.repoKey,
     repository: { repoKey: decision.repoKey, org: decision.remoteOrg },
-    recording: repositoryRecording(decision),
+    // The rule every recorded event passes; it includes the capture gate.
+    recording: credstore.isTelemetryTransmissionAllowed(decision.repoKey),
   };
-}
-
-// The capture gate the hooks apply, plus the sending rule.
-function repositoryRecording(decision) {
-  return resolveTelemetryGate({
-    globalDisabled: telemetryStore.getGlobalDisabled(),
-    signedIn: credstore.isSignedIn(),
-    repoOrgOwned: decision.allowed,
-    orgConsent: telemetryStore.getOrganizationConsent(decision.remoteOrg),
-    projectOptIn: telemetryStore.getRepositoryOverride(decision.repoKey),
-  }).capture && credstore.isTelemetryTransmissionAllowed(decision.repoKey);
 }
 
 /**

@@ -12,6 +12,7 @@ const { ORG, REPO_KEY, OTHER_KEY, HISTORY, collector, session } = require("../te
 
 const BOTH = { orgs: { [ORG]: true }, repositories: { [REPO_KEY]: true, [OTHER_KEY]: true } };
 const OTHER_OFF = { orgs: { [ORG]: true }, repositories: { [REPO_KEY]: true, [OTHER_KEY]: false } };
+const OTHER_ON_ONLY = { orgs: { [ORG]: true }, repositories: { [REPO_KEY]: false, [OTHER_KEY]: true } };
 
 async function start(t, options) {
   const c = await collector();
@@ -93,7 +94,7 @@ test("a turn that visits a repository the license does not cover is not sent", a
 
 // Turned on while the session is elsewhere: nothing seen it collect since.
 test("another repository's Stop sends nothing for one last seen turned off", async (t) => {
-  const { c, s } = await start(t, { policy: { orgs: { [ORG]: true }, repositories: { [REPO_KEY]: false, [OTHER_KEY]: true } } });
+  const { c, s } = await start(t, { policy: OTHER_ON_ONLY });
   await s.turn("off");
   s.late("tail");
   s.setPolicy(BOTH);
@@ -102,6 +103,21 @@ test("another repository's Stop sends nothing for one last seen turned off", asy
   await s.drained(() => c.transcript().includes("g-a"));
   assert.deepEqual(c.sentFor(REPO_KEY), []);
   assert.deepEqual(c.sentFor(OTHER_KEY), ["g-u", "g-a"]);
+});
+
+// Turned off before its pending turn was staged, as if it had been queued.
+test("a repository turned off while the session is elsewhere does not get its pending turn later", async (t) => {
+  const { c, s } = await start(t, { policy: BOTH, dir: "outside" });
+  await s.turn("w1", { during: async () => { s.cd("repo"); await s.tool("edit"); s.cd("outside"); } });
+  s.setPolicy(OTHER_ON_ONLY);
+  s.cd("other");
+  await s.turn("g1");
+  await s.drained(() => c.transcript().includes("g1-a"));
+  s.setPolicy(BOTH);
+  await s.turn("g2");
+  await s.drained(() => c.transcript().includes("g2-a"));
+  assert.deepEqual(c.sentFor(REPO_KEY), []);
+  assert.deepEqual(c.sentFor(OTHER_KEY), ["g1-u", "g1-a", "g2-u", "g2-a"]);
 });
 
 test("a resumed session does not send its earlier turns in a repository it returns to", async (t) => {
