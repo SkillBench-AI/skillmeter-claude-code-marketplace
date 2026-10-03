@@ -62,17 +62,19 @@ test("another client's session fields in the shared store never reach this sessi
   assert.equal(store.isSignedIn(), false, "their sign-in does not sign this client in");
 });
 
-test("first read without a session copies it from the shared store once, and leaves that store as it is", () => {
+test("first read without a session copies sign-out and sign-in intent from the shared store once, never the license", () => {
   fs.rmSync(session);
   writeJson(shared, { ...original, signed_out: true, auth_generation: "old-intent" });
   const before = fs.readFileSync(shared);
   assert.equal(store.getSignedOut(), true);
-  assert.deepEqual(JSON.parse(fs.readFileSync(session)),
-    { license_jwt: "fixture-token", signed_out: true, auth_generation: "old-intent" });
+  // A license from before ADR 005 has no refresh token and could not renew.
+  assert.deepEqual(JSON.parse(fs.readFileSync(session)), { signed_out: true, auth_generation: "old-intent" });
+  assert.equal(store.getLicenseToken(), null);
   assert.deepEqual(fs.readFileSync(shared), before);
   writeJson(shared, { ...original, license_jwt: "later-shared-token" });
   store.markEngaged();
-  assert.equal(store.getLicenseToken(), "fixture-token", "copied once, not followed");
+  assert.equal(store.getLicenseToken(), null, "copied once, not followed");
+  assert.equal(store.isSignedIn(), false);
 });
 
 test("terminal status from a previous authentication context cannot block a new token", () => {
