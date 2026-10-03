@@ -373,3 +373,28 @@ kept until then (and ages out after seven days, as before). The per-chunk
 retry budget is now spent by turns and session starts rather than by a
 two-minute sweep. `test/delivery.test.js` covers delivery by Stop, recovery
 after an outage at the next turn, and recovery at the next session start.
+
+## Amendment 2026-10-01: sign-in after an ended session, and a sign-in in progress
+
+The status record keeps `last_terminal_reason`, the reason of the last
+terminal outcome. Every terminal outcome sets it. It is kept when SessionStart
+clears `terminal`, when a sign-in starts and when the session otherwise
+changes, and only a completed sign-in or a successful renewal clears it.
+Refresh is still blocked by `terminal` alone, and capture never reads the kept
+reason. The sign-in path does: while it says the session ended
+(`reactivation_required`) and a license is stored, `/skillmeter:signin` asks
+for sign-in without starting a new intent, `bin/signin` runs the device flow
+although the license is valid, and the SessionStart card says the sign-in
+expired and uploads are paused, in every session until a sign-in completes or
+a renewal succeeds. That card does not say telemetry is off, because hooks keep
+recording on the stored license.
+
+Decision 3 is retired, but its `pending` sign-in result exists for another
+reader. While a sign-in waits for browser approval, `/skillmeter:signin`
+reports it in progress instead of starting a new intent, which would discard
+the approval. The result carries `expires_at`, the device code's lifetime
+capped at 30 minutes, and belongs to the sign-in that wrote it: its success or
+failure, a sign-out, a newer sign-in, a revocation or the expiry ends it. No
+"discarded" result is written. A poller that stops without a result is not
+detected, so the in-progress status offers starting over. This closes the open
+item on the sentinel.

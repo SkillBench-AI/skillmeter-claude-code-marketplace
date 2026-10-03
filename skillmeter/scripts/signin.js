@@ -12,7 +12,7 @@ const { signinStatusBanner } = require("./lib/banner.js");
 const { startSpinner } = require("./lib/spinner.js");
 const { getRepoScopeDecision } = require("./lib/repo-scope");
 const telemetryStore = require("./lib/telemetry-store");
-const { clearLicenseStatus, readLicenseStatus, TERMINAL_REASONS } = require("./lib/license-status");
+const { clearLicenseStatus, isSessionEnded, recordSignin } = require("./lib/license-status");
 const { STATE_DIR } = require("./lib/config");
 const { requestDeviceCode, pollDeviceToken } = require("./lib/broker");
 const { exchangeIdToken } = require("./lib/license-exchange");
@@ -36,6 +36,8 @@ for (const stream of [process.stdout, process.stderr]) {
 // (env > settings > dev-bundle > prod default).
 
 const BACKGROUND_LOG = path.join(STATE_DIR, "activate-poll.log");
+// Used when the broker does not say how long its device code lives.
+const DEFAULT_DEVICE_CODE_LIFETIME_S = 15 * 60;
 
 function log(msg) {
   process.stderr.write(msg + "\n");
@@ -111,9 +113,11 @@ async function runBackgroundPoll(deviceId, deviceCode, interval, generation) {
     log(`[${new Date().toISOString()}] license issued`);
 
     if (!credstore.commitSignin({ jwt: licenseJwt, refreshToken, expected, onCommit: () => {
-      clearLicenseStatus({ source: "signin" });
+      recordSignin({ source: "signin" });
       credstore.writeSigninResult({ status: "success" });
     } })) {
+      // A newer sign-in or a sign-out took over. Its own result, or the
+      // pending result's expiry, ends the wait.
       log(`[${new Date().toISOString()}] sign-in discarded: authentication changed during poll`);
       process.exit(0);
     }
@@ -142,12 +146,9 @@ function spawnBackgroundPoll(deviceId, deviceCode, interval, generation) {
 }
 
 async function main() {
-  // Read before markEngaged: a new intent changes the status record's context,
-  // after which it reads as empty. A session the broker or the server ended
-  // can leave a license that is still valid for up to one lifetime; that
-  // license is not a sign-in to keep.
-  const sessionEnded =
-    readLicenseStatus().terminal?.reason === TERMINAL_REASONS.REACTIVATION_REQUIRED;
+  // A session the broker or the server ended can leave a license that is
+  // still valid for up to one lifetime; that license is not a sign-in to keep.
+  const sessionEnded = isSessionEnded();
 
   // Explicit sign-in clears the signed-out sentinel before starting the flow.
   const deviceId = credstore.getDeviceId();
@@ -174,8 +175,10 @@ async function main() {
 
   // Straight to the device grant.
   const device = await requestDeviceCode();
+  const lifetimeS = Number(device.expires_in) > 0 ? Number(device.expires_in) : DEFAULT_DEVICE_CODE_LIFETIME_S;
+  credstore.writeSigninPending(lifetimeS * 1000, expected);
 
-  const expiresMin = Math.round(device.expires_in / 60);
+  const expiresMin = Math.round(lifetimeS / 60);
   const clipboardCopied = copyToClipboard(device.user_code);
 
   // verification_uri_complete already carries the code, so the page can fill
@@ -223,13 +226,17 @@ async function runForegroundPoll(deviceId, device, expected) {
     const { idToken, refreshToken } = await pollDeviceToken(device.device_code, device.interval || 5);
     const licenseJwt = await exchangeForLicense(idToken, deviceId);
     stop();
-    if (!credstore.commitSignin({ jwt: licenseJwt, refreshToken, expected, onCommit: () => clearLicenseStatus({ source: "signin" }) })) {
+    if (!credstore.commitSignin({ jwt: licenseJwt, refreshToken, expected, onCommit: () => {
+      recordSignin({ source: "signin" });
+      credstore.writeSigninResult({ status: "success" });
+    } })) {
       say("Sign-in discarded: authentication changed during issuance.");
       process.exit(0);
     }
     showSigninStatus();
   } catch (err) {
     stop();
+    credstore.writeSigninResult({ status: "failure", error: err.message }, expected);
     say(`Sign-in failed: ${err.message}`);
     process.exit(1);
   }

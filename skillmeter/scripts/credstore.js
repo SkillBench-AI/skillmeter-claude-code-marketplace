@@ -244,6 +244,32 @@ function readSigninResult() {
   return safeReadJson(SIGNIN_RESULT_FILE, null);
 }
 
+// A device flow is waiting for browser approval: /skillmeter:signin wrote
+// `pending` when it started, and neither a final result nor the device code's
+// expiry has ended it. The marker belongs to the sign-in attempt that wrote it:
+// a sign-out, a newer attempt or a revocation changes `auth_generation`, which
+// ends the wait just as it stops that attempt's poll from committing. No marker
+// counts for longer than the cap. A poller that died without writing a result
+// is not detected; its marker lasts until it expires.
+const SIGNIN_PENDING_MAX_MS = 30 * 60_000;
+
+function intentTag(generation) {
+  return crypto.createHash("sha256").update(String(generation)).digest("hex").slice(0, 16);
+}
+
+function writeSigninPending(lifetimeMs, expected) {
+  const expiresAt = Date.now() + Math.min(lifetimeMs, SIGNIN_PENDING_MAX_MS);
+  writeSigninResult({ status: "pending", expires_at: expiresAt, intent: intentTag(expected.generation) }, expected);
+}
+
+function isSigninPending(now = Date.now()) {
+  const result = readSigninResult();
+  if (result?.status !== "pending" || typeof result.expires_at !== "number") return false;
+  if (now >= result.expires_at || result.expires_at - now > SIGNIN_PENDING_MAX_MS) return false;
+  const generation = readSession().auth_generation;
+  return Boolean(generation) && result.intent === intentTag(generation);
+}
+
 // Pre-create the sentinel so SessionStart `watchPaths` can register it before
 // the first sign-in (some file watchers only fire on modify, not create).
 function ensureSigninResultFile() {
@@ -463,6 +489,8 @@ module.exports = {
   SIGNIN_RESULT_FILE,
   writeSigninResult,
   readSigninResult,
+  writeSigninPending,
+  isSigninPending,
   ensureSigninResultFile,
   // Upload result sentinel (for the SessionStart "telemetry sent" notice)
   writeUploadResult,

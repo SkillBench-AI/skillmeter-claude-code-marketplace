@@ -11,7 +11,7 @@
 
 const credstore = require("./credstore.js");
 const telemetryStore = require("./lib/telemetry-store");
-const { clearLicenseStatus } = require("./lib/license-status");
+const { clearLicenseStatus, isSessionEnded } = require("./lib/license-status");
 const { readStdinJson } = require("./lib/io");
 const {
   loadRepositoryTelemetryState,
@@ -36,6 +36,18 @@ const RUN_INSTRUCTION =
   `2. Open the URL it prints, and approve the code shown.\n` +
   `3. Once the browser shows the success page, run \`/skillmeter:signin\` ` +
   `again to confirm the license and see the welcome banner.`;
+
+// A sign-in waits for approval. Starting over cancels it, so the command is
+// offered only for when that sign-in cannot finish: the page was closed, the
+// code expired, or its poller stopped, which is not detected here.
+const IN_PROGRESS =
+  `SkillMeter sign-in in progress. A sign-in code is waiting for approval in ` +
+  `the browser. Tell the user to approve it there, then run ` +
+  `\`/skillmeter:signin\` again to confirm.\n` +
+  `Only if the browser page was closed, the code expired, or the user already ` +
+  `approved and keeps getting this message, they can start over by pasting ` +
+  `this into their NEXT prompt. It cancels the sign-in in progress:\n\n` +
+  `    ! ${SIGNIN_COMMAND}`;
 
 // This hook has no TTY guard and defaults empty input to {} (its isSigninCommand
 // check tolerates an empty object).
@@ -107,6 +119,21 @@ async function main() {
 
   // Existing and new users receive the same one-time backfill lifecycle.
   try { initializeBackfillLifecycle(); } catch {}
+
+  // A device flow is waiting for browser approval. A new intent here would
+  // discard it, and the license on disk says nothing about it yet.
+  if (credstore.isSigninPending()) {
+    addContext(IN_PROGRESS);
+    return;
+  }
+
+  // A session the broker ended can leave a license that is still valid. It is
+  // not a sign-in to report, and the sign-in command must still find the
+  // ended session, so nothing is reset here.
+  if (credstore.getLicenseToken() && isSessionEnded()) {
+    addContext(`Your SkillMeter session ended. Sign-in is required.\n${RUN_INSTRUCTION}`);
+    return;
+  }
 
   // Explicit sign-in clears the signed-out sentinel and resets refresh status.
   credstore.markEngaged();
