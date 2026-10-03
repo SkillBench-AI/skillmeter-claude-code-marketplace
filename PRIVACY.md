@@ -212,6 +212,11 @@ the feature is introduced.
 - repository and organization OFF decisions delete queued payloads for that
   scope, while privacy cursors can remain to prevent later upload of content
   created while telemetry was disabled;
+- while no license is held, the plugin stores, for each session transcript, the
+  identifier of the newest record it has seen, so that signing in later does
+  not upload earlier content. These markers are never sent. They are kept
+  while any repository holds a transcript cursor for that session, and are
+  otherwise removed once they are 30 days old;
 - sign-out removes the license and deletes unsent repository telemetry and
   organization audit records (an accepted history import stays queued for a
   sign-in to the same tenant), but

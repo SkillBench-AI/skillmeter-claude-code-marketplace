@@ -32,7 +32,7 @@ const {
   quarantinePathFor,
   recordUploadFailure,
 } = require("./chunk-retry");
-const { parseJsonl, buildChunkPlan } = require("./transcript-delta");
+const { parseJsonl, lastContentUuid, buildChunkPlan } = require("./transcript-delta");
 const {
   PLUGIN_ROOT,
   LOG_DIR,
@@ -920,7 +920,7 @@ function stageTranscriptDelta(transcriptPath, promptId, deviceId, repository) {
   const { objs } = parseJsonl(raw);
   const hashSalt = credstore.getOrCreateHashSalt();
 
-  const plan = buildChunkPlan(objs, cursor, hashSalt, {
+  const plan = buildChunkPlan(objs, liveDeltaStart(objs, cursor, transcriptId), hashSalt, {
     seqStart: (cursor && cursor.seq) || 0,
     maxUncompressedBytes: getTranscriptChunkMaxBytes(),
   });
@@ -1072,6 +1072,80 @@ function initializeTranscriptCursor(input, deviceId, repository) {
   return advanceCursorToTranscriptTail(input?.transcript_path, repository, {
     onlyWhenMissing: true,
   });
+}
+
+// Without a license there is no repository queue to hold a cursor, so a hook
+// that runs signed out marks the transcript itself. Live staging, in whichever
+// repository recording begins, starts after the newest record that hook saw. A
+// history import ignores the mark, as it ignores a discarded cursor.
+const UNLICENSED_MARK_DIR = path.join(LOG_DIR, "unlicensed-transcripts");
+// Every hook writes the mark while signed out, so only the end is read.
+const TAIL_BLOCK_BYTES = 64 * 1024;
+
+function unlicensedMarkPath(transcriptId) {
+  return path.join(UNLICENSED_MARK_DIR, `${transcriptId}.json`);
+}
+
+// The newest record's uuid, reading the transcript backwards a block at a time.
+function transcriptTailUuid(transcriptPath, blockBytes = TAIL_BLOCK_BYTES) {
+  let fd;
+  try {
+    fd = fs.openSync(transcriptPath, "r");
+    let end = fs.fstatSync(fd).size;
+    let cut = Buffer.alloc(0);
+    while (end > 0) {
+      const start = Math.max(0, end - blockBytes);
+      const block = Buffer.alloc(end - start);
+      fs.readSync(fd, block, 0, block.length, start);
+      let lines = Buffer.concat([block, cut]);
+      // Unless the block starts the file, its first line may be cut off; it
+      // is completed by the block before it.
+      if (start > 0) {
+        const lineEnd = lines.indexOf(0x0a);
+        cut = lineEnd === -1 ? lines : lines.subarray(0, lineEnd);
+        lines = lineEnd === -1 ? Buffer.alloc(0) : lines.subarray(lineEnd + 1);
+      }
+      const uuid = lastContentUuid(parseJsonl(lines.toString("utf8")).objs);
+      if (uuid) return uuid;
+      end = start;
+    }
+  } catch {
+    // Unreadable: nothing to mark.
+  } finally {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch {}
+    }
+  }
+  return "";
+}
+
+function markUnlicensedTranscript(transcriptPath) {
+  if (!transcriptPath) return false;
+  const lastUuid = transcriptTailUuid(transcriptPath);
+  if (!lastUuid) return false;
+  const transcriptId = path.basename(transcriptPath);
+  try {
+    atomicWriteJson(unlicensedMarkPath(transcriptId), {
+      transcriptId,
+      lastUuid,
+      updatedAt: Date.now(),
+    });
+    return true;
+  } catch (err) {
+    console.error(`[skillmeter] Transcript mark write failed: ${err.message}`);
+    return false;
+  }
+}
+
+// Where the live delta starts: after the cursor, or after the signed-out mark
+// when that is later in the transcript.
+function liveDeltaStart(objs, cursor, transcriptId) {
+  const mark = safeReadJson(unlicensedMarkPath(transcriptId), null);
+  const indexOf = (uuid) =>
+    uuid ? objs.findIndex((record) => record && record.uuid === uuid) : -1;
+  const markIndex = indexOf(mark?.lastUuid);
+  if (markIndex === -1 || markIndex <= indexOf(cursor?.lastUuid)) return cursor;
+  return { ...cursor, lastUuid: mark.lastUuid };
 }
 
 function discardSkippedSessionArtifacts(input, deviceId, repository) {
@@ -1302,10 +1376,37 @@ async function drainQueuesOnce(timeoutMs) {
   return { events, transcripts, errors };
 }
 
+// Transcript ids any repository holds a cursor for.
+function transcriptsWithCursors() {
+  const ids = new Set();
+  for (const context of listRepositoryQueueContexts()) {
+    try {
+      for (const f of fs.readdirSync(context.cursors)) {
+        if (f.endsWith(".json")) ids.add(f.slice(0, -".json".length));
+      }
+    } catch {}
+  }
+  return ids;
+}
+
+// The transcript marks in `dir`, one file per transcript named
+// <transcriptId><suffix>, that may age out. A mark holds back what a cursor
+// behind it would send, and cursors are never removed, so a mark is kept
+// while any repository holds a cursor for its transcript.
+function uncursoredTranscriptMarks(dir, suffix, cursored) {
+  try {
+    return fs.readdirSync(dir)
+      .filter((f) => !(f.endsWith(suffix) && cursored.has(f.slice(0, -suffix.length))))
+      .map((f) => path.join(dir, f));
+  } catch {
+    return [];
+  }
+}
+
 /**
- * Delete event logs already delivered (the `.sent` markers) and chunks that
- * spent their retry budget long ago. Unsent repository-bound chunks and cursors
- * are intentionally retained.
+ * Delete event logs already delivered (the `.sent` markers), chunks that spent
+ * their retry budget long ago, and old transcript marks no cursor still needs.
+ * Unsent repository-bound chunks and cursors are intentionally retained.
  */
 function cleanupStaleFiles() {
   const now = Date.now();
@@ -1356,6 +1457,9 @@ function cleanupStaleFiles() {
       }
     } catch {}
   }
+
+  const cursored = transcriptsWithCursors();
+  candidates.push(...uncursoredTranscriptMarks(UNLICENSED_MARK_DIR, ".json", cursored));
 
   if (fs.existsSync(LOG_DIR)) {
     try {
@@ -1409,6 +1513,8 @@ module.exports = {
   stageTranscriptDelta,
   stageTranscriptSnapshot,
   advanceCursorToTranscriptTail,
+  markUnlicensedTranscript,
+  transcriptTailUuid,
   listDeltaChunks,
   buildChunkHeaders,
   sealFinalSessionArtifacts,
