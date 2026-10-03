@@ -11,9 +11,11 @@ const { spawnSync } = require("child_process");
 
 const tempDirs = new Set();
 
+// A detached drain spawned by a hook can still be writing when the test ends,
+// so removal retries on ENOTEMPTY/EBUSY instead of failing the file.
 after(() => {
   for (const dir of tempDirs) {
-    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });
 
