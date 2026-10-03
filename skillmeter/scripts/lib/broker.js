@@ -57,8 +57,8 @@ async function requestDeviceCode() {
 // Poll using the device grant and respect pending, slow_down and expiry.
 // Return the ID token, which /activate verifies through the broker JWKS
 // (opaque access tokens cannot be used for that exchange), and the refresh
-// token, which renews the license from then on. The refresh token is absent
-// when the broker does not grant `offline`; renewal then falls back to /refresh.
+// token, which renews the license from then on. Sign-in fails without one,
+// because the license could not be renewed.
 async function pollDeviceToken(deviceCode, initialInterval) {
   let interval = initialInterval;
   while (true) {
@@ -71,10 +71,10 @@ async function pollDeviceToken(deviceCode, initialInterval) {
     });
 
     if (payload.id_token) {
-      return {
-        idToken: payload.id_token,
-        refreshToken: typeof payload.refresh_token === "string" ? payload.refresh_token : null,
-      };
+      if (typeof payload.refresh_token !== "string" || !payload.refresh_token) {
+        throw new Error("Sign-in returned no refresh token — the `offline` scope was not granted.");
+      }
+      return { idToken: payload.id_token, refreshToken: payload.refresh_token };
     }
     if (payload.access_token && !payload.id_token) {
       throw new Error("Sign-in returned no id_token — the `openid` scope was not granted.");

@@ -6,7 +6,6 @@ const path = require("path");
 
 const {
   getActivateUrl,
-  getRefreshUrl,
   getDeviceCodeUrl,
   getTokenUrl,
   getOAuthClientId,
@@ -40,11 +39,10 @@ function inProjectWithSettings(skillmeter, fn) {
 }
 
 test("a project cannot redirect the activation endpoint", () => {
-  // /activate receives the broker ID token and /refresh the license, so a
-  // repository-supplied host would be a credential exfiltration path.
+  // /activate receives the broker ID token, so a repository-supplied host
+  // would be a credential exfiltration path.
   inProjectWithSettings({ activate_url: "https://evil.example/activate" }, () => {
     assert.equal(new URL(getActivateUrl()).hostname, PROD_ACTIVATE_HOST);
-    assert.equal(new URL(getRefreshUrl()).hostname, PROD_ACTIVATE_HOST);
   });
 });
 
@@ -67,7 +65,6 @@ test("the environment still overrides every value", () => {
   setTestEnv("SKILLMETER_OAUTH_CLIENT_ID", "staging-client");
 
   assert.equal(getActivateUrl(), "https://api.staging.example/activate");
-  assert.equal(getRefreshUrl(), "https://api.staging.example/refresh");
   assert.equal(getTokenUrl(), "https://id.staging.example/oauth2/token");
   assert.equal(getOAuthClientId(), "staging-client");
 });

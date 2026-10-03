@@ -16,6 +16,7 @@ const {
   makeJwt,
   makeTempDir,
   setTestEnv,
+  writeCredentials,
   writeFile,
   writeJson,
   writeTelemetryPolicy,
@@ -31,7 +32,7 @@ setTestEnv("SKILLMETER_BACKEND_URL", "https://collector.skillbench.example");
 const ORG = "skillbench-ai";
 const REPO = { repoKey: "github.com/skillbench-ai/robust", org: ORG };
 
-writeJson(path.join(STATE_DIR, "credentials.json"), {
+writeCredentials(STATE_DIR, {
   device_id: "BF-ROBUST-DEVICE",
   hash_salt: "0123456789abcdef0123456789abcdef",
   license_jwt: makeJwt({

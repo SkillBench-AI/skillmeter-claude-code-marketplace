@@ -11,6 +11,7 @@ const {
   makeTempDir,
   readJson,
   runNode,
+  writeCredentials,
   writeFile,
   writeJson,
   writeTelemetryPolicy,
@@ -109,7 +110,7 @@ function testEnvironment() {
     JSON.stringify({ cwd: externalRepo }) + "\n"
   );
 
-  writeJson(path.join(stateDir, "credentials.json"), {
+  const credentials = {
     device_id: "repository-telemetry-test",
     hash_salt: "0123456789abcdef0123456789abcdef",
     license_jwt: makeJwt({
@@ -117,7 +118,8 @@ function testEnvironment() {
       org: { login: "skillbench-ai" },
       orgs: ["skillbench-ai"],
     }),
-  });
+  };
+  writeCredentials(stateDir, credentials);
   // repo-a and its clone share one canonical identity, so a single OFF entry
   // covers both checkouts.
   writeTelemetryPolicy(stateDir, {
@@ -138,6 +140,7 @@ function testEnvironment() {
     repoC,
     externalRepo,
     ambiguousRepo,
+    credentials,
     env: {
       ...process.env,
       HOME: temp,
@@ -572,6 +575,7 @@ test("live hook honors a git-root repository opt-out from a nested cwd", () => {
   const fixture = testEnvironment();
   const nestedCwd = path.join(fixture.repoA, "packages", "app");
   const pluginData = path.join(fixture.stateDir, "plugin-data");
+  writeCredentials(fixture.stateDir, fixture.credentials, { dataDir: pluginData });
   writeFile(path.join(nestedCwd, ".keep"));
 
   const result = runNode(HOOK_SCRIPT, ["UserPromptSubmit"], {

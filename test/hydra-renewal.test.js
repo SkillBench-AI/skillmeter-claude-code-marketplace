@@ -1,8 +1,8 @@
 "use strict";
 
-// ADR 005: a session with a broker refresh token renews through the refresh
-// token grant and /activate pinned to its tenant, never through /refresh. The
-// broker and the license server are a fetch stub; nothing reaches a network.
+// ADR 005: a session renews through the broker refresh token grant and
+// /activate pinned to its tenant; one without a refresh token cannot renew.
+// The broker and the license server are a fetch stub; nothing reaches a network.
 
 const { test, beforeEach } = require("node:test");
 const assert = require("node:assert/strict");
@@ -21,6 +21,7 @@ const credstore = require("../skillmeter/scripts/credstore");
 const licenseStatus = require("../skillmeter/scripts/lib/license-status");
 const { refreshLicense, ensureFreshLicense } = require("../skillmeter/scripts/lib/license-activation");
 const { LOG_DIR } = require("../skillmeter/scripts/lib/paths");
+const broker = require("../skillmeter/scripts/lib/broker");
 
 const DEVICE_ID = "11111111-2222-4333-8444-555555555555";
 const LOCK_FILE = path.join(LOG_DIR, ".license-refresh.lock");
@@ -99,7 +100,7 @@ test("renewal: refresh token grant, then /activate pinned to the tenant; the rot
   ];
   assert.equal(await refreshLicense(DEVICE_ID, { source: "drain" }), fresh);
 
-  assert.deepEqual(calls.map((c) => c.url), [TOKEN_URL, ACTIVATE_URL], "never /refresh");
+  assert.deepEqual(calls.map((c) => c.url), [TOKEN_URL, ACTIVATE_URL]);
   assert.equal(calls[0].form.grant_type, "refresh_token");
   assert.equal(calls[0].form.refresh_token, REFRESH_TOKEN);
   assert.equal(calls[1].opts.headers.Authorization, "Bearer id-token-1");
@@ -129,7 +130,7 @@ test("a rotated refresh token is kept even when the exchange after it fails, and
   assert.equal(calls[2].form.refresh_token, "ory_rt_fixture-rotated");
 });
 
-test("invalid_grant ends the session: terminal, no /activate, and no fallback to /refresh", async () => {
+test("invalid_grant ends the session: terminal, and no /activate", async () => {
   responses = [respond(400, { error: "invalid_grant", error_description: "token revoked" })];
   assert.equal(await refreshLicense(DEVICE_ID, { source: "drain" }), null);
   assert.deepEqual(calls.map((c) => c.url), [TOKEN_URL]);
@@ -180,12 +181,27 @@ test("a 401 from /activate after a fresh broker token is transient, not the end 
   assert.equal(readSession(stateDir).refresh_token, REFRESH_TOKEN, "the broker did not rotate, so the token is unchanged");
 });
 
-test("a session without a refresh token still renews through /refresh", async () => {
+test("a session without a refresh token records reactivation_required without a network call", async () => {
   signedIn({ refreshToken: null });
-  const fresh = license(900);
-  responses = [respond(200, { token: fresh })];
-  assert.equal(await refreshLicense(DEVICE_ID, { source: "drain" }), fresh);
-  assert.deepEqual(calls.map((c) => c.url), ["https://activation.test/refresh"]);
+  assert.equal(await refreshLicense(DEVICE_ID, { source: "drain" }), null);
+  assert.equal(calls.length, 0);
+  const status = licenseStatus.readLicenseStatus();
+  assert.equal(status.terminal.reason, licenseStatus.TERMINAL_REASONS.REACTIVATION_REQUIRED);
+  assert.equal(credstore.isSignedIn(), true, "the license is kept for the notices that name its workspace");
+  // Later drains do not retry until a sign-in.
+  assert.equal(await ensureFreshLicense(DEVICE_ID, { source: "drain" }), credstore.getLicenseToken());
+  assert.equal(calls.length, 0);
+});
+
+test("device sign-in fails when the broker grants no refresh token", async () => {
+  responses = [respond(200, { id_token: "id-token-1", access_token: "opaque" })];
+  await assert.rejects(broker.pollDeviceToken("device-code", 0), /no refresh token/);
+  assert.deepEqual(calls.map((c) => c.url), [TOKEN_URL]);
+  assert.equal(calls[0].form.grant_type, "urn:ietf:params:oauth:grant-type:device_code");
+
+  responses = [respond(200, { id_token: "id-token-2", refresh_token: "ory_rt_fixture-second" })];
+  assert.deepEqual(await broker.pollDeviceToken("device-code", 0),
+    { idToken: "id-token-2", refreshToken: "ory_rt_fixture-second" });
 });
 
 test("concurrent drains renew once", async () => {
