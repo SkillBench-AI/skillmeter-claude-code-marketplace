@@ -103,20 +103,10 @@ function getActivateUrl() {
   );
 }
 
-// The /refresh endpoint sits next to /activate on the same host. Derive it from
-// getActivateUrl so one host config covers both; tolerate non-standard override
-// paths by appending /refresh.
-function getRefreshUrl() {
-  const url = getActivateUrl();
-  if (url.endsWith("/activate")) return url.slice(0, -"/activate".length) + "/refresh";
-  return url.replace(/\/?$/, "/refresh");
-}
-
 // The broker's base URL. The two OAuth endpoints are derived from it rather
-// than configured separately, for the same reason getRefreshUrl derives from
-// getActivateUrl: one host setting should move a whole environment, and two
-// half-configured URLs pointing at different brokers is not a state worth
-// being able to express.
+// than configured separately: one host setting should move a whole
+// environment, and two half-configured URLs pointing at different brokers is
+// not a state worth being able to express.
 function getBrokerUrl() {
   return trustedEndpoint(
     resolveString("SKILLMETER_BROKER_URL", DEFAULTS.brokerUrl),
@@ -186,7 +176,6 @@ module.exports = {
   CRED_FILE,
   TELEMETRY_POLICY_FILE,
   getActivateUrl,
-  getRefreshUrl,
   getDeviceCodeUrl,
   getTokenUrl,
   getRevokeUrl,

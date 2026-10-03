@@ -7,7 +7,7 @@ const os = require("node:os");
 const { spawnSync } = require("node:child_process");
 const { makeTempDir, writeCredentials, sessionPath, accountDir } = require("../testing/helpers");
 
-for (const mode of ["background", "background-cycle", "background-missing", "background-cycle-failure", "foreground", "foreground-cycle", "spawn"]) {
+for (const mode of ["background", "background-cycle", "background-missing", "background-cycle-failure", "background-no-refresh", "foreground", "foreground-cycle", "spawn"]) {
   test(`sign-in CLI binds the original intent: ${mode}`, () => {
     const root = makeTempDir("signin-intent-");
     const state = path.join(root, ".skillbench");
@@ -50,7 +50,8 @@ for (const mode of ["background", "background-cycle", "background-missing", "bac
             store.writeSigninResult({status:"success", marker:"newer-intent"});
           }
           if (mode.endsWith("failure")) throw Error("synthetic-old-poll-error");
-          payload = {id_token:"fixture-id-token", refresh_token:"fixture-refresh"};
+          // Without a refresh token (no \`offline\` scope) the license could not renew.
+          payload = mode === "background-no-refresh" ? {id_token:"fixture-id-token"} : {id_token:"fixture-id-token", refresh_token:"fixture-refresh"};
         }
         return {ok:true,status:200,json:async()=>payload,text:async()=>JSON.stringify(payload)};
       };
@@ -62,8 +63,14 @@ for (const mode of ["background", "background-cycle", "background-missing", "bac
     }
     const result = spawnSync(process.execPath, args, { encoding: "utf8", timeout: 5000,
       cwd: root, env: { PATH: process.env.PATH, TMPDIR: os.tmpdir() } });
-    assert.equal(result.status, (mode === "background-missing" || mode.endsWith("failure")) ? 1 : 0, result.stderr);
+    const fails = mode === "background-missing" || mode === "background-no-refresh" || mode.endsWith("failure");
+    assert.equal(result.status, fails ? 1 : 0, result.stderr);
     const current = JSON.parse(fs.readFileSync(file));
+    if (mode === "background-no-refresh") {
+      const sentinel = JSON.parse(fs.readFileSync(path.join(accountDir(state, data), "signin-result.json")));
+      assert.equal(sentinel.status, "failure");
+      assert.match(sentinel.error, /no refresh token/);
+    }
     if (mode.includes("cycle")) {
       const sentinel = JSON.parse(fs.readFileSync(path.join(accountDir(state, data), "signin-result.json")));
       assert.equal(sentinel.status, "success");
@@ -71,7 +78,7 @@ for (const mode of ["background", "background-cycle", "background-missing", "bac
     }
     if (mode === "spawn") assert.equal(fs.readFileSync(path.join(root, "spawn-checked"), "utf8"), "yes");
     else assert.equal(current.license_jwt, mode.includes("cycle") ? "fixture-newer" :
-      mode === "background-missing" ? undefined : "fixture-issued");
+      (mode === "background-missing" || mode === "background-no-refresh") ? undefined : "fixture-issued");
     // The broker's refresh token is kept only by the sign-in that won (ADR 005).
     if (mode === "background" || mode === "foreground") assert.equal(current.refresh_token, "fixture-refresh");
     else assert.equal(current.refresh_token, undefined);

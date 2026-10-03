@@ -1,7 +1,8 @@
 "use strict";
 
 // ADR001 refresh behavior: routine renewal, transient backoff, terminal
-// 401/410/402 and shared status coordination. No silent GitHub activation.
+// rejection and revocation, and shared status coordination. Renewal is the
+// broker refresh token grant followed by /activate (ADR 005).
 
 const { test, beforeEach } = require("node:test");
 const assert = require("node:assert/strict");
@@ -15,6 +16,7 @@ const stateDir = makeTempDir("skm-license-activation-");
 setTestEnv("SKILLMETER_STATE_DIR", stateDir);
 setTestEnv("SKILLMETER_RETRY_BASE_MS", "1000");
 setTestEnv("SKILLMETER_ACTIVATE_URL", "https://activation.test/activate");
+setTestEnv("SKILLMETER_BROKER_URL", "https://id.test");
 setTestEnv("SKILLMETER_BACKEND_URL", undefined);
 
 const credstore = require("../skillmeter/scripts/credstore");
@@ -24,6 +26,10 @@ const { LOG_DIR } = require("../skillmeter/scripts/lib/paths");
 
 const DEVICE_ID = "11111111-2222-4333-8444-555555555555";
 const LOCK_FILE = path.join(LOG_DIR, ".license-refresh.lock");
+const REFRESH_TOKEN = "ory_rt_fixture";
+const TOKEN_URL = "https://id.test/oauth2/token";
+const ACTIVATE_URL = "https://activation.test/activate";
+const REVOKE_URL = "https://id.test/oauth2/revoke";
 
 function jwt({ expiresInSec }) {
   return makeJwt({
@@ -38,9 +44,10 @@ function jwt({ expiresInSec }) {
 const EXPIRED = () => jwt({ expiresInSec: -60 });
 const FRESH = () => jwt({ expiresInSec: 3600 });
 
-function writeCreds(licenseJwt) {
+function writeCreds(licenseJwt, { refreshToken = REFRESH_TOKEN } = {}) {
   const store = { device_id: DEVICE_ID, hash_salt: "0123456789abcdef0123456789abcdef" };
   if (licenseJwt) store.license_jwt = licenseJwt;
+  if (licenseJwt && refreshToken) store.refresh_token = refreshToken;
   writeCredentials(stateDir, store);
 }
 
@@ -68,6 +75,11 @@ process.on("exit", () => {
   global.fetch = realFetch;
 });
 
+// A broker grant that keeps the refresh token, then /activate's answer.
+function renewal(status, body) {
+  return [respond(200, { id_token: "id-token", refresh_token: REFRESH_TOKEN }), respond(status, body)];
+}
+
 const realPath = process.env.PATH;
 
 beforeEach(() => {
@@ -93,9 +105,9 @@ test("force refreshes a token that looks fresh locally (the server said 401)", a
   assert.equal(calls.length, 0, "a fresh token is left alone");
 
   const next = FRESH();
-  responses = [respond(200, { token: next })];
+  responses = renewal(200, { token: next });
   assert.equal(await ensureFreshLicense(DEVICE_ID, { source: "drain", force: true }), next);
-  assert.equal(calls.length, 1);
+  assert.deepEqual(calls.map((c) => c.url), [TOKEN_URL, ACTIVATE_URL]);
 });
 
 test("no stored token: nothing happens (A4 relaxes this)", async () => {
@@ -104,14 +116,13 @@ test("no stored token: nothing happens (A4 relaxes this)", async () => {
   assert.equal(calls.length, 0);
 });
 
-test("routine expiry: /refresh rotates, stores, and records success", async () => {
+test("routine expiry: the broker grant and /activate rotate, store, and record success", async () => {
   const next = FRESH();
-  responses = [respond(200, { token: next })];
+  responses = renewal(200, { token: next });
   const got = await refreshLicense(DEVICE_ID, { source: "daemon" });
   assert.equal(got, next);
   assert.equal(credstore.getLicenseTokenUncached(), next);
-  assert.equal(calls.length, 1);
-  assert.match(calls[0].url, /\/refresh$/);
+  assert.deepEqual(calls.map((c) => c.url), [TOKEN_URL, ACTIVATE_URL]);
   const s = licenseStatus.readLicenseStatus();
   assert.equal(s.last_outcome, "rotated");
   assert.equal(s.consecutive_failures, 0);
@@ -122,7 +133,7 @@ test("transient 500: keep the token and back off", async () => {
   const before = credstore.getLicenseTokenUncached();
   responses = [respond(500, "boom")];
   assert.equal(await refreshLicense(DEVICE_ID, { source: "daemon" }), null);
-  assert.equal(calls.length, 1, "no /activate after a transient refresh failure");
+  assert.equal(calls.length, 1, "no /activate after a transient broker failure");
   assert.equal(credstore.getLicenseTokenUncached(), before);
   const s = licenseStatus.readLicenseStatus();
   assert.equal(s.last_outcome, "transient_failure");
@@ -139,7 +150,7 @@ for (const [label, token] of [
 ]) {
   test(`a 200 carrying ${label} is transient and keeps the stored token`, async () => {
     const before = credstore.getLicenseTokenUncached();
-    responses = [respond(200, { token: token() })];
+    responses = renewal(200, { token: token() });
     assert.equal(await refreshLicense(DEVICE_ID, { source: "daemon" }), null);
     assert.equal(credstore.getLicenseTokenUncached(), before, "the working token is not replaced");
     const s = licenseStatus.readLicenseStatus();
@@ -166,9 +177,9 @@ test("a refresh lock dated well into the future blocks for one cooldown, not unt
   const aged = new Date(Date.now() - 120_000);
   fs.utimesSync(LOCK_FILE, aged, aged);
   const next = FRESH();
-  responses = [respond(200, { token: next })];
+  responses = renewal(200, { token: next });
   assert.equal(await ensureFreshLicense(DEVICE_ID, { source: "daemon" }), next);
-  assert.equal(calls.length, 1);
+  assert.deepEqual(calls.map((c) => c.url), [TOKEN_URL, ACTIVATE_URL]);
 });
 
 test("network error is transient too, and failures accumulate", async () => {
@@ -182,10 +193,10 @@ test("network error is transient too, and failures accumulate", async () => {
   assert.equal(calls.length, 2);
 });
 
-test("402 on /refresh is terminal (revoked)", async () => {
-  responses = [respond(402, { error: "license cancelled" })];
+test("402 from /activate on renewal is terminal (revoked)", async () => {
+  responses = [...renewal(402, { error: "license cancelled" }), respond(200, "")];
   assert.equal(await refreshLicense(DEVICE_ID, { source: "daemon" }), null);
-  assert.equal(calls.length, 1);
+  assert.deepEqual(calls.map((c) => c.url), [TOKEN_URL, ACTIVATE_URL, REVOKE_URL]);
   const s = licenseStatus.readLicenseStatus();
   assert.equal(s.terminal.reason, licenseStatus.TERMINAL_REASONS.REVOKED);
   assert.equal(s.terminal.status, 402);
@@ -197,28 +208,36 @@ test("402 on /refresh is terminal (revoked)", async () => {
   assert.ok(credstore.getDeviceId(), "machine identity survives");
 });
 
-// 410 and 401 both mean "this token can never be rotated again". There used
-// to be a silent `gh auth token` → /activate recovery behind them; with the
-// GitHub path gone there is nothing the daemon can do, because the device
-// grant needs a browser it does not have. So both end the retry loop rather
-// than burning backoff on a call that cannot succeed.
-test("410 is terminal: no second call, and the reason names what the user must do", async () => {
-  responses = [respond(410, { error: "token too old" })];
+// A refresh token the broker refuses can never be used again, and the device
+// grant needs a browser the drain does not have. So a refusal ends the retry
+// loop rather than burning backoff on a call that cannot succeed.
+test("invalid_grant is terminal: no /activate, and the reason names what the user must do", async () => {
+  responses = [respond(400, { error: "invalid_grant" })];
   assert.equal(await refreshLicense(DEVICE_ID, { source: "daemon" }), null);
-  assert.equal(calls.length, 1, "nothing is attempted after the refresh is refused");
+  assert.equal(calls.length, 1, "nothing is attempted after the grant is refused");
   const s = licenseStatus.readLicenseStatus();
   assert.equal(s.terminal.reason, licenseStatus.TERMINAL_REASONS.REACTIVATION_REQUIRED);
-  assert.equal(s.terminal.status, 410);
+  assert.equal(s.terminal.status, 400);
   assert.match(s.terminal.message, /skillmeter:signin/);
 });
 
-test("401 is terminal the same way — a rotated signing key is not retryable either", async () => {
-  responses = [respond(401, {})];
+test("invalid_client (401) is terminal the same way", async () => {
+  responses = [respond(401, { error: "invalid_client" })];
   assert.equal(await refreshLicense(DEVICE_ID, { source: "daemon" }), null);
   assert.equal(calls.length, 1);
   const s = licenseStatus.readLicenseStatus();
   assert.equal(s.terminal.reason, licenseStatus.TERMINAL_REASONS.REACTIVATION_REQUIRED);
   assert.equal(s.terminal.status, 401);
+});
+
+// Signed in before ADR 005: there is nothing to renew with.
+test("a session without a refresh token requires sign-in, with no network call", async () => {
+  writeCreds(EXPIRED(), { refreshToken: null });
+  assert.equal(await refreshLicense(DEVICE_ID, { source: "daemon" }), null);
+  assert.equal(calls.length, 0);
+  const s = licenseStatus.readLicenseStatus();
+  assert.equal(s.terminal.reason, licenseStatus.TERMINAL_REASONS.REACTIVATION_REQUIRED);
+  assert.match(s.terminal.message, /skillmeter:signin/);
 });
 
 // The stored token is left alone. It is expired and unrotatable, but the
@@ -227,7 +246,7 @@ test("401 is terminal the same way — a rotated signing key is not retryable ei
 // out of.
 test("a terminal refresh does not delete the licence it could not rotate", async () => {
   const before = credstore.getLicenseTokenUncached();
-  responses = [respond(410, {})];
+  responses = [respond(400, { error: "invalid_grant" })];
   await refreshLicense(DEVICE_ID, { source: "daemon" });
   assert.equal(credstore.getLicenseTokenUncached(), before);
 });
@@ -246,9 +265,9 @@ test("ensureFreshLicense skips the network while the record says terminal or bac
 
 test("ensureFreshLicense refreshes once the record is clear, and honours the lock cooldown", async () => {
   const next = FRESH();
-  responses = [respond(200, { token: next })];
+  responses = renewal(200, { token: next });
   assert.equal(await ensureFreshLicense(DEVICE_ID, { source: "daemon" }), next);
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 2);
   assert.ok(fs.existsSync(LOCK_FILE));
 
   // Expired again right away: the lock is younger than the cooldown, so the
@@ -256,7 +275,7 @@ test("ensureFreshLicense refreshes once the record is clear, and honours the loc
   writeCreds(EXPIRED());
   const current = credstore.getLicenseTokenUncached();
   assert.equal(await ensureFreshLicense(DEVICE_ID, { source: "drain" }), current);
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 2);
 });
 
 test("signed out: neither path makes a network call", async () => {
@@ -289,14 +308,14 @@ test("refresh lock: exclusive create, live lock refused, stale lock claimed and 
 });
 
 for (const status of [200, 401, 402, 500]) {
-  test(`late refresh ${status} cannot cross a same-token sign-out/sign-in cycle`, async () => {
+  test(`late /activate ${status} cannot cross a same-token sign-out/sign-in cycle`, async () => {
     const token = credstore.getLicenseTokenUncached();
-    responses = [respond(status, { token: FRESH() })];
+    responses = renewal(status, { token: FRESH() });
     const pending = refreshLicense(DEVICE_ID, { source: "old-process" });
     // The network response resolves on the next microtask, after the new intent.
     credstore.signOut();
     credstore.markEngaged();
-    credstore.commitSignin({ jwt: token });
+    credstore.commitSignin({ jwt: token, refreshToken: REFRESH_TOKEN });
     licenseStatus.clearLicenseStatus({ source: "new-signin" });
     const before = fs.readFileSync(licenseStatus.LICENSE_STATUS_FILE, "utf8");
     assert.equal(await pending, null);
@@ -306,7 +325,7 @@ for (const status of [200, 401, 402, 500]) {
 }
 
 test("ensureFreshLicense does not return a pre-signout token after an awaited refresh", async () => {
-  responses = [respond(200, { token: FRESH() })];
+  responses = renewal(200, { token: FRESH() });
   const pending = ensureFreshLicense(DEVICE_ID);
   credstore.signOut();
   assert.equal(await pending, null);
