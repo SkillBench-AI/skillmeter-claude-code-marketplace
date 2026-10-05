@@ -5,6 +5,7 @@
 
 const { PLUGIN_VERSION } = require("./paths");
 const { CHANNEL } = require("./config");
+const { REASONS } = require("./collection-wording");
 
 // Names a non-stable channel and its environment so the destination is visible.
 function channelLabel() {
@@ -126,20 +127,21 @@ function signinStatusBanner(org, consent, repositoryEnabled = false) {
   ]);
 }
 
-// Why sign-in is required, by collection state (ADR 003, decision 5). Every
-// one of these holds no license, so hooks record nothing.
-const SIGNIN_REASONS = Object.freeze({
-  never_signed_in: "not signed in",
-  signed_out: "signed out",
-  token_missing: "license token missing",
-  revoked: "organization license inactive",
-});
+// The states whose card asks for a sign-in, worded from the shared table (ADR
+// 003, decision 5). Every one of these holds no license, so hooks record
+// nothing.
+const SIGNIN_STATES = new Set(["never_signed_in", "signed_out", "token_missing", "revoked"]);
+
+// "sign-in expired" as the start of a sentence.
+function sentence(text) {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
 
 // Shown at SessionStart when no license is stored. `state` names the reason.
 // A revoked license is restored by an administrator, not by the user's choice.
 function signInRequiredBanner(state = "") {
   const lines = ["[ ACTION REQUIRED ]", ""];
-  if (SIGNIN_REASONS[state]) lines.push(`Reason        ${SIGNIN_REASONS[state]}`);
+  if (SIGNIN_STATES.has(state)) lines.push(`Reason        ${REASONS[state]}`);
   lines.push(
     "Sign in to verify this repository.",
     state === "revoked"
@@ -157,7 +159,7 @@ function pausedBanner() {
   return card([
     "[ TELEMETRY PAUSED ]",
     "",
-    "Status        OFF — paused for every repository",
+    `Status        OFF — ${REASONS.paused}`,
     "",
     "→ /skillmeter:telemetry enable-global",
   ]);
@@ -170,7 +172,7 @@ function sessionEndedBanner() {
   return card([
     "[ ACTION REQUIRED ]",
     "",
-    "Sign-in expired. Uploads are paused",
+    `${sentence(REASONS.reactivation_required)}. Uploads are paused`,
     "until you sign in again.",
     "",
     "→ /skillmeter:signin",
