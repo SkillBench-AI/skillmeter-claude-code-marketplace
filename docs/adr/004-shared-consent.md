@@ -313,9 +313,11 @@ The boundary a hook sets for a period it does not record is different: the
 repository's cursor or, when signed out, the signed-out mark. When it cannot
 be written, or the transcript cannot be read to place it, the hook records
 it in a separate local store, and staging sends nothing from before it.
-Without a position, staging sends nothing until it has closed the period
-itself. A cursor or mark that exists but cannot be read holds staging the
-same way. Such a boundary is lost only when the separate store cannot be
+Without a position, staging sends nothing until a later boundary ends the
+period: a repository with no cursor for the transcript starts at the turn it
+is first seen recording in, and otherwise staging closes the period at the
+tail itself. A cursor or mark that exists but cannot be read holds staging
+the same way. Such a boundary is lost only when the separate store cannot be
 written either, in the same hook, and no later hook of the period writes
 one.
 
