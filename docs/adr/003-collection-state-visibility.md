@@ -526,7 +526,10 @@ Three cases decision 2 did not rule on:
   is a return, with or without a license. The pending sign-in result is not the
   guard. It is written after a round trip to the broker, so the session write
   that starts the sign-in is usually resolved before it exists, and a failed
-  sign-in ends it with nothing signed in.
+  sign-in ends it with nothing signed in. A license that names no organization
+  puts every repository outside it, so that client cannot collect anywhere.
+  The notice holds back for it too, and the stored stop stays until a sign-in
+  with a license that names one.
 - **A sign-out with no license.** `/skillmeter:signout` marks a client signed
   out even if it never signed in. Every open session shows the `signed out`
   line once, as decision 2 accepts for the session that ran the command, and
@@ -557,4 +560,6 @@ gate's reasons, which are the reasons of `unconfigured` and `recording`. A new
 terminal reason adds a row there.
 
 B4, the persistent in-session indicator, remains the other half of observed
-problem 1.
+problem 1. This ADR predates Claude Code's mods (2.1.287 and later): a mod can
+draw a band above the prompt that stays in place, and it installs as a plugin
+from a marketplace, so B4 can be built.
