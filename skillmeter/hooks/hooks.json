@@ -34,6 +34,28 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "session.json",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/on_collection_state.js"],
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "license-status.json",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/on_collection_state.js"],
+            "timeout": 10
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [

@@ -18,6 +18,8 @@ const {
   publicRepositoryState,
 } = require("./lib/repository-telemetry");
 const telemetryStore = require("./lib/telemetry-store");
+const { readStdinJson } = require("./lib/io");
+const { recordSigninNoticeShown } = require("./lib/collection-notice");
 
 // Dedupe marker: FileChanged can fire more than once per change, and re-fires
 // on unrelated writes. We notify once per result `ts`. Kept next to the sentinel
@@ -40,6 +42,7 @@ function emit(obj) {
 }
 
 async function main() {
+  const input = await readStdinJson({ empty: {} }).catch(() => null);
   const result = credstore.readSigninResult();
   // `pending` marks a device flow in progress; only its outcome is reported.
   if (!result || result.status === "none" || result.status === "pending") return;
@@ -55,6 +58,9 @@ async function main() {
   } catch {}
 
   if (result.status === "success") {
+    // This session's notice says the client is signed in, so its collection
+    // notice leaves the line out (lib/collection-notice).
+    recordSigninNoticeShown(input?.session_id, result.ts);
     const scope = getRepoScopeDecision(process.cwd());
     const org = credstore.getAllowedGitHubOrgs()[0] || "";
     const consent = org ? telemetryStore.getOrganizationConsent(org) : null;

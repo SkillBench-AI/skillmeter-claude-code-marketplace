@@ -6,10 +6,9 @@
 // collection notice. Nothing reaches the network or `~/.skillbench/`.
 
 const assert = require("node:assert/strict");
-const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { spawnSync } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 
 const { accountDir, makeJwt, makeTempDir, writeCredentials, writeFile, writeTelemetryPolicy } = require("./helpers");
 
@@ -90,6 +89,7 @@ function collectionClient({ policy = ENABLED } = {}) {
     root,
     repo,
     account,
+    env,
     write: (code) => run(["-e", WRITERS + code]),
     setPolicy: (next) => writeTelemetryPolicy(state, next),
     // SessionStart for `sessionId`: its card, or "".
@@ -112,6 +112,16 @@ function collectionClient({ policy = ENABLED } = {}) {
     // JSON output, or null when it printed nothing.
     notice: (sessionId, file = "session.json") =>
       lastJson(run([path.join(SCRIPTS, "on_collection_state.js")], { input: changed(sessionId, file) }).stdout),
+    // The same, without waiting: Claude Code starts the handlers for files
+    // written together at the same moment.
+    noticeStarted: (sessionId, file = "session.json") => new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [path.join(SCRIPTS, "on_collection_state.js")], { cwd: repo, env });
+      let stdout = "";
+      child.stdout.on("data", (chunk) => (stdout += chunk));
+      child.on("error", reject);
+      child.on("close", (code) => (code === 0 ? resolve(lastJson(stdout)) : reject(new Error(`exit ${code}`))));
+      child.stdin.end(changed(sessionId, file));
+    }),
     // The sign-in result notice for `sessionId`, the same way.
     signinNotice: (sessionId) =>
       lastJson(run([path.join(SCRIPTS, "on_signin_result.js")], { input: changed(sessionId, "signin-result.json") }).stdout),
@@ -121,7 +131,6 @@ function collectionClient({ policy = ENABLED } = {}) {
         input: JSON.stringify({ session_id: "capture", cwd: repo, prompt: "hello" }),
       }).stderr,
     sessionStateDir: () => path.join(account, "collection-state"),
-    exists: (file) => fs.existsSync(file),
   };
 }
 

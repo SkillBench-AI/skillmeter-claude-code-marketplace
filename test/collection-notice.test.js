@@ -1,0 +1,287 @@
+"use strict";
+
+// ADR 003 decision 2: one line when this client stops collecting, one when it
+// can collect again, nothing in between. Each case changes the state through
+// the real writers and runs the real FileChanged handler with the stdin
+// Claude Code gives it, for one or more sessions that SessionStart opened.
+
+const { test } = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("fs");
+const path = require("path");
+const { spawnSync } = require("child_process");
+
+const { ORG, REPO_KEY, SCRIPTS, collectionClient, license } = require("../testing/collection-client");
+
+const signedIn = `signIn(${JSON.stringify(license())});`;
+const STOPPED = (reason) => `✗ SkillMeter · ${reason} · telemetry cannot be collected on this device · run /skillmeter:signin`;
+const PAUSED = (reason) => `✗ SkillMeter · ${reason} · uploads paused on this device · run /skillmeter:signin`;
+const RESUMED = "✓ SkillMeter · signed in · telemetry can be collected on this device";
+
+// The lines a session shows after a change, from either watched file: every
+// file the change wrote fires the handler, and only one of them may speak.
+function lines(f, sessionId) {
+  return ["session.json", "license-status.json"]
+    .map((file) => f.notice(sessionId, file))
+    .filter(Boolean)
+    .map((out) => out.systemMessage);
+}
+
+// A client whose sessions opened signed in and recording.
+function recordingClient(...sessions) {
+  const f = collectionClient();
+  f.write(signedIn);
+  for (const id of sessions) f.sessionStart(id);
+  return f;
+}
+
+test("signing out shows the stop line once, with a desktop notification", () => {
+  const f = recordingClient("s");
+  f.write("signOut();");
+  const out = f.notice("s");
+  assert.equal(out.systemMessage, STOPPED("signed out"));
+  assert.equal(out.terminalSequence,
+    "\u001b]777;notify;SkillMeter;signed out · telemetry cannot be collected on this device · run /skillmeter:signin\u0007");
+  assert.deepEqual(lines(f, "s"), [], "a second fire with no change says nothing");
+});
+
+test("a revoked license shows the stop line with its reason", () => {
+  const f = recordingClient("s");
+  f.write("revoke();");
+  assert.deepEqual(lines(f, "s"), [STOPPED("organization license inactive")]);
+});
+
+test("an ended session shows the uploads-paused line", () => {
+  const f = recordingClient("s");
+  f.write("endSession();");
+  assert.deepEqual(lines(f, "s"), [PAUSED("sign-in expired")]);
+});
+
+test("a sign-in after a lost license shows the return line, in a repository never chosen too", () => {
+  // The common path: the license is gone, and the sign-in leaves this client
+  // unconfigured, because no repository was ever chosen.
+  const f = collectionClient({ policy: { orgs: { [ORG]: true } } });
+  f.write(`${signedIn} loseLicense();`);
+  f.sessionStart("s");
+  f.write(signedIn);
+  assert.deepEqual(lines(f, "s"), [RESUMED]);
+  assert.deepEqual(lines(f, "s"), []);
+});
+
+test("token_missing, then signed in, then token_missing again is two lines", () => {
+  const f = collectionClient();
+  f.write(`${signedIn} loseLicense();`);
+  f.sessionStart("s");
+  f.write(signedIn);
+  const first = lines(f, "s");
+  f.write("loseLicense();");
+  assert.deepEqual([...first, ...lines(f, "s")], [RESUMED, STOPPED("license token missing")]);
+});
+
+test("a change within the stopped group says nothing", () => {
+  // A license lost, then a sign-out: token_missing becomes signed_out.
+  const f = recordingClient("s");
+  f.write("loseLicense();");
+  assert.deepEqual(lines(f, "s"), [STOPPED("license token missing")]);
+  f.write("signOut();");
+  assert.deepEqual(lines(f, "s"), []);
+});
+
+test("routine writes say nothing, each on its own", () => {
+  const writers = {
+    "refresh-token rotation": "cs.commitRotation(cs.recoverySnapshot(), 'next-refresh-token');",
+    "license renewal": `cs.commitRefresh(${JSON.stringify(license(1800))}, cs.recoverySnapshot());`,
+    "renewal recorded": "ls.recordRefreshSuccess({ source: 'drain', outcome: 'rotated' });",
+    "a transient failure": "ls.recordRefreshFailure({ source: 'drain', message: 'offline' });",
+    "the whole renewal": `renew(${JSON.stringify(license(1800))});`,
+  };
+  for (const [name, code] of Object.entries(writers)) {
+    const f = recordingClient("s");
+    f.write(code);
+    assert.deepEqual(lines(f, "s"), [], name);
+  }
+});
+
+test("another session's start clears the terminal state and says nothing", () => {
+  // Healthy, with a backoff to clear.
+  const healthy = recordingClient("s");
+  healthy.write("ls.recordRefreshFailure({ source: 'drain', message: 'offline' });");
+  healthy.sessionStart("other");
+  assert.deepEqual(lines(healthy, "s"), []);
+
+  // Uploads paused: the clear keeps the reason, so the state stays.
+  const ended = recordingClient("s");
+  ended.write("endSession();");
+  assert.deepEqual(lines(ended, "s"), [PAUSED("sign-in expired")]);
+  ended.write("ls.clearTerminal();");
+  ended.sessionStart("other");
+  assert.deepEqual(lines(ended, "s"), []);
+});
+
+test("the pause is the user's choice and says nothing", () => {
+  const f = recordingClient("s");
+  f.setPolicy({ enabled: false, orgs: { [ORG]: true }, repositories: { [REPO_KEY]: true } });
+  f.write("ls.recordRefreshSuccess({ source: 'drain' });");
+  assert.deepEqual(lines(f, "s"), []);
+});
+
+test("two handlers of one session started together show one line", async () => {
+  const f = recordingClient("s");
+  f.write("signOut();");
+  const outs = await Promise.all(["session.json", "license-status.json", "session.json"]
+    .map((file) => f.noticeStarted("s", file)));
+  assert.deepEqual(outs.filter(Boolean).map((out) => out.systemMessage), [STOPPED("signed out")]);
+});
+
+test("every open session shows each line once", () => {
+  const f = recordingClient("s-a", "s-b");
+  f.write("signOut();");
+  assert.deepEqual(lines(f, "s-a"), [STOPPED("signed out")]);
+  assert.deepEqual(lines(f, "s-b"), [STOPPED("signed out")]);
+  assert.deepEqual([...lines(f, "s-a"), ...lines(f, "s-b")], []);
+});
+
+test("a session that started stopped is not told again what its card said", () => {
+  const f = collectionClient();
+  f.write(`${signedIn} signOut();`);
+  assert.match(f.sessionStart("s"), /Reason {8}signed out/);
+  f.write("ls.clearLicenseStatus({ source: 'signin' });");
+  assert.deepEqual(lines(f, "s"), []);
+});
+
+test("the client is resolved without a working directory", () => {
+  // Signed in to a repository that records, the client is only unconfigured:
+  // the notices know nothing about this repository.
+  const f = recordingClient("s");
+  f.write("ls.recordRefreshSuccess({ source: 'drain' });");
+  assert.deepEqual(lines(f, "s"), []);
+  const stored = JSON.parse(fs.readFileSync(path.join(f.sessionStateDir(), "s.json"), "utf8"));
+  assert.deepEqual(stored, { state: "unconfigured" });
+});
+
+// (b) A sign-in already shows its result in one session. There the return
+// line would say the same again; every other session still gets it.
+test("the session that shows the sign-in notice gets no second line", () => {
+  const f = collectionClient();
+  f.write(`${signedIn} signOut(); startSignin();`);
+  f.sessionStart("s-a");
+  f.sessionStart("s-b");
+  f.write(signedIn);
+  assert.match(f.signinNotice("s-a").systemMessage, /SIGNED IN|TELEMETRY|REPOSITORY/);
+  assert.equal(f.signinNotice("s-b"), null, "the sign-in notice is shown once");
+  assert.deepEqual(lines(f, "s-a"), []);
+  assert.deepEqual(lines(f, "s-b"), [RESUMED]);
+});
+
+test("with no sign-in notice shown anywhere, the return line still comes", () => {
+  const f = collectionClient();
+  f.write(`${signedIn} signOut(); startSignin();`);
+  f.sessionStart("s");
+  f.write(signedIn);
+  assert.deepEqual(lines(f, "s"), [RESUMED]);
+});
+
+test("an earlier sign-in's notice does not hide a later return", () => {
+  // The notice for the first sign-in was shown here. The session is then
+  // paused by an ended session and resumed by a renewal, with no new sign-in.
+  const f = collectionClient();
+  f.write(`${signedIn} signOut(); startSignin();`);
+  f.sessionStart("s");
+  f.write(signedIn);
+  f.signinNotice("s");
+  assert.deepEqual(lines(f, "s"), []);
+  f.write("endSession();");
+  assert.deepEqual(lines(f, "s"), [PAUSED("sign-in expired")]);
+  f.write("ls.recordRefreshSuccess({ source: 'drain' });");
+  assert.deepEqual(lines(f, "s"), [RESUMED]);
+});
+
+// (c) and (f): a client that never signed in. Signing out still marks it
+// signed out, and a sign-in that starts leaves it with no license.
+test("a sign-in that has started is not a return, until it completes", () => {
+  const f = collectionClient();
+  f.sessionStart("s");
+  const signout = spawnSync(process.execPath, [path.join(SCRIPTS, "signout.js")], {
+    encoding: "utf8", cwd: f.repo, env: f.env,
+  });
+  assert.equal(signout.stdout, "SkillMeter: already signed out.\n");
+  assert.deepEqual(lines(f, "s"), [STOPPED("signed out")]);
+
+  // markEngaged drops signed_out before the pending result exists.
+  f.write("cs.markEngaged();");
+  assert.deepEqual(lines(f, "s"), []);
+  f.write("ls.clearLicenseStatus({ source: 'signin' }); cs.writeSigninPending(600000, { generation: cs.recoverySnapshot().generation, deviceId: cs.getDeviceId() });");
+  assert.deepEqual(lines(f, "s"), []);
+  f.write("cs.writeSigninResult({ status: 'failure', error: 'denied' });");
+  assert.deepEqual(lines(f, "s"), [], "a failed sign-in leaves the stop as it was");
+  const stored = JSON.parse(fs.readFileSync(path.join(f.sessionStateDir(), "s.json"), "utf8"));
+  assert.deepEqual(stored, { state: "signed_out" });
+
+  f.write(signedIn);
+  assert.deepEqual(lines(f, "s"), [RESUMED]);
+});
+
+test("signing out a client that never collected says signed out, and nothing else", () => {
+  const f = collectionClient();
+  f.sessionStart("s");
+  f.sessionStart("other");
+  const signout = spawnSync(process.execPath, [path.join(SCRIPTS, "signout.js")], {
+    encoding: "utf8", cwd: f.repo, env: f.env,
+  });
+  assert.equal(signout.stdout + signout.stderr, "SkillMeter: already signed out.\n");
+  for (const id of ["s", "other"]) assert.deepEqual(lines(f, id), [STOPPED("signed out")]);
+  const card = f.sessionStart("next");
+  assert.match(card, /Reason {8}signed out/);
+  assert.doesNotMatch(card + signout.stdout, /stopped/i);
+});
+
+// (a) and (e): the state is kept per session id, in a private file holding the
+// state name only, and ages out with the other local files.
+test("each session keeps its state in a private file of its own", () => {
+  const f = recordingClient("3f2b9c1e-0000-4000-8000-000000000001");
+  f.notice("not a session id");
+  const dir = f.sessionStateDir();
+  assert.equal(path.dirname(dir), f.account);
+  assert.deepEqual(fs.readdirSync(dir).filter((n) => n.endsWith(".json")).sort(),
+    ["3f2b9c1e-0000-4000-8000-000000000001.json", "_client.json"]);
+  assert.equal(fs.statSync(dir).mode & 0o777, 0o700);
+  for (const name of fs.readdirSync(dir).filter((n) => n.endsWith(".json"))) {
+    const file = path.join(dir, name);
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+    assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(file, "utf8"))), ["state"]);
+  }
+});
+
+test("a session's state file ages out after 30 days", () => {
+  const f = recordingClient("old", "fresh");
+  const old = path.join(f.sessionStateDir(), "old.json");
+  const when = (Date.now() - 31 * 24 * 60 * 60 * 1000) / 1000;
+  fs.utimesSync(old, when, when);
+  f.sessionStart("third");
+  assert.equal(fs.existsSync(old), false);
+  assert.equal(fs.existsSync(path.join(f.sessionStateDir(), "fresh.json")), true);
+});
+
+test("SessionStart watches the session and its status record, creating the record if needed", () => {
+  const f = collectionClient();
+  const status = path.join(f.account, "license-status.json");
+  assert.equal(fs.existsSync(status), false);
+  const out = spawnSync(process.execPath, [path.join(SCRIPTS, "session_start.js")], {
+    encoding: "utf8", cwd: f.repo, env: f.env,
+    input: JSON.stringify({ session_id: "s", cwd: f.repo, source: "startup" }),
+  });
+  const watched = JSON.parse(out.stdout.trim().split("\n").pop()).hookSpecificOutput.watchPaths;
+  assert.ok(watched.includes(path.join(f.account, "session.json")));
+  assert.ok(watched.includes(status));
+  assert.equal(fs.existsSync(status), true);
+  // Each of them runs the handler, synchronously: Claude Code discards the
+  // output of an async hook.
+  const fileChanged = JSON.parse(fs.readFileSync(path.join(SCRIPTS, "../hooks/hooks.json"), "utf8")).hooks.FileChanged;
+  for (const file of ["session.json", "license-status.json"]) {
+    const handlers = fileChanged
+      .filter((entry) => new RegExp(`^(?:${entry.matcher})$`).test(file))
+      .flatMap((entry) => entry.hooks);
+    assert.ok(handlers.some((hook) => hook.args.at(-1).endsWith("/scripts/on_collection_state.js") && !hook.async), file);
+  }
+  assert.deepEqual(lines(f, "s"), [], "a client that never signed in is told by its card, not a notice");
+});

@@ -1369,6 +1369,15 @@ function cleanupStaleFiles() {
     }
   }
 
+  // Each session's last collection state, for its notices. A session ends
+  // without saying so, so its file ages out here.
+  const { SESSION_STATE_DIR } = require("./collection-notice");
+  try {
+    for (const f of fs.readdirSync(SESSION_STATE_DIR)) {
+      if (f.endsWith(".json")) candidates.push(path.join(SESSION_STATE_DIR, f));
+    }
+  } catch {}
+
   let deleted = 0;
   for (const p of candidates) {
     try {
