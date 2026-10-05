@@ -132,7 +132,7 @@ test("two handlers of one session started together show one line", async () => {
   const f = recordingClient("s");
   f.write("signOut();");
   const outs = await Promise.all(["session.json", "license-status.json", "session.json"]
-    .map((file) => f.noticeStarted("s", file)));
+    .map((file) => f.started("on_collection_state.js", "s", file)));
   assert.deepEqual(outs.filter(Boolean).map((out) => out.systemMessage), [STOPPED("signed out")]);
 });
 
@@ -185,6 +185,69 @@ test("the session that shows the sign-in notice gets no second line", () => {
   assert.equal(f.signinNotice("s-b"), null, "the sign-in notice is shown once");
   assert.deepEqual(lines(f, "s-a"), []);
   assert.deepEqual(lines(f, "s-b"), [RESUMED]);
+});
+
+test("two sessions handling one sign-in together: one sign-in notice, one return line", async () => {
+  // A race shows in about one round in four without the claim, so twenty
+  // rounds miss it about once in a hundred runs.
+  for (let round = 0; round < 20; round++) {
+    const f = collectionClient();
+    f.write(`${signedIn} signOut(); startSignin();`);
+    f.sessionStart("s-a");
+    f.sessionStart("s-b");
+    f.write(signedIn);
+    const outs = await Promise.all(["s-a", "s-b"].flatMap((id) => [
+      f.started("on_signin_result.js", id, "signin-result.json").then((out) => out && "signin"),
+      f.started("on_collection_state.js", id, "session.json").then((out) => out && "return"),
+      f.started("on_collection_state.js", id, "license-status.json").then((out) => out && "return"),
+    ]));
+    assert.deepEqual(outs.filter(Boolean).sort(), ["return", "signin"], `round ${round}`);
+  }
+});
+
+test("a revoked license, then a sign-in: one stop line, then one return line", () => {
+  const f = recordingClient("s-a", "s-b");
+  f.write("revoke();");
+  for (const id of ["s-a", "s-b"]) assert.deepEqual(lines(f, id), [STOPPED("organization license inactive")]);
+  f.write("startSignin();");
+  assert.deepEqual(lines(f, "s-a"), [], "a started sign-in keeps the revoked reason");
+  assert.equal(storedState(f, "s-a"), "revoked");
+  // The session is committed before the record that clears the reason.
+  f.write(`cs.commitSignin({ jwt: ${JSON.stringify(license())} });`);
+  assert.equal(f.notice("s-a", "session.json"), null);
+  assert.equal(storedState(f, "s-a"), "revoked");
+  f.write("ls.recordSignin({ source: 'signin' }); cs.writeSigninResult({ status: 'success' });");
+  assert.ok(f.signinNotice("s-a"));
+  assert.deepEqual(lines(f, "s-a"), []);
+  assert.deepEqual(lines(f, "s-b"), [RESUMED]);
+  for (const id of ["s-a", "s-b"]) assert.equal(storedState(f, id), "unconfigured");
+});
+
+test("an ended session, then a sign-in: one uploads-paused line, then one return line", () => {
+  const f = recordingClient("s-a", "s-b");
+  f.write("endSession();");
+  for (const id of ["s-a", "s-b"]) assert.deepEqual(lines(f, id), [PAUSED("sign-in expired")]);
+  f.write("startSignin();");
+  assert.deepEqual(lines(f, "s-a"), []);
+  assert.equal(storedState(f, "s-a"), "delivery_paused");
+  f.write(signedIn);
+  assert.ok(f.signinNotice("s-b"));
+  assert.deepEqual(lines(f, "s-a"), [RESUMED]);
+  assert.deepEqual(lines(f, "s-b"), []);
+  for (const id of ["s-a", "s-b"]) assert.equal(storedState(f, id), "unconfigured");
+});
+
+test("token_missing, unconfigured, token_missing: the state stored at each step", () => {
+  const f = collectionClient();
+  f.write(`${signedIn} loseLicense();`);
+  f.sessionStart("s");
+  assert.equal(storedState(f, "s"), "token_missing");
+  f.write(signedIn);
+  assert.deepEqual(lines(f, "s"), [RESUMED]);
+  assert.equal(storedState(f, "s"), "unconfigured");
+  f.write("loseLicense();");
+  assert.deepEqual(lines(f, "s"), [STOPPED("license token missing")]);
+  assert.equal(storedState(f, "s"), "token_missing");
 });
 
 test("with no sign-in notice shown anywhere, the return line still comes", () => {

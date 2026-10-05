@@ -112,10 +112,10 @@ function collectionClient({ policy = ENABLED } = {}) {
     // JSON output, or null when it printed nothing.
     notice: (sessionId, file = "session.json") =>
       lastJson(run([path.join(SCRIPTS, "on_collection_state.js")], { input: changed(sessionId, file) }).stdout),
-    // The same, without waiting: Claude Code starts the handlers for files
-    // written together at the same moment.
-    noticeStarted: (sessionId, file = "session.json") => new Promise((resolve, reject) => {
-      const child = spawn(process.execPath, [path.join(SCRIPTS, "on_collection_state.js")], { cwd: repo, env });
+    // Any handler, started without waiting: Claude Code starts every open
+    // session's handlers for files written together at the same moment.
+    started: (script, sessionId, file) => new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [path.join(SCRIPTS, script)], { cwd: repo, env });
       let stdout = "";
       child.stdout.on("data", (chunk) => (stdout += chunk));
       child.on("error", reject);

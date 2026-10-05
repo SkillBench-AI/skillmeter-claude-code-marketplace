@@ -20,6 +20,7 @@ const {
 const telemetryStore = require("./lib/telemetry-store");
 const { readStdinJson } = require("./lib/io");
 const { recordSigninNoticeShown } = require("./lib/collection-notice");
+const { acquireLock } = require("./lib/credential-lock");
 
 // Dedupe marker: FileChanged can fire more than once per change, and re-fires
 // on unrelated writes. We notify once per result `ts`. Kept next to the sentinel
@@ -37,6 +38,30 @@ function osc777(title, body) {
   return `\u001b]777;notify;${title};${body}\u0007`;
 }
 
+// Claim result `ts` for this session. Every open session's handler starts at
+// the same moment, so the check and the claim are one step under a lock.
+function claimResult(ts) {
+  const deadline = Date.now() + 2000;
+  let release;
+  while (!(release = acquireLock(`${NOTIFIED_MARKER}.lock`))) {
+    if (Date.now() >= deadline) return false;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+  }
+  try {
+    let lastTs = null;
+    try {
+      lastTs = Number(fs.readFileSync(NOTIFIED_MARKER, "utf8")) || null;
+    } catch {}
+    if (ts && ts === lastTs) return false;
+    try {
+      fs.writeFileSync(NOTIFIED_MARKER, String(ts || ""), { mode: 0o600 });
+    } catch {}
+    return true;
+  } finally {
+    release();
+  }
+}
+
 function emit(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
 }
@@ -47,15 +72,8 @@ async function main() {
   // `pending` marks a device flow in progress; only its outcome is reported.
   if (!result || result.status === "none" || result.status === "pending") return;
 
-  // Only notify once per distinct result.
-  let lastTs = null;
-  try {
-    lastTs = Number(fs.readFileSync(NOTIFIED_MARKER, "utf8")) || null;
-  } catch {}
-  if (result.ts && result.ts === lastTs) return;
-  try {
-    fs.writeFileSync(NOTIFIED_MARKER, String(result.ts || ""), { mode: 0o600 });
-  } catch {}
+  // Only notify once per distinct result, in one session.
+  if (!claimResult(result.ts)) return;
 
   if (result.status === "success") {
     // This session's notice says the client is signed in, so its collection
