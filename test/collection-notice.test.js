@@ -453,3 +453,21 @@ test("a sign-in with a license naming no organization is not a return", () => {
   assert.deepEqual(lines(f, "s-b"), [RESUMED]);
   for (const id of ["s-a", "s-b"]) assert.equal(storedState(f, id), "unconfigured");
 });
+
+// A sign-in commits the license before it clears an ended session's reason, so
+// a client signed out after its session ended reads as uploads paused for a
+// moment on its way back. A stop does not announce that moment.
+test("an ended session, a sign-out, then a sign-in: no pause line on the way back", () => {
+  const f = recordingClient("s");
+  f.write("endSession();");
+  assert.deepEqual(lines(f, "s"), [PAUSED("sign-in expired")]);
+  f.write("signOut();");
+  assert.deepEqual(lines(f, "s"), [STOPPED("signed out")]);
+  f.write("startSignin();");
+  assert.deepEqual(lines(f, "s"), []);
+  // The session is committed before the record that clears the reason.
+  f.write(`cs.commitSignin({ jwt: ${JSON.stringify(license())} });`);
+  assert.equal(f.notice("s", "session.json"), null);
+  f.write("ls.recordSignin({ source: 'signin' }); cs.writeSigninResult({ status: 'success' });");
+  assert.deepEqual(lines(f, "s"), [RESUMED]);
+});

@@ -125,6 +125,9 @@ function collectionNotice(sessionId) {
     // no organization puts every repository outside it, so the stop stays.
     const canCollect = CAN_COLLECT.has(current.state) && credstore.getAllowedGitHubOrgs().length > 0;
     if (from !== GROUPS.HEALTHY && to === GROUPS.HEALTHY && !canCollect) return "";
+    // A sign-in commits the license before it clears an ended session's
+    // reason, so a stop can pass through delivery_paused on its way out.
+    if (from === GROUPS.CAPTURE_STOPPED && to === GROUPS.DELIVERY_PAUSED) return "";
     writeSessionState(file, current.state);
     if (from === to) return "";
     if (to !== GROUPS.HEALTHY) return stoppedNotice(current, to);
