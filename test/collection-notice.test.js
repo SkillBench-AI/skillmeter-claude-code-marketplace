@@ -147,6 +147,31 @@ test("pausing a client whose uploads wait is not a return", () => {
   assert.deepEqual(lines(f, "s"), [], "uploads still wait, as the session was told");
 });
 
+// The policy is watched too. A toggle or the pause changes no group, so it
+// costs each session one silent run.
+test("toggling a repository, and the pause itself, say nothing", () => {
+  const f = recordingClient("s");
+  for (const action of ["disable", "enable", "disable-global"]) {
+    f.telemetry(action);
+    assert.deepEqual(f.fire("s", "telemetry-policy.json"), [], action);
+  }
+  assert.equal(storedState(f, "s"), "paused");
+});
+
+// The pause masks every other state, so a sign-out while paused shows nothing
+// until the pause is lifted, and then once in each session.
+test("a sign-out while paused is announced when the pause is lifted", () => {
+  const f = recordingClient("s-a", "s-b");
+  f.telemetry("disable-global");
+  f.write("signOut();");
+  for (const id of ["s-a", "s-b"]) {
+    assert.deepEqual([...f.fire(id, "telemetry-policy.json"), ...f.fire(id, "session.json")], []);
+  }
+  f.telemetry("enable-global");
+  for (const id of ["s-a", "s-b"]) assert.deepEqual(f.fire(id, "telemetry-policy.json"), [STOPPED("signed out")]);
+  for (const id of ["s-a", "s-b"]) assert.deepEqual(f.fire(id, "telemetry-policy.json"), []);
+});
+
 test("every open session shows each line once", () => {
   const f = recordingClient("s-a", "s-b");
   f.write("signOut();");
@@ -375,7 +400,7 @@ test("a session's state file ages out after 30 days", () => {
   assert.equal(fs.existsSync(path.join(f.sessionStateDir(), "fresh.json")), true);
 });
 
-test("SessionStart watches the session and its status record, creating the record if needed", () => {
+test("SessionStart watches the session, its status record and the telemetry policy, creating the record if needed", () => {
   const f = collectionClient();
   const status = path.join(f.account, "license-status.json");
   assert.equal(fs.existsSync(status), false);
@@ -386,11 +411,12 @@ test("SessionStart watches the session and its status record, creating the recor
   const watched = JSON.parse(out.stdout.trim().split("\n").pop()).hookSpecificOutput.watchPaths;
   assert.ok(watched.includes(path.join(f.account, "session.json")));
   assert.ok(watched.includes(status));
+  assert.ok(watched.includes(path.join(f.root, "state", "telemetry-policy.json")));
   assert.equal(fs.existsSync(status), true);
   // Each of them runs the handler, synchronously: Claude Code discards the
   // output of an async hook.
   const fileChanged = JSON.parse(fs.readFileSync(path.join(SCRIPTS, "../hooks/hooks.json"), "utf8")).hooks.FileChanged;
-  for (const file of ["session.json", "license-status.json"]) {
+  for (const file of ["session.json", "license-status.json", "telemetry-policy.json"]) {
     const handlers = fileChanged
       .filter((entry) => new RegExp(`^(?:${entry.matcher})$`).test(file))
       .flatMap((entry) => entry.hooks);

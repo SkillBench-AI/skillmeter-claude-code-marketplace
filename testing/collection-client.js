@@ -6,6 +6,7 @@
 // collection notice. Nothing reaches the network or `~/.skillbench/`.
 
 const assert = require("node:assert/strict");
+const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { spawn, spawnSync } = require("child_process");
@@ -84,6 +85,9 @@ function collectionClient({ policy = ENABLED } = {}) {
     const line = stdout.trim().split("\n").pop();
     return line ? JSON.parse(line) : null;
   };
+  // What each session's SessionStart asked Claude Code to watch.
+  const watched = new Map();
+  const fileChanged = JSON.parse(fs.readFileSync(path.join(SCRIPTS, "../hooks/hooks.json"), "utf8")).hooks.FileChanged;
 
   return {
     root,
@@ -93,10 +97,30 @@ function collectionClient({ policy = ENABLED } = {}) {
     write: (code) => run(["-e", WRITERS + code]),
     setPolicy: (next) => writeTelemetryPolicy(state, next),
     // SessionStart for `sessionId`: its card, or "".
-    sessionStart: (sessionId = "card", cwd = repo) =>
-      lastJson(run([path.join(SCRIPTS, "session_start.js")], {
+    sessionStart: (sessionId = "card", cwd = repo) => {
+      const out = lastJson(run([path.join(SCRIPTS, "session_start.js")], {
         input: JSON.stringify({ session_id: sessionId, cwd, source: "startup" }),
-      }).stdout).systemMessage || "",
+      }).stdout);
+      watched.set(sessionId, out.hookSpecificOutput.watchPaths);
+      return out.systemMessage || "";
+    },
+    // A write to the file named `basename`, as Claude Code handles it for
+    // `sessionId`: nothing unless that session's SessionStart watches the
+    // file, then every synchronous FileChanged handler whose matcher selects
+    // it. The lines they show.
+    fire: (sessionId, basename) => {
+      const file = (watched.get(sessionId) || []).find((p) => path.basename(p) === basename);
+      if (!file) return [];
+      const input = JSON.stringify({ session_id: sessionId, hook_event_name: "FileChanged", file_path: file, event: "change", cwd: repo });
+      return fileChanged
+        .filter((entry) => new RegExp(`^(?:${entry.matcher})$`).test(basename))
+        .flatMap((entry) => entry.hooks.filter((hook) => !hook.async))
+        .map((hook) => lastJson(run([hook.args.at(-1).replace("${CLAUDE_PLUGIN_ROOT}", path.resolve(SCRIPTS, ".."))], { input }).stdout))
+        .filter(Boolean)
+        .map((out) => out.systemMessage);
+    },
+    // /skillmeter:telemetry <action> in the repository.
+    telemetry: (...args) => run([path.join(SCRIPTS, "telemetry.js"), ...args]),
     // /skillmeter:telemetry status in `cwd`, as "label: value" pairs.
     status: (cwd = repo) => {
       const { stdout, stderr } = run([path.join(SCRIPTS, "telemetry.js"), "status"], { cwd });

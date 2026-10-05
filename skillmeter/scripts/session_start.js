@@ -10,6 +10,7 @@ const { STATES, readCollectionState } = require("./lib/collection-state");
 const { startSessionState } = require("./lib/collection-notice");
 const { detectHarness } = require("./harness.js");
 const { PLUGIN_ROOT, PLUGIN_VERSION } = require("./lib/paths");
+const { TELEMETRY_POLICY_FILE } = require("./lib/config");
 const { initializeBackfillLifecycle } = require("./lib/backfill-state");
 const {
   BACKFILL_RESULT_FILE,
@@ -122,13 +123,21 @@ function runSessionStartHook() {
       try { startSessionState(input.session_id); } catch {}
       // Single SessionStart stdout JSON. Always register the sign-in sentinel so
       // the FileChanged notifier can report sign-in success/failure without the
-      // user re-running /skillmeter:signin, and the session and its status
-      // record for the collection notices. Attach exactly one banner when
-      // relevant (not-signed-in vs telemetry-active are mutually exclusive).
+      // user re-running /skillmeter:signin. Register the session, its status
+      // record and the telemetry policy for the collection notices: the pause
+      // masks every other state, so lifting it can reveal a stop. Attach
+      // exactly one banner when relevant (not-signed-in vs telemetry-active are
+      // mutually exclusive).
       const out = {
         hookSpecificOutput: {
           hookEventName: "SessionStart",
-          watchPaths: [credstore.SIGNIN_RESULT_FILE, BACKFILL_RESULT_FILE, credstore.SESSION_FILE, LICENSE_STATUS_FILE],
+          watchPaths: [
+            credstore.SIGNIN_RESULT_FILE,
+            BACKFILL_RESULT_FILE,
+            credstore.SESSION_FILE,
+            LICENSE_STATUS_FILE,
+            TELEMETRY_POLICY_FILE,
+          ],
         },
       };
       // One banner (not-signed-in vs telemetry-active are mutually exclusive),
