@@ -477,39 +477,53 @@ so itself.
 
 ## Amendment 2026-10-05: the notices and the status command
 
-Decision 2 is implemented. SessionStart adds `session.json` and
-`license-status.json`, both in this client's account directory, to its
-`watchPaths`, and creates the status record if there is none: a file created
-after the watch is registered can be missed. FileChanged runs
-`scripts/on_collection_state.js` for either file. It resolves the collection
-state without a working directory and shows decision 2's lines word for word,
+Decision 2 is implemented. SessionStart adds three files to its `watchPaths`:
+`session.json` and `license-status.json`, both in this client's account
+directory, and the telemetry policy. It creates the status record if there is
+none, because a file created after the watch is registered can be missed.
+FileChanged runs `scripts/on_collection_state.js` for each of them. It resolves
+the collection state without a working directory and shows decision 2's lines,
 with the OSC 777 desktop notification the sign-in notice uses. Without a
 working directory a signed-in client resolves as `unconfigured`, so no line can
 claim that a repository was recording.
 
+Decision 2 names two files; the policy is the third. The pause comes first in
+decision 1's order and masks every other reading. A sign-out while paused
+therefore changes nothing a session can see, and lifting the pause writes only
+the policy. Without the watch, that stop would surface at some later unrelated
+write, or never. A repository toggle or the pause changes no group, so each
+costs every session one silent run.
+
 The dedupe keys on the hook's `session_id`. Claude Code gives a FileChanged
 hook a stdin JSON that carries it, and each open session's hook gets its own
-(verified on Claude Code 2.1.288). Each session keeps the state it last
-resolved in `collection-state/<session_id>.json` in the account directory. The
-file holds the state name only, is private like the other local stores, and is
-removed 30 days after its last write. SessionStart writes it with the state its
-card shows, so a session that starts stopped is not told again. A hook without
-a session id shares one file per client. Claude Code starts the handlers for
-files written together at the same moment, so the hooks of one session take a
-lock, and the second sees what the first stored.
+(verified on Claude Code 2.1.288 and 2.1.289). Each session keeps the state it
+last resolved in `collection-state/<session_id>.json` in the account directory.
+The file holds the state name only, is private like the other local stores, and
+is removed 30 days after its last write. SessionStart writes it with the state
+resolved the same way, without a working directory. That is `unconfigured`
+where the card shows `recording`, which is the same group, so a session that
+starts stopped is not told again. A hook without a session id shares one file
+per client. Claude Code starts the handlers for files written together at the
+same moment, so the hooks of one session take a lock, and the second sees what
+the first stored.
 
 Three cases decision 2 did not rule on:
 
 - **A sign-in in this session.** A completed sign-in already shows the sign-in
-  result notice, in one session. There it stands for the return line, which
-  would only repeat it. Every other session still gets the line. The sign-in
-  notice records which session showed it, and the collection notice waits up
-  to two seconds for that record, since both run at once.
+  result notice. There it stands for the return line, which would only repeat
+  it, and every other session still gets the line. Every open session's
+  sign-in notice starts at the same moment, so the notice claims each result
+  under a lock, and one session shows it. It records that session once the
+  notice is printed. The collection notice waits up to two seconds for that
+  record, since both run at once. A notice that takes longer, because its walk
+  over the transcripts for the repository inventory is slow, gives its session
+  both lines rather than none. A deadline on that walk is a follow-up.
 - **A sign-in that has started.** Starting a sign-in clears `signed_out` before
   anything is signed in. On a client with no recorded sign-in, that turns
   `signed_out` into `never_signed_in`, which is healthy. A stop therefore ends
-  only when a license is stored: neither a started sign-in nor the pause on a
-  client without a license is a return. The pending sign-in result is not the
+  only in a state that can collect (`unconfigured` or `recording`), the
+  destinations decision 2 itself names. Neither a started sign-in nor the pause
+  is a return, with or without a license. The pending sign-in result is not the
   guard. It is written after a round trip to the broker, so the session write
   that starts the sign-in is usually resolved before it exists, and a failed
   sign-in ends it with nothing signed in.
@@ -518,8 +532,16 @@ Three cases decision 2 did not rule on:
   line once, as decision 2 accepts for the session that ran the command, and
   nothing else follows.
 
-The lines are decision 2's exactly, so the revoked line does not add decision
-5's "contact your administrator"; the card and the status command do.
+The lines are decision 2's, except that the revoked line ends with decision
+5's "contact your administrator", as the card and the status command do:
+signing in alone does not restore an organization's license.
+
+A known limitation: the session lock, like the credential lock it is built
+on, treats only a dead owner as stale, because age proves nothing. Suppose a
+hook is killed while holding the lock and its process id is then reused by a
+live process. Every later hook of that session waits out its four seconds and
+shows nothing until that process exits. That needs a kill inside the hold and
+a reuse of the id before the next change. It is not bounded by age.
 
 Decision 6 is implemented. `/skillmeter:telemetry status` resolves the state
 for the current directory and prints the state, its reason and the next

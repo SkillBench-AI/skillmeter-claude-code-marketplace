@@ -26,9 +26,11 @@ When this plugin stops collecting or uploading while a session is open, each
 open session shows one line that says why and what to run, with a desktop
 notification where the terminal supports it. That happens when you sign out,
 when the license is lost or no longer active, or when the sign-in expires and
-uploads wait. Each session shows one more line when the plugin can collect
-again. In the session that shows the sign-in result, that result is the line.
-Nothing is shown while collection works, and nothing repeats.
+uploads wait. While telemetry is paused, the line appears when the pause is
+lifted. Each session shows one more line when the plugin can collect again.
+The session that shows the sign-in result shows that result instead, or both
+if the result takes more than two seconds to appear. No line is shown while
+collection works, and there are no reminders.
 
 ## Collection scope
 
