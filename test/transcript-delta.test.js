@@ -260,6 +260,193 @@ test("a signed-out mark ages out unless a cursor for its transcript remains", ()
     ["old-cursored-elsewhere.jsonl.json", "old-cursored.jsonl.json", "recent.jsonl.json"]);
 });
 
+// ---- boundaries that could not be written where staging reads them --------
+const credstore = require("../skillmeter/scripts/credstore");
+const { repositoryStorageId } = require("../skillmeter/scripts/lib/paths");
+const PENDING_REPOSITORY = { repoKey: "github.com/skillbench-ai/pending", org: "skillbench-ai" };
+const OTHER_PENDING_REPOSITORY = { repoKey: "github.com/skillbench-ai/pending-other", org: "skillbench-ai" };
+
+// Let the clock move, so a boundary written next is later than the last.
+function tick() {
+  const until = Date.now() + 2;
+  while (Date.now() < until) {}
+}
+
+// Run `fn` while `dir` is replaced by a file, as a stale file or failing disk
+// would leave it, then put the directory back.
+function withBlocked(dir, fn) {
+  const saved = `${dir}.saved`;
+  const existed = fs.existsSync(dir);
+  if (existed) fs.renameSync(dir, saved);
+  fs.mkdirSync(path.dirname(dir), { recursive: true });
+  fs.writeFileSync(dir, "");
+  try {
+    return fn();
+  } finally {
+    fs.rmSync(dir, { force: true });
+    if (existed) fs.renameSync(saved, dir);
+  }
+}
+
+function unreadable(file, fn) {
+  fs.chmodSync(file, 0o200);
+  try {
+    return fn();
+  } finally {
+    fs.chmodSync(file, 0o600);
+  }
+}
+
+// The uuids `stageTranscriptDelta` seals for this repository.
+function stagedUuids(file, repository) {
+  const before = new Set(transfer.listDeltaChunks());
+  transfer.stageTranscriptDelta(file, "prompt", "device", repository);
+  return transfer.listDeltaChunks().filter((chunk) => !before.has(chunk))
+    .flatMap((chunk) => fs.readFileSync(chunk, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l).uuid));
+}
+
+test("closing a period tells nothing to close from a failure", () => {
+  const file = path.join(DATA_DIR, "close.jsonl");
+  writeFile(file, toJsonl([content("c1")]));
+  unreadable(file, () => {
+    assert.equal(transfer.transcriptTailUuid(file), null, "unreadable");
+    assert.equal(transfer.markUnlicensedTranscript(file), null);
+    assert.equal(transfer.advanceCursorToTranscriptTail(file, PENDING_REPOSITORY), null);
+  });
+  withBlocked(path.join(DATA_DIR, "logs", "unlicensed-transcripts"), () => {
+    assert.equal(transfer.markUnlicensedTranscript(file), null, "the mark cannot be written");
+  });
+  const cursors = path.join(DATA_DIR, "logs", "repositories",
+    repositoryStorageId(PENDING_REPOSITORY.repoKey, credstore.getOrCreateHashSalt()), "transcripts", "cursors");
+  withBlocked(cursors, () => {
+    assert.equal(transfer.advanceCursorToTranscriptTail(file, PENDING_REPOSITORY), null, "the cursor cannot be written");
+  });
+
+  const absent = path.join(DATA_DIR, "close-absent.jsonl");
+  assert.equal(transfer.markUnlicensedTranscript(absent), false, "nothing written yet");
+  assert.equal(transfer.advanceCursorToTranscriptTail(absent, PENDING_REPOSITORY), false);
+});
+
+test("recordPendingBoundary: the scope, the newest record when readable, privately", () => {
+  const file = path.join(DATA_DIR, "pending-record.jsonl");
+  writeFile(file, toJsonl([content("r1"), content("r2")]));
+  assert.equal(transfer.recordPendingBoundary(file, null), true);
+  assert.equal(transfer.recordPendingBoundary(file, PENDING_REPOSITORY), true);
+  unreadable(file, () => assert.equal(transfer.recordPendingBoundary(file, null), true));
+
+  const store = path.join(DATA_DIR, "logs", "transcript-boundaries", "pending-record.jsonl.ndjson");
+  const raw = fs.readFileSync(store, "utf8");
+  const entries = raw.split("\n").filter(Boolean).map(JSON.parse);
+  assert.deepEqual(entries.map((e) => [e.scope, e.lastUuid]), [
+    ["*", "r2"],
+    [repositoryStorageId(PENDING_REPOSITORY.repoKey, credstore.getOrCreateHashSalt()), "r2"],
+    ["*", undefined],
+  ]);
+  assert.ok(entries.every((e) => typeof e.at === "number"));
+  assert.doesNotMatch(raw, /skillbench-ai/, "no repository name");
+  assert.equal(fs.statSync(path.dirname(store)).mode & 0o777, 0o700);
+  assert.equal(fs.statSync(store).mode & 0o777, 0o600);
+
+  // A line a crash left partial does not swallow the next boundary.
+  fs.appendFileSync(store, '{"scope":"*","at":1,"last');
+  assert.equal(transfer.recordPendingBoundary(file, null), true);
+  const readable = fs.readFileSync(store, "utf8").split("\n").filter(Boolean)
+    .filter((line) => { try { JSON.parse(line); return true; } catch { return false; } });
+  assert.equal(readable.length, 4);
+
+  const absent = path.join(DATA_DIR, "pending-absent.jsonl");
+  assert.equal(transfer.recordPendingBoundary(absent, null), true, "nothing to protect");
+  assert.equal(fs.existsSync(path.join(path.dirname(store), "pending-absent.jsonl.ndjson")), false);
+});
+
+test("staging starts after a pending boundary, and holds on one without a position until it closes the period", () => {
+  const file = path.join(DATA_DIR, "pending-stage.jsonl");
+  writeFile(file, toJsonl([content("a1"), content("a2")]));
+  transfer.recordPendingBoundary(file, null);
+  fs.appendFileSync(file, toJsonl([content("b1")]));
+  assert.deepEqual(stagedUuids(file, PENDING_REPOSITORY), ["b1"], "after the boundary, nothing lost");
+
+  fs.appendFileSync(file, toJsonl([content("c1")]));
+  unreadable(file, () => transfer.recordPendingBoundary(file, PENDING_REPOSITORY));
+  fs.appendFileSync(file, toJsonl([content("c2")]));
+  tick();
+  assert.deepEqual(stagedUuids(file, PENDING_REPOSITORY), [], "nothing while the period has no end");
+  const closed = transfer.readCursor("pending-stage.jsonl", PENDING_REPOSITORY);
+  assert.equal(closed.lastUuid, "c2", "closed at the tail");
+  assert.equal(closed.discarded, true);
+
+  fs.appendFileSync(file, toJsonl([content("d1")]));
+  assert.deepEqual(stagedUuids(file, PENDING_REPOSITORY), ["d1"], "then staging continues");
+});
+
+test("a pending boundary of another repository does not hold this one", () => {
+  const file = path.join(DATA_DIR, "pending-scope.jsonl");
+  writeFile(file, toJsonl([content("s1")]));
+  unreadable(file, () => transfer.recordPendingBoundary(file, PENDING_REPOSITORY));
+  tick();
+  assert.deepEqual(stagedUuids(file, OTHER_PENDING_REPOSITORY), ["s1"]);
+});
+
+test("an unreadable signed-out mark holds staging until the period is closed", () => {
+  const file = path.join(DATA_DIR, "corrupt-mark.jsonl");
+  writeFile(file, toJsonl([content("m1")]));
+  writeFile(path.join(DATA_DIR, "logs", "unlicensed-transcripts", "corrupt-mark.jsonl.json"), "{not json");
+  fs.appendFileSync(file, toJsonl([content("m2")]));
+  tick();
+  assert.deepEqual(stagedUuids(file, PENDING_REPOSITORY), []);
+  fs.appendFileSync(file, toJsonl([content("m3")]));
+  assert.deepEqual(stagedUuids(file, PENDING_REPOSITORY), ["m3"]);
+});
+
+test("an unreadable cursor holds staging until the period is closed", () => {
+  const file = path.join(DATA_DIR, "corrupt-cursor.jsonl");
+  writeFile(file, toJsonl([content("k1")]));
+  const cursor = path.join(DATA_DIR, "logs", "repositories",
+    repositoryStorageId(PENDING_REPOSITORY.repoKey, credstore.getOrCreateHashSalt()),
+    "transcripts", "cursors", "corrupt-cursor.jsonl.json");
+  writeFile(cursor, "{not json");
+  fs.appendFileSync(file, toJsonl([content("k2")]));
+  tick();
+  assert.deepEqual(stagedUuids(file, PENDING_REPOSITORY), []);
+  fs.appendFileSync(file, toJsonl([content("k3")]));
+  assert.deepEqual(stagedUuids(file, PENDING_REPOSITORY), ["k3"]);
+});
+
+test("an unreadable pending store holds staging until the period is closed", () => {
+  const file = path.join(DATA_DIR, "locked-pending.jsonl");
+  writeFile(file, toJsonl([content("l1")]));
+  transfer.recordPendingBoundary(file, null);
+  const store = path.join(DATA_DIR, "logs", "transcript-boundaries", "locked-pending.jsonl.ndjson");
+  fs.appendFileSync(file, toJsonl([content("l2")]));
+  fs.chmodSync(store, 0o000);
+  try {
+    tick();
+    assert.deepEqual(stagedUuids(file, PENDING_REPOSITORY), []);
+    fs.appendFileSync(file, toJsonl([content("l3")]));
+    assert.deepEqual(stagedUuids(file, PENDING_REPOSITORY), ["l3"]);
+  } finally {
+    fs.chmodSync(store, 0o600);
+  }
+});
+
+test("a pending boundary ages out unless a cursor for its transcript remains", () => {
+  const dir = path.join(DATA_DIR, "logs", "transcript-boundaries");
+  for (const name of ["pending-old", "pending-kept"]) {
+    const file = path.join(DATA_DIR, `${name}.jsonl`);
+    writeFile(file, toJsonl([content(name)]));
+    transfer.recordPendingBoundary(file, null);
+  }
+  transfer.writeCursor({ transcriptId: "pending-kept.jsonl", lastUuid: "u", seq: 1, updatedAt: 0 }, TEST_REPOSITORY);
+  const monthAgo = (Date.now() - 31 * 24 * 60 * 60 * 1000) / 1000;
+  for (const name of ["pending-old", "pending-kept"]) {
+    fs.utimesSync(path.join(dir, `${name}.jsonl.ndjson`), monthAgo, monthAgo);
+  }
+  transfer.cleanupStaleFiles();
+  const left = fs.readdirSync(dir);
+  assert.equal(left.includes("pending-old.jsonl.ndjson"), false);
+  assert.equal(left.includes("pending-kept.jsonl.ndjson"), true);
+});
+
 test("sealDeltaChunk writes body+meta and listDeltaChunks finds it", () => {
   const before = transfer.listDeltaChunks().length;
   const body = transfer.sealDeltaChunk("seal.jsonl", ['{"uuid":"a"}'], {

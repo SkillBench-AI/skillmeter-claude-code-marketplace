@@ -217,6 +217,13 @@ the feature is introduced.
   not upload earlier content. These markers are never sent. They are kept
   while any repository holds a transcript cursor for that session, and are
   otherwise removed once they are 30 days old;
+- when such a marker or a privacy cursor cannot be written, or the transcript
+  cannot be read to place it, the plugin records the boundary in a separate
+  local file instead: a hashed repository identifier, the time and, when it
+  could be read, the newest record's identifier. Nothing from before it is
+  sent; without a position, nothing is sent until the plugin has closed the
+  period at a later point. These records are never sent and are kept as long
+  as the markers;
 - sign-out removes the license and deletes unsent repository telemetry and
   organization audit records (an accepted history import stays queued for a
   sign-in to the same tenant), but

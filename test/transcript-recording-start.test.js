@@ -129,3 +129,88 @@ test("an accepted history import still sends a session from before sign-in", asy
   await s.importHistory();
   assert.deepEqual(c.transcript(), ["old-1-u", "old-1-a", "old-2-u", "old-2-a"]);
 });
+
+// When the boundary of a period that was not recorded cannot be written where
+// staging reads it, it is recorded separately, so what came before it is
+// still not sent. A session closed straight after sign-in stages with no
+// prompt, the shape where nothing else would set a boundary.
+
+test("a sign-in whose signed-out mark could not be written sends nothing from before it at session end", async (t) => {
+  const c = await collector();
+  t.after(c.close);
+  const s = session(c.url, { policy: ENABLED, signedIn: false });
+  s.blockSignedOutMarks();
+
+  await s.sessionStart("startup");
+  await s.turn("out-1");
+  await s.turn("out-2");
+  s.signIn();
+  await s.sessionEnd();
+  await s.drained(() => true);
+  assert.deepEqual(c.transcript(), []);
+});
+
+test("a sign-in whose signed-out mark could not be written still sends what follows it", async (t) => {
+  const c = await collector();
+  t.after(c.close);
+  const s = session(c.url, { policy: ENABLED, signedIn: false });
+  s.blockSignedOutMarks();
+
+  await s.sessionStart("startup");
+  await s.turn("out");
+  s.signIn();
+  await s.turn("in");
+  await s.drained(() => c.transcript().includes("in-a"));
+  assert.deepEqual(c.transcript(), ["in-u", "in-a"]);
+});
+
+test("a repository turned on after its cursor could not be written sends nothing from before", async (t) => {
+  const c = await collector();
+  t.after(c.close);
+  // Signed in, the repository not chosen yet: nothing is recorded.
+  const s = session(c.url, { policy: {} });
+
+  await s.sessionStart("startup");
+  await s.turn("off-1");
+  s.blockCursors();
+  await s.turn("off-2");
+  s.setPolicy(ENABLED);
+  await s.sessionEnd();
+  await s.drained(() => true);
+  assert.deepEqual(c.transcript(), []);
+});
+
+// The hooks could not read where the signed-out period ended, so staging
+// sends nothing until it has closed the period itself.
+test("a sign-in after signed-out turns the hooks could not read sends nothing from before it", async (t) => {
+  const c = await collector();
+  t.after(c.close);
+  const s = session(c.url, { policy: ENABLED, signedIn: false });
+
+  await s.sessionStart("startup");
+  s.hideTranscript();
+  await s.turn("out-1");
+  await s.turn("out-2");
+  s.showTranscript();
+  s.signIn();
+  await s.sessionEnd();
+  await s.drained(() => true);
+  assert.deepEqual(c.transcript(), []);
+
+  await s.sessionStart("resume");
+  await s.turn("in");
+  await s.drained(() => c.transcript().includes("in-a"));
+  assert.deepEqual(c.transcript(), ["in-u", "in-a"]);
+});
+
+test("a resumed session whose start could not be recorded sends its own turns, not its history", async (t) => {
+  const c = await collector();
+  t.after(c.close);
+  const s = session(c.url, { policy: ENABLED, history: HISTORY });
+  s.blockCursors();
+
+  await s.sessionStart("resume");
+  await s.turn("one");
+  await s.drained(() => c.transcript().includes("one-a"));
+  assert.deepEqual(c.transcript(), ["one-u", "one-a"]);
+});

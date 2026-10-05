@@ -38,6 +38,7 @@ const {
   LOG_DIR,
   PLUGIN_VERSION,
   repositoryQueuePaths,
+  repositoryStorageId,
 } = require("./paths");
 const telemetryStore = require("./telemetry-store");
 const {
@@ -920,7 +921,15 @@ function stageTranscriptDelta(transcriptPath, promptId, deviceId, repository) {
   const { objs } = parseJsonl(raw);
   const hashSalt = credstore.getOrCreateHashSalt();
 
-  const plan = buildChunkPlan(objs, liveDeltaStart(objs, cursor, transcriptId), hashSalt, {
+  const delta = liveDeltaStart(objs, cursor, transcriptId, repository);
+  if (delta.hold) {
+    // Where an unrecorded period ended is unknown, so it ends here: nothing
+    // before this point is sent.
+    advanceCursorToTranscriptTail(transcriptPath, repository);
+    return { chunks: 0 };
+  }
+
+  const plan = buildChunkPlan(objs, delta.start, hashSalt, {
     seqStart: (cursor && cursor.seq) || 0,
     maxUncompressedBytes: getTranscriptChunkMaxBytes(),
   });
@@ -1040,6 +1049,12 @@ function stageTranscriptSnapshot(transcriptPath, repository, {
   };
 }
 
+/**
+ * Move a repository's cursor to the transcript's newest record.
+ * @returns {boolean|null} true when moved; false when there was nothing to do
+ *   (no transcript or record yet, or `onlyWhenMissing` and a cursor exists);
+ *   null when the transcript could not be read or the cursor not written.
+ */
 function advanceCursorToTranscriptTail(transcriptPath, repository, {
   onlyWhenMissing = false,
 } = {}) {
@@ -1050,28 +1065,32 @@ function advanceCursorToTranscriptTail(transcriptPath, repository, {
   let raw;
   try {
     raw = fs.readFileSync(transcriptPath, "utf8");
-  } catch {
-    return false;
+  } catch (err) {
+    return err.code === "ENOENT" ? false : null;
   }
   const { objs } = parseJsonl(raw);
   const last = [...objs].reverse().find((record) =>
     record && typeof record.uuid === "string" && record.uuid
   );
   if (!last) return false;
-  writeCursor({
+  const written = writeCursor({
     transcriptId,
     lastUuid: last.uuid,
     seq: existing?.seq || 0,
     updatedAt: Date.now(),
     discarded: !onlyWhenMissing,
   }, repository);
-  return true;
+  return written ? true : null;
 }
 
 function initializeTranscriptCursor(input, deviceId, repository) {
-  return advanceCursorToTranscriptTail(input?.transcript_path, repository, {
+  const started = advanceCursorToTranscriptTail(input?.transcript_path, repository, {
     onlyWhenMissing: true,
   });
+  // A resumed session's earlier conversation stays behind this boundary even
+  // when the cursor could not be written.
+  if (started === null) recordPendingBoundary(input.transcript_path, repository);
+  return started;
 }
 
 // Without a license there is no repository queue to hold a cursor, so a hook
@@ -1086,7 +1105,9 @@ function unlicensedMarkPath(transcriptId) {
   return path.join(UNLICENSED_MARK_DIR, `${transcriptId}.json`);
 }
 
-// The newest record's uuid, reading the transcript backwards a block at a time.
+// The newest record's uuid, reading the transcript backwards a block at a time:
+// "" when the transcript is absent or holds no record yet, null when it
+// cannot be read.
 function transcriptTailUuid(transcriptPath, blockBytes = TAIL_BLOCK_BYTES) {
   let fd;
   try {
@@ -1109,19 +1130,25 @@ function transcriptTailUuid(transcriptPath, blockBytes = TAIL_BLOCK_BYTES) {
       if (uuid) return uuid;
       end = start;
     }
-  } catch {
-    // Unreadable: nothing to mark.
+    return "";
+  } catch (err) {
+    return err.code === "ENOENT" ? "" : null;
   } finally {
     if (fd !== undefined) {
       try { fs.closeSync(fd); } catch {}
     }
   }
-  return "";
 }
 
+/**
+ * Mark the transcript's newest record as the end of a signed-out period.
+ * @returns {boolean|null} true when written; false when there is no record
+ *   yet; null when the transcript could not be read or the mark not written.
+ */
 function markUnlicensedTranscript(transcriptPath) {
   if (!transcriptPath) return false;
   const lastUuid = transcriptTailUuid(transcriptPath);
+  if (lastUuid === null) return null;
   if (!lastUuid) return false;
   const transcriptId = path.basename(transcriptPath);
   try {
@@ -1133,19 +1160,118 @@ function markUnlicensedTranscript(transcriptPath) {
     return true;
   } catch (err) {
     console.error(`[skillmeter] Transcript mark write failed: ${err.message}`);
+    return null;
+  }
+}
+
+// When a hook cannot write the boundary of a period it did not record — the
+// cursor, or without a license the signed-out mark — it records the boundary
+// here instead: a separate local store, so the failure that stopped the first
+// write rarely stops this one. Each line holds the scope (a repository's
+// storage id, or "*" for every repository), the time, and the transcript's
+// newest record when it could be read. Never sent.
+const PENDING_BOUNDARY_DIR = path.join(LOG_DIR, "transcript-boundaries");
+
+function pendingBoundaryPath(transcriptId) {
+  return path.join(PENDING_BOUNDARY_DIR, `${transcriptId}.ndjson`);
+}
+
+function boundaryScope(repository) {
+  return repository?.repoKey
+    ? repositoryStorageId(repository.repoKey, credstore.getOrCreateHashSalt())
+    : "*";
+}
+
+/**
+ * Record a boundary that could not be written where staging normally reads it.
+ * @param {object|null} repository  the repository, or null for a signed-out period
+ * @returns {boolean} false when this could not be recorded either
+ */
+function recordPendingBoundary(transcriptPath, repository) {
+  if (!transcriptPath) return false;
+  const lastUuid = transcriptTailUuid(transcriptPath);
+  if (lastUuid === "") return true;
+  const entry = { scope: boundaryScope(repository), at: Date.now() };
+  if (lastUuid) entry.lastUuid = lastUuid;
+  try {
+    fs.mkdirSync(PENDING_BOUNDARY_DIR, { recursive: true, mode: 0o700 });
+    // The leading newline ends a line a crash left partial.
+    fs.appendFileSync(
+      pendingBoundaryPath(path.basename(transcriptPath)),
+      "\n" + JSON.stringify(entry) + "\n",
+      { mode: 0o600 }
+    );
+    return true;
+  } catch (err) {
+    console.error(`[skillmeter] Transcript boundary could not be recorded: ${err.message}`);
     return false;
   }
 }
 
-// Where the live delta starts: after the cursor, or after the signed-out mark
-// when that is later in the transcript.
-function liveDeltaStart(objs, cursor, transcriptId) {
-  const mark = safeReadJson(unlicensedMarkPath(transcriptId), null);
+// A boundary file as staging sees it: null when absent, { value } when read,
+// { unreadableSince } when it exists but cannot be read or parsed. A missing
+// or broken directory counts as absent: a boundary that could not be written
+// there was recorded as pending instead.
+function readBoundaryFile(file, parse = JSON.parse) {
+  if (!file) return null;
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    return null;
+  }
+  try {
+    return { value: parse(fs.readFileSync(file, "utf8")) };
+  } catch {
+    return { unreadableSince: stat.mtimeMs };
+  }
+}
+
+/**
+ * Where the live delta starts: after the latest boundary staging can read,
+ * the cursor, the signed-out mark, or a pending boundary for this repository.
+ * Staging must hold, sending nothing, while a boundary exists that cannot be
+ * placed: an unreadable cursor, mark or pending store, or a pending boundary
+ * recorded without a position, when no boundary was written after it.
+ * @returns {{ start: object|null } | { hold: true }}
+ */
+function liveDeltaStart(objs, cursor, transcriptId, repository) {
+  const known = [];
+  const unplaced = [];
+  if (cursor) known.push({ lastUuid: cursor.lastUuid, at: cursor.updatedAt || 0 });
+  const cursorFile = readBoundaryFile(cursorPath(transcriptId, repository));
+  if (cursorFile?.unreadableSince) unplaced.push(cursorFile.unreadableSince);
+  const mark = readBoundaryFile(unlicensedMarkPath(transcriptId));
+  if (mark?.unreadableSince) unplaced.push(mark.unreadableSince);
+  else if (mark?.value?.lastUuid) {
+    known.push({ lastUuid: mark.value.lastUuid, at: mark.value.updatedAt || 0 });
+  }
+  const pending = readBoundaryFile(pendingBoundaryPath(transcriptId), (raw) => parseJsonl(raw).objs);
+  if (pending?.unreadableSince) unplaced.push(pending.unreadableSince);
+  const scope = boundaryScope(repository);
+  for (const entry of pending?.value || []) {
+    if (entry?.scope !== "*" && entry?.scope !== scope) continue;
+    if (typeof entry.lastUuid === "string" && entry.lastUuid) {
+      known.push({ lastUuid: entry.lastUuid, at: entry.at || 0 });
+    } else {
+      unplaced.push(entry.at || Date.now());
+    }
+  }
+  const latest = Math.max(0, ...known.map((boundary) => boundary.at));
+  if (unplaced.some((at) => at >= latest)) return { hold: true };
+
   const indexOf = (uuid) =>
     uuid ? objs.findIndex((record) => record && record.uuid === uuid) : -1;
-  const markIndex = indexOf(mark?.lastUuid);
-  if (markIndex === -1 || markIndex <= indexOf(cursor?.lastUuid)) return cursor;
-  return { ...cursor, lastUuid: mark.lastUuid };
+  let start = cursor;
+  let startIndex = indexOf(cursor?.lastUuid);
+  for (const boundary of known) {
+    const index = indexOf(boundary.lastUuid);
+    if (index > startIndex) {
+      start = { ...cursor, lastUuid: boundary.lastUuid };
+      startIndex = index;
+    }
+  }
+  return { start };
 }
 
 function discardSkippedSessionArtifacts(input, deviceId, repository) {
@@ -1460,6 +1586,7 @@ function cleanupStaleFiles() {
 
   const cursored = transcriptsWithCursors();
   candidates.push(...uncursoredTranscriptMarks(UNLICENSED_MARK_DIR, ".json", cursored));
+  candidates.push(...uncursoredTranscriptMarks(PENDING_BOUNDARY_DIR, ".ndjson", cursored));
 
   if (fs.existsSync(LOG_DIR)) {
     try {
@@ -1514,6 +1641,7 @@ module.exports = {
   stageTranscriptSnapshot,
   advanceCursorToTranscriptTail,
   markUnlicensedTranscript,
+  recordPendingBoundary,
   transcriptTailUuid,
   listDeltaChunks,
   buildChunkHeaders,

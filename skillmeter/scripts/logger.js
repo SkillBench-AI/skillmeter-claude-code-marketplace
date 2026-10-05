@@ -27,19 +27,24 @@ const { observeSessionCwd } = require("./lib/cwd-context");
 
 // Move the transcript cursor to the tail of a period that was not recorded, so
 // that content from it is never sent later. Without a license there is no
-// repository to hold a cursor, so the transcript itself is marked.
+// repository to hold a cursor, so the transcript itself is marked. A boundary
+// that does not land is recorded as pending, so staging cannot start before it.
 function keepTranscriptCursorAtTail(input, repoScopeDecision) {
   if (!input.transcript_path) return;
+  const repository = repoScopeDecision.repoKey
+    ? { repoKey: repoScopeDecision.repoKey, org: repoScopeDecision.remoteOrg }
+    : null;
+  if (!repository && repoScopeDecision.classification !== "not_activated") return;
+  let transfer;
   try {
-    const transfer = require("./lib/transfer");
-    if (repoScopeDecision.repoKey) {
-      transfer.advanceCursorToTranscriptTail(input.transcript_path, {
-        repoKey: repoScopeDecision.repoKey,
-        org: repoScopeDecision.remoteOrg,
-      });
-    } else if (repoScopeDecision.classification === "not_activated") {
-      transfer.markUnlicensedTranscript(input.transcript_path);
-    }
+    transfer = require("./lib/transfer");
+    const closed = repository
+      ? transfer.advanceCursorToTranscriptTail(input.transcript_path, repository)
+      : transfer.markUnlicensedTranscript(input.transcript_path);
+    if (closed !== null) return;
+  } catch {}
+  try {
+    transfer.recordPendingBoundary(input.transcript_path, repository);
   } catch {}
 }
 

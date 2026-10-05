@@ -78,6 +78,7 @@ const PLUGIN_VERSION =
   "unknown";
 
 module.exports = {
+  repositoryStorageId,
   PLUGIN_ROOT,
   LOG_DIR,
   ACCOUNT_DIR,
