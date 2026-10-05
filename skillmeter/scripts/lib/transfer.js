@@ -1758,10 +1758,11 @@ function cleanupStaleFiles() {
     } catch {}
   }
 
-  // An unrecorded-turn mark guards its turn until that turn is staged, which
-  // can take longer than 30 days, so it follows the same rule. A transcript
-  // with no cursor needs none: a repository that records it later starts at
-  // the turn it is first seen in.
+  // Marks and pending boundaries guard what a later staging must skip, which
+  // can be more than 30 days away, so all three follow the same rule. A
+  // transcript no repository holds a cursor for still loses them after 30
+  // days: a repository that records it later starts at the turn it is first
+  // seen in, but one that stages it with no prompt, at session end, does not.
   const cursored = transcriptsWithCursors();
   candidates.push(...uncursoredTranscriptMarks(UNLICENSED_MARK_DIR, ".json", cursored));
   candidates.push(...uncursoredTranscriptMarks(PENDING_BOUNDARY_DIR, ".ndjson", cursored));

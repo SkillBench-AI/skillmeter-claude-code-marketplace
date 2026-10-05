@@ -305,15 +305,32 @@ tree, counts as written in the recorded directory.
   including a resumed session's.
 
 Where no mark protects a turn, only the state at staging does: if no hook of
-the turn ran in the repository that was not collecting, or its mark could
-not be written or read, a repository turned on before the turn is staged no
-longer holds it back. On Claude Code versions that write no prompt ids, turns
-are grouped by user prompts, no hook marks its turn, and the first-observation
-rule does not apply. A turn whose records name no directory is left to
-whichever repository stages it, and can be sent for more than one.
+the turn ran in the repository that was not collecting, or that turn's mark
+could not be written or read, a repository turned on before the turn is
+staged no longer holds it back.
+
+The boundary a hook sets for a period it does not record is different: the
+repository's cursor or, when signed out, the signed-out mark. When it cannot
+be written, or the transcript cannot be read to place it, the hook records
+it in a separate local store, and staging sends nothing from before it.
+Without a position, staging sends nothing until it has closed the period
+itself. A cursor or mark that exists but cannot be read holds staging the
+same way. Such a boundary is lost only when the separate store cannot be
+written either, in the same hook, and no later hook of the period writes
+one.
+
+Marks and these boundaries are kept while any repository holds a cursor for
+their transcript, and otherwise for 30 days. A transcript that no repository
+ever held a cursor for can lose them. If such a transcript is later staged
+by a turn, it starts at that turn. If it is staged without one, at the end
+of a session, it starts from its first line.
+
+On Claude Code versions that write no prompt ids, turns are grouped by user
+prompts, no hook marks its turn, and the first-observation rule does not
+apply. A turn whose records name no directory is left to whichever
+repository stages it, and can be sent for more than one.
 
 This plugin's proof, alongside its privacy cursors: a hook that runs in a
 repository that is not collecting marks its turn locally with the prompt id
 and an HMAC of that repository, and staging reads these marks with the
-recorded directories. A mark is kept while any repository holds a cursor for
-its transcript.
+recorded directories.
