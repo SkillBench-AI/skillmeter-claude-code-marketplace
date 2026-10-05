@@ -16,7 +16,7 @@ const { ACCOUNT_DIR } = require("./paths");
 const { atomicWriteJson, safeReadJson } = require("./io");
 const { acquireLock } = require("./credential-lock");
 const { LICENSE_STATUS_FILE, updateLicenseStatus } = require("./license-status");
-const { GROUPS, readCollectionState, stateGroup } = require("./collection-state");
+const { GROUPS, STATES, readCollectionState, stateGroup } = require("./collection-state");
 const { RESUMED_NOTICE, stoppedNotice } = require("./collection-wording");
 
 // One file per session, named by its session id and holding only the state
@@ -33,6 +33,9 @@ const SIGNIN_SHOWN_FILE = path.join(ACCOUNT_DIR, ".signin-shown.json");
 const LOCK_WAIT_MS = 4000;
 // How long to wait for the sign-in notice, which runs alongside this hook.
 const SIGNIN_NOTICE_WAIT_MS = 2000;
+// The states a stop can end in: the return line says telemetry can be
+// collected, which the pause and a client without a license cannot.
+const CAN_COLLECT = new Set([STATES.UNCONFIGURED, STATES.RECORDING]);
 
 function sessionKey(sessionId) {
   return typeof sessionId === "string" && /^[A-Za-z0-9-]{1,128}$/.test(sessionId) ? sessionId : CLIENT_KEY;
@@ -117,9 +120,9 @@ function collectionNotice(sessionId) {
     const current = readCollectionState();
     const from = stored ? stateGroup(stored.state) : GROUPS.HEALTHY;
     const to = stateGroup(current.state);
-    // Only a stored license ends a stop. A sign-in that has started, or the
-    // pause, leaves nothing signed in, so the stop stays as it was.
-    if (from !== GROUPS.HEALTHY && to === GROUPS.HEALTHY && !credstore.isSignedIn()) return "";
+    // Only a state that can collect ends a stop. A sign-in that has started
+    // leaves no license, and the pause collects nothing, so the stop stays.
+    if (from !== GROUPS.HEALTHY && to === GROUPS.HEALTHY && !CAN_COLLECT.has(current.state)) return "";
     writeSessionState(file, current.state);
     if (from === to) return "";
     if (to !== GROUPS.HEALTHY) return stoppedNotice(current, to);

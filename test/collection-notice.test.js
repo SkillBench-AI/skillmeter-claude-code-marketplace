@@ -27,6 +27,9 @@ function lines(f, sessionId) {
     .map((out) => out.systemMessage);
 }
 
+// The state a session last stored.
+const storedState = (f, id) => JSON.parse(fs.readFileSync(path.join(f.sessionStateDir(), `${id}.json`), "utf8")).state;
+
 // A client whose sessions opened signed in and recording.
 function recordingClient(...sessions) {
   const f = collectionClient();
@@ -131,6 +134,17 @@ test("two handlers of one session started together show one line", async () => {
   const outs = await Promise.all(["session.json", "license-status.json", "session.json"]
     .map((file) => f.noticeStarted("s", file)));
   assert.deepEqual(outs.filter(Boolean).map((out) => out.systemMessage), [STOPPED("signed out")]);
+});
+
+test("pausing a client whose uploads wait is not a return", () => {
+  const f = recordingClient("s");
+  f.write("endSession();");
+  assert.deepEqual(lines(f, "s"), [PAUSED("sign-in expired")]);
+  f.setPolicy({ enabled: false, orgs: { [ORG]: true }, repositories: { [REPO_KEY]: true } });
+  assert.deepEqual(lines(f, "s"), [], "the pause does not sign anyone in");
+  assert.equal(storedState(f, "s"), "delivery_paused");
+  f.setPolicy({ orgs: { [ORG]: true }, repositories: { [REPO_KEY]: true } });
+  assert.deepEqual(lines(f, "s"), [], "uploads still wait, as the session was told");
 });
 
 test("every open session shows each line once", () => {
