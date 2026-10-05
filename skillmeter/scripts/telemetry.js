@@ -17,7 +17,7 @@ const { getAllowedGitHubOrgs } = credstore;
 const { getRepoScopeDecision } = require("./lib/repo-scope");
 const { resolveTelemetryGate } = require("./lib/telemetry-policy");
 const { readCollectionState } = require("./lib/collection-state");
-const { needsAdministrator, nextCommand, reasonText } = require("./lib/collection-wording");
+const { ADMINISTRATOR, needsAdministrator, nextCommand, reasonText } = require("./lib/collection-wording");
 
 const cwd = process.cwd();
 const action = process.argv[2];
@@ -48,7 +48,7 @@ function stateLines() {
     `  reason:       ${reasonText(result)}\n`;
   const command = nextCommand(result);
   if (command) {
-    const administrator = needsAdministrator(result) ? " · contact your administrator" : "";
+    const administrator = needsAdministrator(result) ? ` · ${ADMINISTRATOR}` : "";
     lines += `  next:         ${command}${administrator}\n`;
   }
   return lines;

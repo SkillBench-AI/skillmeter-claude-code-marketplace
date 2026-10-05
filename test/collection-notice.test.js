@@ -17,6 +17,7 @@ const signedIn = `signIn(${JSON.stringify(license())});`;
 const STOPPED = (reason) => `✗ SkillMeter · ${reason} · telemetry cannot be collected on this device · run /skillmeter:signin`;
 const PAUSED = (reason) => `✗ SkillMeter · ${reason} · uploads paused on this device · run /skillmeter:signin`;
 const RESUMED = "✓ SkillMeter · signed in · telemetry can be collected on this device";
+const REVOKED = `${STOPPED("organization license inactive")} · contact your administrator`;
 
 // The lines a session shows after a change, from either watched file: every
 // file the change wrote fires the handler, and only one of them may speak.
@@ -48,10 +49,16 @@ test("signing out shows the stop line once, with a desktop notification", () => 
   assert.deepEqual(lines(f, "s"), [], "a second fire with no change says nothing");
 });
 
-test("a revoked license shows the stop line with its reason", () => {
+// Decision 5: signing in alone does not restore an organization's license.
+test("a revoked license shows the stop line, naming the administrator", () => {
   const f = recordingClient("s");
   f.write("revoke();");
-  assert.deepEqual(lines(f, "s"), [STOPPED("organization license inactive")]);
+  const out = f.notice("s");
+  assert.equal(out.systemMessage,
+    "✗ SkillMeter · organization license inactive · telemetry cannot be collected on this device · run /skillmeter:signin · contact your administrator");
+  assert.equal(out.terminalSequence,
+    "\u001b]777;notify;SkillMeter;organization license inactive · telemetry cannot be collected on this device · run /skillmeter:signin · contact your administrator\u0007");
+  assert.deepEqual(lines(f, "s"), []);
 });
 
 test("an ended session shows the uploads-paused line", () => {
@@ -233,7 +240,7 @@ test("two sessions handling one sign-in together: one sign-in notice, one return
 test("a revoked license, then a sign-in: one stop line, then one return line", () => {
   const f = recordingClient("s-a", "s-b");
   f.write("revoke();");
-  for (const id of ["s-a", "s-b"]) assert.deepEqual(lines(f, id), [STOPPED("organization license inactive")]);
+  for (const id of ["s-a", "s-b"]) assert.deepEqual(lines(f, id), [REVOKED]);
   f.write("startSignin();");
   assert.deepEqual(lines(f, "s-a"), [], "a started sign-in keeps the revoked reason");
   assert.equal(storedState(f, "s-a"), "revoked");

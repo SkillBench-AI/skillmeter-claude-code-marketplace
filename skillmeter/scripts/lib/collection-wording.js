@@ -70,7 +70,10 @@ function nextCommand({ state, reason }) {
   }
 }
 
-// A revoked license is restored by an administrator, not by signing in alone.
+// A revoked license is restored by an administrator, not by signing in alone
+// (decision 5): the card, the status command and the stop line say so.
+const ADMINISTRATOR = "contact your administrator";
+
 function needsAdministrator({ state }) {
   return state === "revoked";
 }
@@ -82,7 +85,8 @@ const STOPPED = Object.freeze({
 });
 
 function stoppedNotice(result, group) {
-  return `✗ SkillMeter · ${reasonText(result)} · ${STOPPED[group]} · run ${SIGN_IN}`;
+  const administrator = needsAdministrator(result) ? ` · ${ADMINISTRATOR}` : "";
+  return `✗ SkillMeter · ${reasonText(result)} · ${STOPPED[group]} · run ${SIGN_IN}${administrator}`;
 }
 
 // The one line without a next command: there is none to give.
@@ -91,6 +95,7 @@ const RESUMED_NOTICE = "✓ SkillMeter · signed in · telemetry can be collecte
 module.exports = {
   REASONS,
   GATE_REASONS,
+  ADMINISTRATOR,
   gateReason,
   reasonText,
   nextCommand,

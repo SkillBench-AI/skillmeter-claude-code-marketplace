@@ -5,7 +5,7 @@
 
 const { PLUGIN_VERSION } = require("./paths");
 const { CHANNEL } = require("./config");
-const { REASONS } = require("./collection-wording");
+const { ADMINISTRATOR, REASONS } = require("./collection-wording");
 
 // Names a non-stable channel and its environment so the destination is visible.
 function channelLabel() {
@@ -145,7 +145,7 @@ function signInRequiredBanner(state = "") {
   lines.push(
     "Sign in to verify this repository.",
     state === "revoked"
-      ? "Telemetry remains OFF. Contact your administrator."
+      ? `Telemetry remains OFF. ${sentence(ADMINISTRATOR)}.`
       : "Telemetry remains OFF until you choose.",
     "",
     "→ /skillmeter:signin"
