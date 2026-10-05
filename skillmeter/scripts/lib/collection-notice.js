@@ -121,8 +121,10 @@ function collectionNotice(sessionId) {
     const from = stored ? stateGroup(stored.state) : GROUPS.HEALTHY;
     const to = stateGroup(current.state);
     // Only a state that can collect ends a stop. A sign-in that has started
-    // leaves no license, and the pause collects nothing, so the stop stays.
-    if (from !== GROUPS.HEALTHY && to === GROUPS.HEALTHY && !CAN_COLLECT.has(current.state)) return "";
+    // leaves no license, the pause collects nothing, and a license that names
+    // no organization puts every repository outside it, so the stop stays.
+    const canCollect = CAN_COLLECT.has(current.state) && credstore.getAllowedGitHubOrgs().length > 0;
+    if (from !== GROUPS.HEALTHY && to === GROUPS.HEALTHY && !canCollect) return "";
     writeSessionState(file, current.state);
     if (from === to) return "";
     if (to !== GROUPS.HEALTHY) return stoppedNotice(current, to);

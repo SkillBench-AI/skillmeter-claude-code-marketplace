@@ -12,6 +12,7 @@ const path = require("path");
 const { spawn, spawnSync } = require("child_process");
 
 const { ORG, REPO_KEY, SCRIPTS, collectionClient, license } = require("../testing/collection-client");
+const { makeJwt } = require("../testing/helpers");
 
 const signedIn = `signIn(${JSON.stringify(license())});`;
 const STOPPED = (reason) => `✗ SkillMeter · ${reason} · telemetry cannot be collected on this device · run /skillmeter:signin`;
@@ -430,4 +431,25 @@ test("SessionStart watches the session, its status record and the telemetry poli
     assert.ok(handlers.some((hook) => hook.args.at(-1).endsWith("/scripts/on_collection_state.js") && !hook.async), file);
   }
   assert.deepEqual(lines(f, "s"), [], "a client that never signed in is told by its card, not a notice");
+});
+
+// A license that names no organization puts every repository outside it, so
+// that client can never collect. Signing in with one is not a return: the
+// stop stays stored until a sign-in with a license that names one.
+test("a sign-in with a license naming no organization is not a return", () => {
+  const f = recordingClient("s-a", "s-b");
+  f.write("signOut();");
+  for (const id of ["s-a", "s-b"]) assert.deepEqual(lines(f, id), [STOPPED("signed out")]);
+  const noOrganization = makeJwt({ exp: Math.floor(Date.now() / 1000) + 900, org: { login: ORG }, orgs: [] });
+  f.write(`signIn(${JSON.stringify(noOrganization)});`);
+  assert.match(f.signinNotice("s-a").systemMessage, /No licensed organization was found/);
+  for (const id of ["s-a", "s-b"]) {
+    assert.deepEqual(lines(f, id), [], `${id}: nothing can be collected`);
+    assert.equal(storedState(f, id), "signed_out");
+  }
+  f.write(signedIn);
+  assert.ok(f.signinNotice("s-a"));
+  assert.deepEqual(lines(f, "s-a"), []);
+  assert.deepEqual(lines(f, "s-b"), [RESUMED]);
+  for (const id of ["s-a", "s-b"]) assert.equal(storedState(f, id), "unconfigured");
 });
