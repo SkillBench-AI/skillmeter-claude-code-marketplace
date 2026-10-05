@@ -7,8 +7,9 @@
 threads of 2026-09-17 are folded in. Acceptance covers the design.
 Amended 2026-10-01 (see the amendments at the end): the retry monitor is
 removed and decision 3 retired; sign-in after an ended session; decision 1
-implemented as the resolver; decision 4 implemented as the card. Decision 2
-(notices) is not implemented.
+implemented as the resolver; decision 4 implemented as the card. Amended
+2026-10-05: decision 2 implemented as the notices, decision 6 as the status
+command.
 **Related:** ADR 001 (decision 2, its Stop-recovery amendment and the local status record it requires; decision 4 is retired by the 2026-09-16 amendment), `skillmeter-codex-marketplace`, `skillmeter-vscode-extension` (parity)
 
 ## Context
@@ -473,3 +474,65 @@ its next command rather than `/skillmeter:signin`. A card that says telemetry
 is off appears only in states where hooks record no repository telemetry; where
 excluded hooks still send the exclusion audit, the repository setup card says
 so itself.
+
+## Amendment 2026-10-05: the notices and the status command
+
+Decision 2 is implemented. SessionStart adds `session.json` and
+`license-status.json`, both in this client's account directory, to its
+`watchPaths`, and creates the status record if there is none: a file created
+after the watch is registered can be missed. FileChanged runs
+`scripts/on_collection_state.js` for either file. It resolves the collection
+state without a working directory and shows decision 2's lines word for word,
+with the OSC 777 desktop notification the sign-in notice uses. Without a
+working directory a signed-in client resolves as `unconfigured`, so no line can
+claim that a repository was recording.
+
+The dedupe keys on the hook's `session_id`. Claude Code gives a FileChanged
+hook a stdin JSON that carries it, and each open session's hook gets its own
+(verified on Claude Code 2.1.288). Each session keeps the state it last
+resolved in `collection-state/<session_id>.json` in the account directory. The
+file holds the state name only, is private like the other local stores, and is
+removed 30 days after its last write. SessionStart writes it with the state its
+card shows, so a session that starts stopped is not told again. A hook without
+a session id shares one file per client. Claude Code starts the handlers for
+files written together at the same moment, so the hooks of one session take a
+lock, and the second sees what the first stored.
+
+Three cases decision 2 did not rule on:
+
+- **A sign-in in this session.** A completed sign-in already shows the sign-in
+  result notice, in one session. There it stands for the return line, which
+  would only repeat it. Every other session still gets the line. The sign-in
+  notice records which session showed it, and the collection notice waits up
+  to two seconds for that record, since both run at once.
+- **A sign-in that has started.** Starting a sign-in clears `signed_out` before
+  anything is signed in. On a client with no recorded sign-in, that turns
+  `signed_out` into `never_signed_in`, which is healthy. A stop therefore ends
+  only when a license is stored: neither a started sign-in nor the pause on a
+  client without a license is a return. The pending sign-in result is not the
+  guard. It is written after a round trip to the broker, so the session write
+  that starts the sign-in is usually resolved before it exists, and a failed
+  sign-in ends it with nothing signed in.
+- **A sign-out with no license.** `/skillmeter:signout` marks a client signed
+  out even if it never signed in. Every open session shows the `signed out`
+  line once, as decision 2 accepts for the session that ran the command, and
+  nothing else follows.
+
+The lines are decision 2's exactly, so the revoked line does not add decision
+5's "contact your administrator"; the card and the status command do.
+
+Decision 6 is implemented. `/skillmeter:telemetry status` resolves the state
+for the current directory and prints the state, its reason and the next
+command, then the repository lines it printed before: global, organization,
+this project and effective. Its licence line is gone. It merged
+`never_signed_in` with `token_missing`, gave an expired licence as a reason,
+and told a paused client to sign in. The recency decision 6 mentions (last
+upload, unsent counts) belongs to B3 and is not shown.
+
+The card, the status command and the notices read their words from one table,
+`lib/collection-wording.js`: decision 5's rows, the pause, and the capture
+gate's reasons, which are the reasons of `unconfigured` and `recording`. A new
+terminal reason adds a row there.
+
+B4, the persistent in-session indicator, remains the other half of observed
+problem 1.
