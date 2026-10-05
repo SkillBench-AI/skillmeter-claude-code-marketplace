@@ -9,7 +9,7 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
-const { spawnSync } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 
 const { ORG, REPO_KEY, SCRIPTS, collectionClient, license } = require("../testing/collection-client");
 
@@ -248,6 +248,42 @@ test("token_missing, unconfigured, token_missing: the state stored at each step"
   f.write("loseLicense();");
   assert.deepEqual(lines(f, "s"), [STOPPED("license token missing")]);
   assert.equal(storedState(f, "s"), "token_missing");
+});
+
+// The hook's timeout can kill the sign-in notice during its walk over the
+// transcripts, after it claimed the result and before it printed anything.
+// Its session must still be told.
+test("a sign-in notice killed before it shows leaves the return line", async () => {
+  const f = collectionClient();
+  f.write(`${signedIn} signOut(); startSignin();`);
+  f.sessionStart("s");
+  f.write(signedIn);
+  // A walk that never finishes.
+  const stall = path.join(f.root, "stall-walk.cjs");
+  fs.writeFileSync(stall, `
+    const Module = require("module");
+    const load = Module._load;
+    Module._load = function (request) {
+      const exported = load.apply(this, arguments);
+      if (!/repository-telemetry$/.test(request)) return exported;
+      return { ...exported, loadRepositoryTelemetryState: () => new Promise(() => setInterval(() => {}, 1000)) };
+    };
+  `);
+  const marker = path.join(f.account, ".signin-notified");
+  const { ts } = JSON.parse(fs.readFileSync(path.join(f.account, "signin-result.json"), "utf8"));
+  const child = spawn(process.execPath, ["-r", stall, path.join(SCRIPTS, "on_signin_result.js")], { cwd: f.repo, env: f.env });
+  let stdout = "";
+  child.stdout.on("data", (chunk) => (stdout += chunk));
+  const exited = new Promise((resolve) => child.on("close", (code, signal) => resolve(signal)));
+  child.stdin.end(JSON.stringify({ session_id: "s", hook_event_name: "FileChanged", file_path: path.join(f.account, "signin-result.json"), event: "change" }));
+  const claimed = () => { try { return fs.readFileSync(marker, "utf8") === String(ts); } catch { return false; } };
+  for (const deadline = Date.now() + 5000; !claimed() && Date.now() < deadline;) await new Promise((r) => setTimeout(r, 20));
+  assert.ok(claimed(), "the notice claimed the result");
+  await new Promise((r) => setTimeout(r, 300));
+  child.kill("SIGKILL");
+  assert.equal(await exited, "SIGKILL");
+  assert.equal(stdout, "", "killed before it showed anything");
+  assert.deepEqual(lines(f, "s"), [RESUMED]);
 });
 
 test("with no sign-in notice shown anywhere, the return line still comes", () => {

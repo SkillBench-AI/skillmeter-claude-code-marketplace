@@ -76,9 +76,6 @@ async function main() {
   if (!claimResult(result.ts)) return;
 
   if (result.status === "success") {
-    // This session's notice says the client is signed in, so its collection
-    // notice leaves the line out (lib/collection-notice).
-    recordSigninNoticeShown(input?.session_id, result.ts);
     const scope = getRepoScopeDecision(process.cwd());
     const org = credstore.getAllowedGitHubOrgs()[0] || "";
     const consent = org ? telemetryStore.getOrganizationConsent(org) : null;
@@ -113,6 +110,10 @@ async function main() {
       systemMessage: messages.join("\n"),
       terminalSequence: osc777("SkillMeter", body),
     });
+    // This session's notice says the client is signed in, so its collection
+    // notice leaves the line out (lib/collection-notice). Recorded once it is
+    // printed: a notice killed during the repository walk claims nothing.
+    recordSigninNoticeShown(input?.session_id, result.ts);
     return;
   }
 
