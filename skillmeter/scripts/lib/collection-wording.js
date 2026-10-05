@@ -33,7 +33,8 @@ const GATE_REASONS = Object.freeze({
 });
 const GATE_FALLBACK = "telemetry not enabled";
 
-// What a repository that does not record needs next, as its setup card says.
+// What a repository that does not record needs next: its setup card's command,
+// or, for a setting the user turned off, the command that turns it back on.
 const GATE_COMMANDS = Object.freeze({
   org_consent_required: SIGN_IN,
   org_disabled: SIGN_IN,

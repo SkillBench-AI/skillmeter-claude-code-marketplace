@@ -403,9 +403,20 @@ test("a session's state file ages out after 30 days", () => {
   const old = path.join(f.sessionStateDir(), "old.json");
   const when = (Date.now() - 31 * 24 * 60 * 60 * 1000) / 1000;
   fs.utimesSync(old, when, when);
+  // A hook killed while holding its session's lock leaves the lock behind,
+  // and only a later hook of that session would reap it. A session that has
+  // ended has none, so its lock ages out with the state.
+  const owner = (pid) => JSON.stringify({ version: 2, pid, token: "00000000-0000-4000-8000-000000000000" });
+  const leftLock = path.join(f.sessionStateDir(), "old.json.lock");
+  const freshLock = path.join(f.sessionStateDir(), "fresh.json.lock");
+  fs.writeFileSync(leftLock, owner(2147483646));
+  fs.utimesSync(leftLock, when, when);
+  fs.writeFileSync(freshLock, owner(process.pid));
   f.sessionStart("third");
   assert.equal(fs.existsSync(old), false);
+  assert.equal(fs.existsSync(leftLock), false);
   assert.equal(fs.existsSync(path.join(f.sessionStateDir(), "fresh.json")), true);
+  assert.equal(fs.existsSync(freshLock), true, "a lock a hook may still hold stays");
 });
 
 test("SessionStart watches the session, its status record and the telemetry policy, creating the record if needed", () => {

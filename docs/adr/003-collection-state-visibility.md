@@ -544,12 +544,18 @@ The lines are decision 2's, except that the revoked line ends with decision
 5's "contact your administrator", as the card and the status command do:
 signing in alone does not restore an organization's license.
 
-A known limitation: the session lock, like the credential lock it is built
-on, treats only a dead owner as stale, because age proves nothing. Suppose a
-hook is killed while holding the lock and its process id is then reused by a
-live process. Every later hook of that session waits out its four seconds and
-shows nothing until that process exits. That needs a kill inside the hold and
-a reuse of the id before the next change. It is not bounded by age.
+A known limitation: the session lock, like the credential lock it is built on,
+treats only a dead owner as stale, because age proves nothing. Suppose a hook
+is killed while holding the lock and its process id is then reused by a live
+process. Every later hook of that session waits out its four seconds and shows
+nothing until that process exits. That needs a kill inside the hold and a reuse
+of the id before the next change. Nothing bounds it by age but the
+session-start cleanup, which removes any file in `collection-state/` older than
+30 days. The sign-in notice's claim lock, in the account directory, has the
+same property for the whole client, and no cleanup bounds it: if a notice is
+killed while holding it and its process id is reused, every session's sign-in
+notice waits out two seconds and shows nothing until that process exits. The
+return line still reaches every stopped session after its own two-second wait.
 
 Decision 6 is implemented. `/skillmeter:telemetry status` resolves the state
 for the current directory and prints the state, its reason and the next

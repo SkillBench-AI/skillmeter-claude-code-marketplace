@@ -2,11 +2,12 @@
  * Collection notices (ADR 003, decision 2): one line when this client stops
  * collecting, one when it can collect again, and nothing in between.
  *
- * Each Claude Code session keeps the state it last resolved, and a line is
- * shown only when the state's group changes: into or out of capture stopped
- * (signed_out, token_missing, revoked) or delivery_paused. The state is
- * resolved without a working directory. These are facts about this client, so
- * a line never claims that a repository was recording.
+ * Each Claude Code session keeps the state it last resolved, or the stop it
+ * is still in, and a line is shown only when the state's group changes: into
+ * or out of capture stopped (signed_out, token_missing, revoked) or
+ * delivery_paused. The state is resolved without a working directory. These
+ * are facts about this client, so a line never claims that a repository was
+ * recording.
  */
 
 const fs = require("fs");
@@ -110,7 +111,9 @@ function signinNoticeShownHere(key, since) {
 
 /**
  * The line for this session after a watched file changed, or "". The state
- * is stored after every resolution, so a line follows only a change of group.
+ * is stored after every resolution, except one that cannot end a stop or that
+ * passes from a stop through uploads paused: then the stop stays stored. So a
+ * line follows only a change of group.
  */
 function collectionNotice(sessionId) {
   const key = sessionKey(sessionId);

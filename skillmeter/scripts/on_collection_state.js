@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 /**
  * Announce that this client stopped collecting, or can collect again (ADR
- * 003, decision 2), when the session or its status record changes; both are
- * watched by SessionStart. One systemMessage plus an OSC 777 desktop
- * notification, and nothing when the state's group did not change.
+ * 003, decision 2), when the session, its status record or the telemetry
+ * policy changes; SessionStart watches all three. One systemMessage plus an
+ * OSC 777 desktop notification, and nothing when the state's group did not
+ * change.
  */
 
 const { readStdinJson } = require("./lib/io");
