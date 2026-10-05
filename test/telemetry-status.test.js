@@ -20,24 +20,28 @@ const reasonLine = (card) => (card.match(/Reason {8}(.+?) +│/) || [])[1];
 const sentence = (text) => text.charAt(0).toUpperCase() + text.slice(1);
 
 const CASES = [
-  { state: "never_signed_in", reason: "not signed in", next: SIGN_IN,
+  { state: "never_signed_in", reason: "not signed in", next: SIGN_IN, effective: "disabled · not signed in",
     shown: (f, reason) => assert.equal(reasonLine(f.sessionStart()), reason) },
-  { state: "signed_out", setup: `${signedIn} signOut();`, reason: "signed out", next: SIGN_IN,
+  { state: "signed_out", setup: `${signedIn} signOut();`, reason: "signed out", next: SIGN_IN, effective: "disabled · not signed in",
     shown: (f, reason) => assert.equal(reasonLine(f.sessionStart()), reason) },
   { state: "token_missing", setup: `${signedIn} loseLicense();`, reason: "license token missing", next: SIGN_IN,
+    effective: "disabled · not signed in",
     shown: (f, reason) => assert.equal(reasonLine(f.sessionStart()), reason) },
   { state: "revoked", setup: `${signedIn} revoke();`, reason: "organization license inactive",
-    next: `${SIGN_IN} · contact your administrator`,
+    next: `${SIGN_IN} · contact your administrator`, effective: "disabled · not signed in",
     shown: (f, reason) => assert.equal(reasonLine(f.sessionStart()), reason) },
   { state: "delivery_paused", setup: `${signedIn} endSession();`, reason: "sign-in expired", next: SIGN_IN,
+    effective: "enabled · telemetry enabled for this repository",
     shown: (f, reason) => assert.ok(f.sessionStart().includes(`${sentence(reason)}. Uploads are paused`)) },
   { state: "paused", policy: { enabled: false, orgs: { [ORG]: true }, repositories: { [REPO_KEY]: true } }, setup: signedIn,
-    reason: "paused for every repository", next: "/skillmeter:telemetry enable-global",
+    reason: "paused for every repository", next: "/skillmeter:telemetry enable-global", effective: "disabled · telemetry globally disabled",
     shown: (f, reason) => assert.ok(f.sessionStart().includes(`OFF — ${reason}`)) },
   { state: "unconfigured", policy: { orgs: { [ORG]: true } }, setup: signedIn,
     reason: "repository telemetry choice required", next: "/skillmeter:telemetry list",
+    effective: "disabled · repository telemetry choice required",
     shown: (f, reason) => assert.ok(f.hookStderr().includes(`skipped (${reason})`)) },
-  { state: "recording", setup: signedIn, reason: "telemetry enabled for this repository", next: undefined },
+  { state: "recording", setup: signedIn, reason: "telemetry enabled for this repository", next: undefined,
+    effective: "enabled · telemetry enabled for this repository" },
 ];
 
 for (const c of CASES) {
@@ -53,6 +57,9 @@ for (const c of CASES) {
       assert.ok(label in lines, `${label} line`);
     }
     assert.doesNotMatch(text, /license:|license expired/, "the old licence line and its vocabulary are gone");
+    // The capture gate in the same words as the reason, not its identifier.
+    assert.equal(lines.effective, c.effective);
+    assert.doesNotMatch(lines.effective, /[()]/);
     if (c.shown) c.shown(f, lines.reason);
   });
 }
@@ -64,10 +71,12 @@ test("/skillmeter:telemetry status: unconfigured names the gate's reason in word
   assert.equal(lines.state, "unconfigured");
   assert.equal(lines.reason, "telemetry disabled for this project");
   assert.equal(lines.next, "/skillmeter:telemetry list");
+  assert.equal(lines.effective, "disabled · telemetry disabled for this project");
 
   // Outside any repository there is nothing to choose, so no next command.
   const outside = f.status(f.root);
   assert.equal(outside.lines.state, "unconfigured");
   assert.equal(outside.lines.reason, "repository outside the licensed org");
   assert.equal(outside.lines.next, undefined);
+  assert.equal(outside.lines.effective, "disabled · repository outside the licensed org");
 });

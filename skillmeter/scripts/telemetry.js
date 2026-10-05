@@ -17,7 +17,7 @@ const { getAllowedGitHubOrgs } = credstore;
 const { getRepoScopeDecision } = require("./lib/repo-scope");
 const { resolveTelemetryGate } = require("./lib/telemetry-policy");
 const { readCollectionState } = require("./lib/collection-state");
-const { ADMINISTRATOR, needsAdministrator, nextCommand, reasonText } = require("./lib/collection-wording");
+const { ADMINISTRATOR, gateReason, needsAdministrator, nextCommand, reasonText } = require("./lib/collection-wording");
 
 const cwd = process.cwd();
 const action = process.argv[2];
@@ -77,7 +77,8 @@ function effectiveLine() {
       ? telemetryStore.getRepositoryOverride(repoScopeDecision.repoKey)
       : null,
   });
-  return gate.capture ? `enabled (${gate.mode})` : `disabled (${gate.mode})`;
+  // In the table's words, as the reason above it is.
+  return `${gate.capture ? "enabled" : "disabled"} · ${gateReason(gate.mode)}`;
 }
 
 function printStatus() {
