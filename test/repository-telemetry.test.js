@@ -33,6 +33,12 @@ const REPOSITORY_TELEMETRY_SCRIPT = path.resolve(
 );
 const TELEMETRY_SCRIPT = path.resolve(__dirname, "../skillmeter/scripts/telemetry.js");
 const HOOK_SCRIPT = path.resolve(__dirname, "../skillmeter/scripts/hook.js");
+// The telemetry skill tests at the end of this file read SKILL.md as text.
+// They establish that each rule's sentence is present, that the stop-word list
+// is exactly the one given, and that a few sentences which would contradict a
+// rule are absent. They cannot establish that the rules agree with each other
+// beyond those checks, that a rule nobody pinned is still there, or anything
+// about what a model does with the text: the driven runs are for that.
 const TELEMETRY_SKILL = fs.readFileSync(
   path.resolve(__dirname, "../skillmeter/skills/telemetry/SKILL.md"),
   "utf8"
@@ -693,6 +699,7 @@ test("a toggle that goes stale partway keeps the ids it already applied", () => 
 test("telemetry skill routes list through the repository toggle UI", () => {
   assert.match(TELEMETRY_SKILL, /allowed-tools: AskUserQuestion Bash\(node \*\)/);
   assert.match(TELEMETRY_SKILL, /argument-hint: <list>/);
+  assert.match(TELEMETRY_SKILL, /^disable-model-invocation: true$/m);
   assert.doesNotMatch(TELEMETRY_SKILL, /argument-hint:.*enable/);
   assert.match(TELEMETRY_SKILL, /`\$ARGUMENTS` is empty or exactly `list`/);
   assert.match(
@@ -708,6 +715,12 @@ test("telemetry skill asks one single-select question for the coarse choice", ()
   // The counts tell the user what "all" covers before they choose it.
   assert.match(TELEMETRY_SKILL, /`Enable all \(N off\)`, if N > 0/);
   assert.match(TELEMETRY_SKILL, /`Disable all \(M on\)`, if M > 0/);
+  // "All" is what `toggle` can change: counted by `action`, which leaves the
+  // blocked ones out, never by `effective`, which counts them in.
+  assert.match(TELEMETRY_SKILL, /N counts repositories whose `action` is\s+`"enable"`/);
+  assert.match(TELEMETRY_SKILL, /M counts repositories whose `action` is\s+`"disable"`/);
+  assert.doesNotMatch(TELEMETRY_SKILL, /counts repositories whose `effective`/);
+  assert.match(TELEMETRY_SKILL, /Print no list for either\./);
   assert.match(TELEMETRY_SKILL, /`Pick individually`, always/);
   assert.match(
     TELEMETRY_SKILL,
@@ -785,6 +798,13 @@ test("telemetry skill resolves a reply only against the list it printed", () => 
     TELEMETRY_SKILL,
     /Never match a path, an `id`, an `optionLabel`, a `description`, or anything/
   );
+  // An id is never a name: the only hexadecimal ids are the ones `toggle` gets.
+  assert.equal(TELEMETRY_SKILL.match(/hexadecimal/g).length, 1);
+  assert.doesNotMatch(TELEMETRY_SKILL, /`id`[^.\n]*\baccept|\baccept[^.\n]*`id`/i);
+  assert.match(
+    TELEMETRY_SKILL,
+    /A message that is plainly a different\s+request is not a reply: change nothing and handle it as that request\./
+  );
   assert.match(TELEMETRY_SKILL, /the list did not print, and never guess\./);
   // One unresolved token holds back the whole reply, so a typo never leaves
   // the rest half-applied and the next answer restates the selection.
@@ -792,6 +812,15 @@ test("telemetry skill resolves a reply only against the list it printed", () => 
     TELEMETRY_SKILL,
     /If any token is not a repository or is ambiguous, change nothing at all/
   );
+  // No sentence may let part of a reply through when another part fails.
+  for (const partial of [
+    /apply the (others|rest)\b/i,
+    /apply (only )?the tokens that/i,
+    /\banyway\b/i,
+    /ask about (that|those) (one|ones|tokens?) alone/i,
+  ]) {
+    assert.doesNotMatch(TELEMETRY_SKILL, partial);
+  }
   assert.match(TELEMETRY_SKILL, /ask for the whole selection again by\s+number or name/);
   // `toggle` applies each repository's own action, so a direction the user
   // types is not followed; the quote-back says so instead of obeying it.
@@ -820,6 +849,9 @@ test("telemetry skill applies a run in one toggle and asks again after a stale o
   assert.doesNotMatch(TELEMETRY_SKILL, /`revision` returned by the previous\s+`toggle`/);
   assert.match(TELEMETRY_SKILL, /`stale: true`\s+\(nothing was written\)/);
   assert.match(TELEMETRY_SKILL, /an entry carries `reason: "stale_policy"`/);
+  // A stale_policy result is partial: some of it was written.
+  assert.match(TELEMETRY_SKILL, /`reason: "stale_policy"` \(the IDs\s+before it were applied/);
+  assert.match(TELEMETRY_SKILL, /from each entry's own `changed` and\s+`reason`/);
   assert.match(
     TELEMETRY_SKILL,
     /never retry the selection on your own, re-run `list`, print the list\s+once/
