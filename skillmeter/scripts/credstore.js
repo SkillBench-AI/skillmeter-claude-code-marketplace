@@ -370,8 +370,9 @@ function hasValidLicense() {
   return !!t && !isLicenseTokenExpired(t);
 }
 
-// Sign-out blocks background refresh and in-flight sign-in commits.
-// Read from disk so other processes observe it. Explicit sign-in clears it.
+// The user's recorded sign-out. It blocks background refresh; the generation,
+// not this flag, blocks a stale sign-in commit. Read from disk so other
+// processes observe it. Only a completed sign-in clears it.
 function getSignedOut() {
   return readSession().signed_out === true;
 }
