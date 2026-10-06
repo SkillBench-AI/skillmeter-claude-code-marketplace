@@ -30,6 +30,8 @@ const SETUP = `
   const revoke = () => cs.dropRevokedLicense(cs.recoverySnapshot(),
     () => ls.recordTerminal({ source: "drain", reason: "revoked", status: 402 }));
   const startSigninAndAbandon = () => { cs.markEngaged(); ls.clearLicenseStatus({ source: "signin" }); };
+  // The license gone without a sign-out: a corrupt or deleted session file.
+  const loseLicense = () => require("fs").writeFileSync(cs.SESSION_FILE, JSON.stringify({ auth_generation: "lost" }));
 `;
 
 function client({ policy = { orgs: { [ORG]: true }, repositories: { [REPO_KEY]: true } }, setup = "", owner = ORG, cwdMissing = false }) {
@@ -100,6 +102,8 @@ const CASES = [
   { name: "signed out, then a sign-in started and abandoned",
     setup: `signIn(${JSON.stringify(license())}); cs.signOut(); startSigninAndAbandon();`,
     expect: ["signed_out", "ACTION REQUIRED", /Reason {8}signed out/], unlike: /administrator/, records: false },
+  { name: "license lost without a sign-out", setup: `signIn(${JSON.stringify(license())}); loseLicense();`,
+    expect: ["token_missing", "ACTION REQUIRED", /Reason {8}license token missing/], unlike: /administrator/, records: false },
   { name: "revoked", setup: `signIn(${JSON.stringify(license())}); revoke();`,
     expect: ["revoked", "ACTION REQUIRED", /Reason {8}organization license inactive[\s\S]*Telemetry remains OFF\. Contact your administrator\./],
     unlike: /until you choose/, records: false },
