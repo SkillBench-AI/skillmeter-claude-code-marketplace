@@ -161,7 +161,9 @@ async function main({ restart = false } = {}) {
 
   // A session the broker or the server ended can leave a license that is
   // still valid for up to one lifetime; that license is not a sign-in to keep.
-  const sessionEnded = isSessionEnded();
+  // A sign-out keeps the ended session's reason but no license, so it is not
+  // an ended session.
+  const sessionEnded = Boolean(credstore.getLicenseToken()) && isSessionEnded();
 
   // Explicit sign-in starts a new intent. A sign-out stays recorded until the
   // sign-in commits.

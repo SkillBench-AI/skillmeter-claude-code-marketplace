@@ -265,6 +265,16 @@ test("after a sign-out, /skillmeter:signin does not report the ended session", (
   assert.doesNotMatch(context, /session ended/);
 });
 
+test("after a sign-out, bin/signin does not say the session ended either", () => {
+  const f = fixture();
+  f.status(END_SESSION + `require(${JSON.stringify(CREDSTORE)}).signOut();`);
+  const result = f.signin();
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stderr, /session ended/);
+  assert.ok(f.session().license_jwt, "it signs in");
+  assert.equal(f.session().signed_out, undefined, "and the sign-in ends the sign-out");
+});
+
 // Capture keys on a stored license (ADR 001, decision 3), and an ended session
 // keeps its license. The card may say telemetry is off only where hooks record
 // nothing.
