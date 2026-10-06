@@ -47,7 +47,7 @@ const IN_PROGRESS =
   `Only if the browser page was closed, the code expired, or the user already ` +
   `approved and keeps getting this message, they can start over by pasting ` +
   `this into their NEXT prompt. It cancels the sign-in in progress:\n\n` +
-  `    ! ${SIGNIN_COMMAND}`;
+  `    ! ${SIGNIN_COMMAND} --restart`;
 
 // This hook has no TTY guard and defaults empty input to {} (its isSigninCommand
 // check tolerates an empty object).

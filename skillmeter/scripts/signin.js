@@ -38,6 +38,9 @@ for (const stream of [process.stdout, process.stderr]) {
 const BACKGROUND_LOG = path.join(STATE_DIR, "activate-poll.log");
 // Used when the broker does not say how long its device code lives.
 const DEFAULT_DEVICE_CODE_LIFETIME_S = 15 * 60;
+// Starts over although a sign-in is waiting for approval, which cancels it.
+const RESTART_FLAG = "--restart";
+const SIGNIN_COMMAND = path.join(__dirname, "..", "bin", "signin");
 
 function log(msg) {
   process.stderr.write(msg + "\n");
@@ -145,7 +148,17 @@ function spawnBackgroundPoll(deviceId, deviceCode, interval, generation) {
   fs.closeSync(logFd);
 }
 
-async function main() {
+async function main({ restart = false } = {}) {
+  // A sign-in is waiting for approval in the browser, and a new intent would
+  // cancel it. A plain re-run, from shell history or a repeated command,
+  // reports it instead; --restart starts over on purpose.
+  if (!restart && credstore.isSigninPending()) {
+    say("SkillMeter sign-in in progress: a sign-in code is waiting for approval in the browser.");
+    say("Approve it there, then run /skillmeter:signin to confirm.");
+    say(`To cancel it and start over: ${SIGNIN_COMMAND} ${RESTART_FLAG}`);
+    return;
+  }
+
   // A session the broker or the server ended can leave a license that is
   // still valid for up to one lifetime; that license is not a sign-in to keep.
   const sessionEnded = isSessionEnded();
@@ -252,7 +265,7 @@ if (process.argv[2] === "--background-poll") {
     process.exitCode = 1;
   });
 } else {
-  main().catch((err) => {
+  main({ restart: process.argv.includes(RESTART_FLAG) }).catch((err) => {
     say(`Activation failed: ${err.message}`);
     process.exit(1);
   });

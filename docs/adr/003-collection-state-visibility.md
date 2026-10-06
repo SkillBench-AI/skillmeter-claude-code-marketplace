@@ -392,11 +392,13 @@ recording on the stored license.
 Decision 3 is retired, but its `pending` sign-in result exists for another
 reader. While a sign-in waits for browser approval, `/skillmeter:signin`
 reports it in progress instead of starting a new intent, which would discard
-the approval. The result carries `expires_at`, the device code's lifetime
-capped at 30 minutes, and belongs to the sign-in that wrote it: its success or
+the approval, and so does `bin/signin` run again, unless it is run with
+`--restart`. The result carries `expires_at`, the device code's lifetime capped
+at 30 minutes, and belongs to the sign-in that wrote it: its success or
 failure, a sign-out, a newer sign-in, a revocation or the expiry ends it. No
 "discarded" result is written. A poller that stops without a result is not
-detected, so the in-progress status offers starting over. A sign-out stays
-recorded while a sign-in waits: `signed_out` holds until a sign-in commits, and
-the sign-in's generation alone stops a stale commit, since a sign-out or a
-newer sign-in changes it. This closes the open item on the sentinel.
+detected, so the in-progress status offers starting over, with `bin/signin
+--restart`. A sign-out stays recorded while a sign-in waits: `signed_out` holds
+until a sign-in commits, and the sign-in's generation alone stops a stale
+commit, since a sign-out or a newer sign-in changes it. This closes the open
+item on the sentinel.

@@ -39,7 +39,9 @@ function fixture() {
   const preloadFor = ({ tty, activateStatus = 200, overtakenAt = "", expiresIn = 600 }, name) => {
     const preload = path.join(root, name);
     const other = overtakenAt ? preloadFor({ tty: false }, "preload-other.cjs") : "";
-    const overtake = `cpReal.spawnSync(process.execPath, ["-r", ${JSON.stringify(other)}, ${JSON.stringify(path.join(SCRIPTS, "signin.js"))}], { env: process.env });`;
+    // Another terminal starts over on purpose: a plain re-run would only
+    // report the sign-in in progress.
+    const overtake = `cpReal.spawnSync(process.execPath, ["-r", ${JSON.stringify(other)}, ${JSON.stringify(path.join(SCRIPTS, "signin.js"))}, "--restart"], { env: process.env });`;
     writeFile(preload, `
       const fs = require("fs");
       Object.defineProperty(process.stdout, "isTTY", { value: ${tty} });
@@ -82,7 +84,9 @@ function fixture() {
   };
 
   // The browser step is done: run the poll signin.js would have spawned.
-  const pollInBackground = () => signin({ tty: false, args: readJson(spawned).slice(1) });
+  const spawnedArgs = () => readJson(spawned).slice(1);
+  const poll = (args) => signin({ tty: false, args });
+  const pollInBackground = () => poll(spawnedArgs());
 
   // The slash command's expansion hook; returns the context it hands Claude.
   const slashCommand = () => {
@@ -102,6 +106,8 @@ function fixture() {
   return {
     signin,
     signout,
+    spawnedArgs,
+    poll,
     pollInBackground,
     slashCommand,
     sentinel: () => read("signin-result.json"),
@@ -146,7 +152,7 @@ test("/skillmeter:signin while a first sign-in waits for approval reports it in 
 
   const context = f.slashCommand();
   assert.match(context, /sign-in in progress/);
-  assert.match(context, /! .*bin\/signin/, "with a way to start over");
+  assert.match(context, /! .*bin\/signin --restart/, "with a way to start over");
   assert.match(context, /cancels the sign-in in progress/, "that says what starting over costs");
   assert.doesNotMatch(context, /Sign-in is required/);
   assert.equal(f.session().auth_generation, intent, "no new intent");
@@ -158,6 +164,41 @@ test("/skillmeter:signin while a first sign-in waits for approval reports it in 
   assert.ok(f.session().license_jwt, "the approved sign-in is kept");
   assert.equal(f.sentinel().status, "success");
   assert.match(f.slashCommand(), /sign-in state JSON/);
+});
+
+// Running bin/signin again, from shell history or because a command was
+// repeated, must not cancel the approval waiting in the browser.
+test("bin/signin run again while a sign-in waits for approval reports it and keeps it", () => {
+  const f = fixture();
+  assert.equal(f.signin({ tty: false }).status, 0);
+  const intent = f.session().auth_generation;
+  const pending = f.sentinel();
+  const again = f.signin({ tty: false });
+  assert.equal(again.status, 0, again.stderr);
+  assert.match(again.stdout, /sign-in in progress/);
+  assert.match(again.stdout, /bin\/signin --restart/);
+  assert.equal(f.session().auth_generation, intent, "no new intent");
+  assert.deepEqual(f.sentinel(), pending, "the pending result is untouched");
+  assert.equal(f.deviceFlows(), 1);
+  const poll = f.pollInBackground();
+  assert.equal(poll.status, 0, poll.stderr);
+  assert.equal(f.sentinel().status, "success", "the approval still lands");
+});
+
+test("bin/signin --restart starts over and ends the sign-in that was waiting", () => {
+  const f = fixture();
+  assert.equal(f.signin({ tty: false }).status, 0);
+  const first = { intent: f.session().auth_generation, pending: f.sentinel(), poll: f.spawnedArgs() };
+  const restarted = f.signin({ tty: false, args: ["--restart"] });
+  assert.equal(restarted.status, 0, restarted.stderr);
+  assert.equal(f.deviceFlows(), 2);
+  assert.notEqual(f.session().auth_generation, first.intent, "a new intent");
+  assert.equal(f.sentinel().status, "pending");
+  assert.notEqual(f.sentinel().intent, first.pending.intent, "the earlier pending result is ended");
+  const late = f.poll(first.poll);
+  assert.equal(late.status, 0, late.stderr);
+  assert.match(late.stderr, /discarded/, "the earlier approval can no longer commit");
+  assert.equal(f.session().license_jwt, undefined);
 });
 
 test("a sign-in that is started and then signed out is not reported in progress", () => {
