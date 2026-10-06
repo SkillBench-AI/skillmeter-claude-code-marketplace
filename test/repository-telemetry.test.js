@@ -699,36 +699,121 @@ test("telemetry skill routes list through the repository toggle UI", () => {
     TELEMETRY_SKILL,
     /repository_telemetry\.js list/
   );
-  assert.match(TELEMETRY_SKILL, /multiSelect: true/);
   assert.match(TELEMETRY_SKILL, /```!\s+node .*repository_telemetry\.js list/);
-  assert.match(TELEMETRY_SKILL, /Show exactly one question per `AskUserQuestion` call/);
-  assert.match(TELEMETRY_SKILL, /Header: `Repos X\/N`/);
-  assert.doesNotMatch(TELEMETRY_SKILL, /at most four questions per tool call/);
+});
+
+test("telemetry skill asks one single-select question for the coarse choice", () => {
+  assert.match(TELEMETRY_SKILL, /Otherwise call it once, with one\s+single-select question/);
+  assert.match(TELEMETRY_SKILL, /\(`multiSelect: false`\), header `Telemetry`/);
+  // The counts tell the user what "all" covers before they choose it.
+  assert.match(TELEMETRY_SKILL, /`Enable all \(N off\)`, if N > 0/);
+  assert.match(TELEMETRY_SKILL, /`Disable all \(M on\)`, if M > 0/);
+  assert.match(TELEMETRY_SKILL, /`Pick individually`, always/);
+  assert.match(
+    TELEMETRY_SKILL,
+    /`action` is `"enable"`,\s+and no other, in one `toggle`/
+  );
+  // Claude Code adds `Other` to every question. Next to the coarse choice it
+  // looks like a search box, so whatever is typed there changes nothing.
+  assert.match(
+    TELEMETRY_SKILL,
+    /neither a repository name nor an instruction, and changes\s+nothing\. Quote it back/
+  );
+  assert.match(
+    TELEMETRY_SKILL,
+    /`The user did not answer the questions\.`: change nothing, run no command/
+  );
+  assert.match(
+    TELEMETRY_SKILL,
+    /stop\. Change nothing, run no\s+command, and ask nothing further/
+  );
+});
+
+test("telemetry skill prints the repositories as one grouped, numbered list", () => {
+  assert.match(
+    TELEMETRY_SKILL,
+    /Print it as plain text in your reply, never through `AskUserQuestion`/
+  );
+  assert.match(
+    TELEMETRY_SKILL,
+    /off \(`action` `"enable"`\) first, then on \(`action` `"disable"`\)/
+  );
+  assert.match(TELEMETRY_SKILL, /numbered 1, 2, 3, … continuously across both groups/);
+  assert.match(
+    TELEMETRY_SKILL,
+    /come last, unnumbered, each with its `description`/
+  );
+  assert.match(
+    TELEMETRY_SKILL,
+    /End your turn there,\s+and run no command until the reply arrives/
+  );
+  // The sign-in inventory's markers, so the two lists read alike.
+  const banner = fs.readFileSync(
+    path.resolve(__dirname, "../skillmeter/scripts/lib/banner.js"),
+    "utf8"
+  );
+  assert.match(banner, /"✓ ON " : "○ OFF"/);
+  assert.match(TELEMETRY_SKILL, /`○ OFF` or `✓ ON`, then the `displayName`/);
+});
+
+test("telemetry skill resolves a reply only against the list it printed", () => {
+  assert.match(
+    TELEMETRY_SKILL,
+    /A token of digits only is a line number\. No such line: not a repository\./
+  );
+  assert.match(
+    TELEMETRY_SKILL,
+    /every numbered line whose `displayName` contains it,\s+ignoring case/
+  );
+  assert.match(TELEMETRY_SKILL, /One line: that repository\. None: not a repository/);
+  assert.match(TELEMETRY_SKILL, /Several: ambiguous\./);
+  assert.match(
+    TELEMETRY_SKILL,
+    /Never match a path, an `id`, an `optionLabel`, a `description`, or anything/
+  );
+  assert.match(TELEMETRY_SKILL, /the list did not print, and never guess\./);
+  // One unresolved token holds back the whole reply, so a typo never leaves
+  // the rest half-applied and the next answer restates the selection.
+  assert.match(
+    TELEMETRY_SKILL,
+    /If any token is not a repository or is ambiguous, change nothing at all/
+  );
+  assert.match(TELEMETRY_SKILL, /ask for the whole selection again/);
+});
+
+test("telemetry skill applies a run in one toggle and asks again after a stale one", () => {
   assert.match(
     TELEMETRY_SKILL,
     /repository_telemetry\.js toggle REVISION ID\.\.\./
   );
   assert.match(
     TELEMETRY_SKILL,
-    /`revision` returned by the previous\s+`toggle`/
+    /Run it once per run, with the `revision` from the `list` result/
   );
-
-  // The page-turn option is how a page is meant to be left unchanged — an empty
-  // submit does the same, but only as a fallback — so its exact label is
-  // load-bearing, and it is the one option that must never resolve to an ID.
-  assert.match(TELEMETRY_SKILL, /`\u2192 Done with this page`/);
-  // Its description sits on screen right under the label, and it is the half
-  // that used to promise a next page on pages that had none. Pin it too.
+  assert.match(TELEMETRY_SKILL, /hexadecimal ID together/);
+  assert.doesNotMatch(TELEMETRY_SKILL, /`revision` returned by the previous\s+`toggle`/);
+  assert.match(TELEMETRY_SKILL, /`stale: true`\s+\(nothing was written\)/);
+  assert.match(TELEMETRY_SKILL, /an entry carries `reason: "stale_policy"`/);
   assert.match(
     TELEMETRY_SKILL,
-    /`Finish this page\.\s+Anything you selected above is still applied\.`/
+    /never retry the selection on your own, re-run `list`, print the list\s+once/
   );
-  assert.match(TELEMETRY_SKILL, /never maps to an ID/);
+});
 
-  // An empty submit is still reachable, and this sentence is the only thing
-  // that tells the model the result is an answer rather than a cancellation.
-  assert.match(
-    TELEMETRY_SKILL,
-    /`The user did not answer the questions\.` \u2014 read that sentence as an answer,/
-  );
+test("telemetry skill no longer pages through repositories", () => {
+  for (const paging of [
+    /Done with this page/,
+    /Repos X\/N/,
+    /Page X\/N/,
+    /Reviewed X\/N/,
+    /multiSelect: true/,
+    /paginat/i,
+    /per\s+page/,
+    /never maps to an ID/,
+    /Show exactly one question per/,
+    /read that sentence as an answer/,
+    /at most four questions per tool call/,
+  ]) {
+    assert.doesNotMatch(TELEMETRY_SKILL, paging);
+  }
 });
