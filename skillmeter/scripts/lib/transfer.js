@@ -32,7 +32,15 @@ const {
   quarantinePathFor,
   recordUploadFailure,
 } = require("./chunk-retry");
-const { parseJsonl, lastContentUuid, buildChunkPlan } = require("./transcript-delta");
+const {
+  parseJsonl,
+  lastContentUuid,
+  turnNumbers,
+  turnDestinations,
+  buildChunkPlan,
+} = require("./transcript-delta");
+const { getRepoScopeDecision } = require("./repo-scope");
+const { hashHmac } = require("./sanitize");
 const {
   PLUGIN_ROOT,
   LOG_DIR,
@@ -894,9 +902,11 @@ async function drainDeltaChunks(timeoutMs) {
 
 /**
  * Stage a transcript delta: seal the lines added since the cursor's uuid as
- * durable chunks, then advance the cursor. The cursor advances only after every
- * chunk seals, so a partial failure re-sends the full delta next Stop (chunks
- * are idempotent by uuid). Returns { chunks: <#sealed> }.
+ * durable chunks, then advance the cursor. Only the turns that belong to this
+ * repository are sealed (turnDestinations); the cursor moves past the rest.
+ * The cursor advances only after every chunk seals, so a partial failure
+ * re-sends the full delta next Stop (chunks are idempotent by uuid). Returns
+ * { chunks: <#sealed> }.
  */
 function stageTranscriptDelta(transcriptPath, promptId, deviceId, repository) {
   if (!repository?.repoKey) return { chunks: 0 };
@@ -917,24 +927,55 @@ function stageTranscriptDelta(transcriptPath, promptId, deviceId, repository) {
     return { chunks: 0 };
   }
 
-  const cursor = readCursor(transcriptId, repository);
   const { objs } = parseJsonl(raw);
-  const hashSalt = credstore.getOrCreateHashSalt();
+  const places = transcriptPlaces();
+  const destinations = turnDestinations(objs, places.of, unrecordedTurns(transcriptId));
+  let chunks = stageRepositoryTurns(objs, destinations, transcriptId, promptId, repository);
+  // A turn's own Stop may not stage it: the turn ended outside any repository,
+  // or its last lines were written after that Stop read the transcript. Every
+  // other repository already recording this transcript takes its turns here.
+  // One no longer recording is closed like any period that is not recorded.
+  for (const place of places.repositories()) {
+    const other = place.repository;
+    if (other.repoKey === repository.repoKey) continue;
+    const cursor = readCursor(transcriptId, other);
+    if (!cursor || cursor.discarded) continue;
+    if (place.recording) {
+      chunks += stageRepositoryTurns(objs, destinations, transcriptId, promptId, other);
+    } else {
+      advanceCursorToTranscriptTail(transcriptPath, other);
+    }
+  }
+  return { chunks };
+}
 
+// Stage, for one repository, the turns after its cursor that belong to it.
+function stageRepositoryTurns(objs, destinations, transcriptId, promptId, repository) {
+  const cursor = readCursor(transcriptId, repository);
   const delta = liveDeltaStart(objs, cursor, transcriptId, repository);
   if (delta.hold) {
     // Where an unrecorded period ended is unknown, so it ends here: nothing
     // before this point is sent.
-    advanceCursorToTranscriptTail(transcriptPath, repository);
-    return { chunks: 0 };
+    const lastUuid = lastContentUuid(objs);
+    if (lastUuid) {
+      writeCursor({
+        transcriptId,
+        lastUuid,
+        seq: (cursor && cursor.seq) || 0,
+        updatedAt: Date.now(),
+        discarded: true,
+      }, repository);
+    }
+    return 0;
   }
-
-  const plan = buildChunkPlan(objs, delta.start, hashSalt, {
+  const plan = buildChunkPlan(objs, delta.start, credstore.getOrCreateHashSalt(), {
     seqStart: (cursor && cursor.seq) || 0,
     maxUncompressedBytes: getTranscriptChunkMaxBytes(),
+    keep: (index) =>
+      destinations[index] === undefined || destinations[index] === repository.repoKey,
   });
 
-  if (!plan.newCursor) return { chunks: 0 }; // empty delta — cursor untouched
+  if (!plan.newCursor) return 0; // empty delta — cursor untouched
 
   let sealed = 0;
   for (const chunk of plan.chunks) {
@@ -957,7 +998,43 @@ function stageTranscriptDelta(transcriptPath, promptId, deviceId, repository) {
       updatedAt: Date.now(),
     }, repository);
   }
-  return { chunks: sealed };
+  return sealed;
+}
+
+// Working directories as transcript staging sees them, each resolved once:
+// the repository and whether it records, null outside any repository, or
+// undefined for a directory that no longer exists.
+function transcriptPlaces() {
+  const cache = new Map();
+  const of = (cwd) => {
+    if (!cache.has(cwd)) cache.set(cwd, transcriptPlace(cwd));
+    return cache.get(cwd);
+  };
+  // Each licensed repository the transcript was written in, once.
+  const repositories = () => [...new Map([...cache.values()]
+    .filter((place) => place?.repository)
+    .map((place) => [place.key, place])).values()];
+  return { of, repositories };
+}
+
+function transcriptPlace(cwd) {
+  let decision;
+  try {
+    if (!path.isAbsolute(cwd) || !fs.statSync(cwd).isDirectory()) return undefined;
+    decision = getRepoScopeDecision(cwd);
+  } catch {
+    return undefined;
+  }
+  if (!decision?.repoRoot) return null;
+  // A repository outside the license's organizations, or without a GitHub
+  // identity, is still a repository: it never records.
+  if (!decision.repoKey) return { key: `root:${decision.repoRoot}`, recording: false };
+  return {
+    key: decision.repoKey,
+    repository: { repoKey: decision.repoKey, org: decision.remoteOrg },
+    // The rule every recorded event passes; it includes the capture gate.
+    recording: credstore.isTelemetryTransmissionAllowed(decision.repoKey),
+  };
 }
 
 /**
@@ -1093,6 +1170,36 @@ function initializeTranscriptCursor(input, deviceId, repository) {
   return started;
 }
 
+// A repository first seen recording part-way through a transcript starts with
+// the turn it was seen in: what came before was written before that
+// observation. The hook knows its turn only by its prompt id, and the
+// transcript only when its records carry one.
+function startTranscriptAtTurn(input, repository) {
+  const transcriptPath = input?.transcript_path;
+  if (!transcriptPath || !input.prompt_id || !repository?.repoKey) return false;
+  const transcriptId = path.basename(transcriptPath);
+  if (readCursor(transcriptId, repository)) return false;
+  let objs;
+  try {
+    objs = parseJsonl(fs.readFileSync(transcriptPath, "utf8")).objs;
+  } catch {
+    return false;
+  }
+  if (!objs.some((record) => typeof record?.promptId === "string")) return false;
+  // Not written yet: the whole transcript came before this turn.
+  const first = objs.findIndex((record) => record?.promptId === input.prompt_id);
+  const before = first === -1 ? objs : objs.slice(0, first);
+  // Records before the first prompt open the session; they are no earlier
+  // turn, and a null cursor still starts from them.
+  const earlierTurn = turnNumbers(before).some((turn) => turn > 0);
+  return writeCursor({
+    transcriptId,
+    lastUuid: earlierTurn ? lastContentUuid(before) : null,
+    seq: 0,
+    updatedAt: Date.now(),
+  }, repository);
+}
+
 // Without a license there is no repository queue to hold a cursor, so a hook
 // that runs signed out marks the transcript itself. Live staging, in whichever
 // repository recording begins, starts after the newest record that hook saw. A
@@ -1206,6 +1313,73 @@ function recordPendingBoundary(transcriptPath, repository) {
     console.error(`[skillmeter] Transcript boundary could not be recorded: ${err.message}`);
     return false;
   }
+}
+
+// A hook that runs inside a repository that is not recording marks its turn,
+// by prompt id, with that repository. Staging never sends a marked turn for
+// another repository, even once the marked one records: whether it was
+// recording is decided when the turn was written. The mark holds the prompt id
+// and an HMAC of the repository, never a path or content, and is appended so
+// that hooks running at once cannot lose one. Local only.
+const UNRECORDED_TURN_DIR = path.join(LOG_DIR, "unrecorded-turns");
+
+function unrecordedTurnPath(transcriptId) {
+  return path.join(UNRECORDED_TURN_DIR, `${transcriptId}.ndjson`);
+}
+
+function readUnrecordedTurns(transcriptId) {
+  const marks = new Map();
+  let raw;
+  try {
+    raw = fs.readFileSync(unrecordedTurnPath(transcriptId), "utf8");
+  } catch {
+    return marks;
+  }
+  for (const entry of parseJsonl(raw).objs) {
+    if (typeof entry?.promptId !== "string" || typeof entry.place !== "string") continue;
+    if (!marks.has(entry.promptId)) marks.set(entry.promptId, new Set());
+    marks.get(entry.promptId).add(entry.place);
+  }
+  return marks;
+}
+
+function markUnrecordedTurn(input, repoScopeDecision) {
+  const promptId = input?.prompt_id;
+  const repository = repoScopeDecision?.repoKey ||
+    (repoScopeDecision?.repoRoot ? `root:${repoScopeDecision.repoRoot}` : "");
+  if (!input?.transcript_path || typeof promptId !== "string" || !promptId || !repository) {
+    return false;
+  }
+  const transcriptId = path.basename(input.transcript_path);
+  const place = hashHmac(repository, credstore.getOrCreateHashSalt());
+  if (!place) return false;
+  if (readUnrecordedTurns(transcriptId).get(promptId)?.has(place)) return true;
+  try {
+    fs.mkdirSync(UNRECORDED_TURN_DIR, { recursive: true, mode: 0o700 });
+    // The leading newline ends a line a crash left partial, so this mark is
+    // never joined to it; the reader skips blank and partial lines.
+    fs.appendFileSync(
+      unrecordedTurnPath(transcriptId),
+      "\n" + JSON.stringify({ promptId, place }) + "\n",
+      { mode: 0o600 }
+    );
+    return true;
+  } catch (err) {
+    console.error(`[skillmeter] Unrecorded turn mark failed: ${err.message}`);
+    return false;
+  }
+}
+
+// For turnDestinations: was this turn marked in a repository other than `key`?
+function unrecordedTurns(transcriptId) {
+  const marks = readUnrecordedTurns(transcriptId);
+  const salt = credstore.getOrCreateHashSalt();
+  return (promptId, key) => {
+    const places = marks.get(promptId);
+    if (!places) return false;
+    const own = key ? hashHmac(key, salt) : "";
+    return [...places].some((place) => place !== own);
+  };
 }
 
 // A boundary file as staging sees it: null when absent, { value } when read,
@@ -1584,9 +1758,15 @@ function cleanupStaleFiles() {
     } catch {}
   }
 
+  // Marks and pending boundaries guard what a later staging must skip, which
+  // can be more than 30 days away, so all three follow the same rule. A
+  // transcript no repository holds a cursor for still loses them after 30
+  // days: a repository that records it later starts at the turn it is first
+  // seen in, but one that stages it with no prompt, at session end, does not.
   const cursored = transcriptsWithCursors();
   candidates.push(...uncursoredTranscriptMarks(UNLICENSED_MARK_DIR, ".json", cursored));
   candidates.push(...uncursoredTranscriptMarks(PENDING_BOUNDARY_DIR, ".ndjson", cursored));
+  candidates.push(...uncursoredTranscriptMarks(UNRECORDED_TURN_DIR, ".ndjson", cursored));
 
   if (fs.existsSync(LOG_DIR)) {
     try {
@@ -1640,6 +1820,8 @@ module.exports = {
   stageTranscriptDelta,
   stageTranscriptSnapshot,
   advanceCursorToTranscriptTail,
+  startTranscriptAtTurn,
+  markUnrecordedTurn,
   markUnlicensedTranscript,
   recordPendingBoundary,
   transcriptTailUuid,

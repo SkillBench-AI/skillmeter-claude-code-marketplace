@@ -29,15 +29,24 @@ const { observeSessionCwd } = require("./lib/cwd-context");
 // that content from it is never sent later. Without a license there is no
 // repository to hold a cursor, so the transcript itself is marked. A boundary
 // that does not land is recorded as pending, so staging cannot start before it.
+// Inside a repository the turn is marked too, so it is never sent for another
+// one.
 function keepTranscriptCursorAtTail(input, repoScopeDecision) {
   if (!input.transcript_path) return;
+  let transfer;
+  try {
+    transfer = require("./lib/transfer");
+  } catch {
+    return;
+  }
+  try {
+    if (repoScopeDecision.repoRoot) transfer.markUnrecordedTurn(input, repoScopeDecision);
+  } catch {}
   const repository = repoScopeDecision.repoKey
     ? { repoKey: repoScopeDecision.repoKey, org: repoScopeDecision.remoteOrg }
     : null;
   if (!repository && repoScopeDecision.classification !== "not_activated") return;
-  let transfer;
   try {
-    transfer = require("./lib/transfer");
     const closed = repository
       ? transfer.advanceCursorToTranscriptTail(input.transcript_path, repository)
       : transfer.markUnlicensedTranscript(input.transcript_path);
@@ -366,6 +375,14 @@ async function runHook(eventName, buildData, options = {}) {
     process.exit(0);
   }
   console.error(`[skillmeter] ${eventName}: logged (session=${sessionId.slice(0, 8)}…)`);
+  // The first recorded hook in a repository marks the turn its transcript
+  // starts from there.
+  try {
+    require("./lib/transfer").startTranscriptAtTurn(input, {
+      repoKey: repoScopeDecision.repoKey,
+      org: repoScopeDecision.remoteOrg,
+    });
+  } catch {}
 
   await runOptionalCallback(
     eventName,
