@@ -26,6 +26,29 @@ const { observeSessionCwd } = require("./lib/cwd-context");
 // transport layer in lib/transfer.js handles uploading; this is just the sink.
 // ---------------------------------------------------------------------------
 
+// Move the transcript cursor to the tail of a period that was not recorded, so
+// that content from it is never sent later. Without a license there is no
+// repository to hold a cursor, so the transcript itself is marked. A boundary
+// that does not land is recorded as pending, so staging cannot start before it.
+function keepTranscriptCursorAtTail(input, repoScopeDecision) {
+  if (!input.transcript_path) return;
+  const repository = repoScopeDecision.repoKey
+    ? { repoKey: repoScopeDecision.repoKey, org: repoScopeDecision.remoteOrg }
+    : null;
+  if (!repository && repoScopeDecision.classification !== "not_activated") return;
+  let transfer;
+  try {
+    transfer = require("./lib/transfer");
+    const closed = repository
+      ? transfer.advanceCursorToTranscriptTail(input.transcript_path, repository)
+      : transfer.markUnlicensedTranscript(input.transcript_path);
+    if (closed !== null) return;
+  } catch {}
+  try {
+    transfer.recordPendingBoundary(input.transcript_path, repository);
+  } catch {}
+}
+
 function getTranscriptId(transcriptPath) {
   if (!transcriptPath) return "";
   return path.basename(transcriptPath);
@@ -202,17 +225,9 @@ async function runHook(eventName, buildData, options = {}) {
       });
     }
     // Keep the transcript cursor at the disabled-period tail. If the user
-    // enables this repository later, content written before that explicit
-    // choice must not become an accidental first upload.
-    if (input.transcript_path && repoScopeDecision.repoKey) {
-      try {
-        const { advanceCursorToTranscriptTail } = require("./lib/transfer");
-        advanceCursorToTranscriptTail(input.transcript_path, {
-          repoKey: repoScopeDecision.repoKey,
-          org: repoScopeDecision.remoteOrg,
-        });
-      } catch {}
-    }
+    // enables this repository or signs in later, content written before that
+    // explicit choice must not become an accidental first upload.
+    keepTranscriptCursorAtTail(input, repoScopeDecision);
     await runOptionalCallback(
       eventName,
       "afterSkip",
@@ -319,6 +334,13 @@ async function runHook(eventName, buildData, options = {}) {
   );
   if (!logged) {
     console.error(`[skillmeter] ${eventName}: skipped (policy changed before write)`);
+    // The gate reads only this repository's organization; sending needs every
+    // licensed organization. When sending is refused, this period is not
+    // recorded either, and the same rule applies. A write that failed is not a
+    // refusal and leaves the cursor for the next turn.
+    if (!credstore.isTelemetryTransmissionAllowed(repoScopeDecision.repoKey)) {
+      keepTranscriptCursorAtTail(input, repoScopeDecision);
+    }
     await runOptionalCallback(
       eventName,
       "afterComplete",

@@ -52,9 +52,9 @@ with the event envelope. It does not copy the original prompt, tool payload,
 raw path, repository name or transcript into that audit.
 
 Turning an organization or repository OFF deletes its queued live payloads.
-Privacy cursors track observed disabled transcript intervals so enabling a
-repository later does not upload those intervals. Global OFF pauses capture
-and transmission while retaining queued data.
+Privacy cursors track observed disabled and signed-out transcript intervals so
+enabling a repository or signing in later does not upload those intervals.
+Global OFF pauses capture and transmission while retaining queued data.
 
 ## Historical sessions
 

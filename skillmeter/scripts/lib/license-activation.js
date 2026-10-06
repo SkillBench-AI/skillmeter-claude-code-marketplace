@@ -1,8 +1,8 @@
 /**
  * License renewal and retry orchestration, following ADR 001 and ADR 005.
- * A session with a broker refresh token renews through the refresh token grant
- * and /activate; one without (signed in before ADR 005) through /refresh.
- * Refresh 401/410 requires interactive sign-in; 402 marks the license revoked
+ * A session renews through the broker refresh token grant and /activate. One
+ * without a refresh token (signed in before ADR 005) cannot renew and requires
+ * interactive sign-in, as does a rejected renewal; 402 marks the license revoked
  * and drops the token, so recording stops until a new sign-in.
  * Other failures retain the token and use the shared status record for backoff.
  * SessionStart or explicit sign-in can reset terminal retry state.
@@ -13,8 +13,7 @@ const fs = require("fs");
 const path = require("path");
 const credstore = require("../credstore");
 const { LOG_DIR } = require("./paths");
-const { getActivateUrl, getRefreshUrl } = require("./config");
-const { postBearerJson } = require("./http");
+const { getActivateUrl } = require("./config");
 const { getLicenseOrgs, getLicenseTenantSlug } = require("./jwt");
 const broker = require("./broker");
 const { exchangeIdToken } = require("./license-exchange");
@@ -23,88 +22,16 @@ const licenseStatus = require("./license-status");
 const { TERMINAL_REASONS } = licenseStatus;
 
 /**
- * Rotate an existing license JWT through the Lambda's /refresh endpoint.
- * The server validates the signature, enforces a sliding window against
- * `original_iat`, re-confirms org purchase, and mints a fresh JWT — no
- * GitHub round-trip, so this works for users without `gh` installed.
+ * Renew through the broker (ADR 005): the refresh token grant, then /activate
+ * pinned to the current license's tenant.
  *
  * Returns an outcome object:
  *   { outcome: "rotated",   token }             new token, already stored
- *   { outcome: "rejected",  status }            410 or 401: this token can no
- *                                               longer be rotated; re-activate
+ *   { outcome: "rejected",  status? }           renewal refused; sign in again
  *   { outcome: "revoked",   status: 402 }       org license cancelled
  *   { outcome: "transient", status?, message }  network, 404, 5xx, bad body
- *   { outcome: "superseded" }                  authentication changed
- */
-async function refreshExpiredJwt(jwt, deviceId, expected) {
-  if (!jwt || !deviceId) return { outcome: "transient", message: "missing token or device id" };
-
-  if (expected.deviceId !== deviceId || !credstore.isRecoveryCurrent(expected)) {
-    return { outcome: "superseded" };
-  }
-  const url = getRefreshUrl();
-
-  let res;
-  try {
-    res = await postBearerJson(url, jwt, { device_id: deviceId }, { timeoutMs: 5000 });
-  } catch (err) {
-    console.error(`[skillmeter] license refresh failed: network error (${err.message})`);
-    return { outcome: "transient", message: `network error: ${err.message}` };
-  }
-
-  // 410: sliding window exceeded — client must re-activate via /activate.
-  // 401: token signature invalid (e.g. signing key rotated) — re-activate.
-  // 402: org license cancelled — refresh is permanently blocked for this org.
-  // 404: endpoint not yet deployed on this environment — transient.
-  if (res.status === 410) {
-    console.error("[skillmeter] license refresh: token too old, re-activation required");
-    return { outcome: "rejected", status: 410 };
-  }
-  if (res.status === 401) {
-    console.error("[skillmeter] license refresh: token no longer accepted, re-activation required");
-    return { outcome: "rejected", status: 401 };
-  }
-  if (res.status === 402) {
-    console.error("[skillmeter] license refresh: organization license is no longer active");
-    return { outcome: "revoked", status: 402 };
-  }
-  if (res.status === 404) {
-    // Quiet on 404 so logs don't spam during deploy-order rollout.
-    return { outcome: "transient", status: 404, message: "refresh endpoint not found" };
-  }
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    console.error(`[skillmeter] license refresh failed: HTTP ${res.status} (${body.slice(0, 200)})`);
-    return { outcome: "transient", status: res.status, message: `HTTP ${res.status}` };
-  }
-
-  let payload;
-  try {
-    payload = await res.json();
-  } catch {
-    console.error("[skillmeter] license refresh failed: invalid JSON in response");
-    return { outcome: "transient", status: res.status, message: "invalid JSON in response" };
-  }
-  const newJwt = payload?.token;
-  if (!newJwt) {
-    console.error("[skillmeter] license refresh failed: response missing `token` field");
-    return { outcome: "transient", status: res.status, message: "response missing token" };
-  }
-  // Storing a malformed or already-expired token would replace the working one
-  // and, counted as a rotation, repeat every sweep without backoff.
-  if (typeof newJwt !== "string" || credstore.isLicenseTokenExpired(newJwt)) {
-    console.error("[skillmeter] license refresh failed: response token is malformed or already expired");
-    return { outcome: "transient", status: res.status, message: "unusable token in response" };
-  }
-
-  if (!credstore.commitRefresh(newJwt, expected)) return { outcome: "superseded" };
-  console.error("[skillmeter] license refresh: rotated successfully");
-  return { outcome: "rotated", token: newJwt };
-}
-
-/**
- * Renew through the broker (ADR 005): the refresh token grant, then /activate
- * pinned to the current license's tenant. Same outcomes as refreshExpiredJwt,
+ *   { outcome: "superseded" }                   authentication changed
+ *
  * plus `expected`, the snapshot to settle the outcome against: it changes
  * when the broker rotated the refresh token, which is stored before the
  * exchange so a failure after it cannot strand the session on a spent token.
@@ -259,11 +186,11 @@ async function refreshLicense(deviceId, { source = "unknown", force = false } = 
   if (!current || !deviceId) return null;
   if (credstore.getSignedOut()) return null;
 
-  // A session that holds a refresh token never falls back to /refresh: the
-  // broker ended it, and the old license must not outlive that decision.
+  // Without a refresh token the license cannot be renewed (signed in before
+  // ADR 005), so the user has to sign in again.
   const rotation = expected.refreshToken
     ? await renewViaBroker(current, deviceId, expected)
-    : await refreshExpiredJwt(current, deviceId, expected);
+    : { outcome: "rejected", status: null };
   const settled = rotation.expected || expected;
   if (rotation.outcome === "revoked") {
     const dropped = credstore.dropRevokedLicense(settled, () =>
@@ -297,7 +224,7 @@ async function refreshLicense(deviceId, { source = "unknown", force = false } = 
         return null;
     }
 
-    // Refresh 401/410, or a refresh token the broker no longer accepts, requires
+    // A session without a refresh token, or one the broker no longer accepts, requires
     // a new browser-approved sign-in. Record a terminal state so background
     // callers do not keep retrying.
     licenseStatus.recordTerminal({
