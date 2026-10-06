@@ -27,8 +27,9 @@ const { RESUMED_NOTICE, stoppedNotice } = require("./collection-wording");
 const SESSION_STATE_DIR = path.join(ACCOUNT_DIR, "collection-state");
 // A hook without a usable session id shares one file per client.
 const CLIENT_KEY = "_client";
-// The session that showed the last sign-in notice, written by on_signin_result.
-const SIGNIN_SHOWN_FILE = path.join(ACCOUNT_DIR, ".signin-shown.json");
+// One file per session holding the time of the last sign-in result its
+// notice printed, written by on_signin_result. Aged out like the state files.
+const SIGNIN_NOTICE_DIR = path.join(ACCOUNT_DIR, "signin-notices");
 
 // Claude Code starts the handlers for files written together at the same
 // moment, so the hooks of one session wait for each other.
@@ -91,20 +92,29 @@ function startSessionState(sessionId) {
   withSessionLock(file, () => writeSessionState(file, readCollectionState().state));
 }
 
-/** on_signin_result: this session showed the sign-in notice for result `ts`. */
-function recordSigninNoticeShown(sessionId, ts) {
-  try { atomicWriteJson(SIGNIN_SHOWN_FILE, { ts, session: sessionKey(sessionId) }); } catch {}
+function signinNoticeFile(sessionId) {
+  return path.join(SIGNIN_NOTICE_DIR, `${sessionKey(sessionId)}.json`);
 }
 
-// Whether the sign-in that ended this stop had its notice shown in this
-// session. Only a sign-in completed after the session last resolved counts.
+/** The time of the last sign-in result this session's notice printed, or 0. */
+function lastSigninNoticeShown(sessionId) {
+  const record = safeReadJson(signinNoticeFile(sessionId), null);
+  return typeof record?.ts === "number" ? record.ts : 0;
+}
+
+/** on_signin_result: this session's notice printed the result of time `ts`. */
+function recordSigninNoticeShown(sessionId, ts) {
+  try { atomicWriteJson(signinNoticeFile(sessionId), { ts }); } catch {}
+}
+
+// Whether this session's sign-in notice printed the sign-in that ended this
+// stop. Only a sign-in completed after the session last resolved counts.
 function signinNoticeShownHere(key, since) {
   const result = credstore.readSigninResult();
   if (result?.status !== "success" || !(result.ts > since)) return false;
   const deadline = Date.now() + SIGNIN_NOTICE_WAIT_MS;
   for (;;) {
-    const shown = safeReadJson(SIGNIN_SHOWN_FILE, null);
-    if (shown?.ts === result.ts) return shown.session === key;
+    if (lastSigninNoticeShown(key) >= result.ts) return true;
     if (Date.now() >= deadline) return false;
     sleep(25);
   }
@@ -151,7 +161,9 @@ function collectionNotice(sessionId) {
 
 module.exports = {
   SESSION_STATE_DIR,
+  SIGNIN_NOTICE_DIR,
   sessionKey,
+  lastSigninNoticeShown,
   startSessionState,
   recordSigninNoticeShown,
   collectionNotice,

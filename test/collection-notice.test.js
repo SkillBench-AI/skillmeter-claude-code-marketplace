@@ -226,22 +226,22 @@ test("the client is resolved without a working directory", () => {
 
 // (b) A sign-in already shows its result in one session. There the return
 // line would say the same again; every other session still gets it.
-test("the session that shows the sign-in notice gets no second line", () => {
+test("every session that shows the sign-in notice gets no second line", () => {
   const f = collectionClient();
   f.write(`${signedIn} signOut(); startSignin();`);
   f.sessionStart("s-a");
   f.sessionStart("s-b");
   f.write(signedIn);
-  assert.match(f.signinNotice("s-a").systemMessage, /SIGNED IN|TELEMETRY|REPOSITORY/);
-  assert.equal(f.signinNotice("s-b"), null, "the sign-in notice is shown once");
-  assert.deepEqual(lines(f, "s-a"), []);
-  assert.deepEqual(lines(f, "s-b"), [RESUMED]);
+  for (const id of ["s-a", "s-b"]) {
+    assert.match(f.signinNotice(id).systemMessage, /SIGNED IN|TELEMETRY|REPOSITORY/, id);
+    assert.deepEqual(lines(f, id), [], id);
+  }
 });
 
-test("two sessions handling one sign-in together: one sign-in notice, one return line", async () => {
-  // A race shows in about one round in four without the claim, so twenty
-  // rounds miss it about once in a hundred runs.
-  for (let round = 0; round < 20; round++) {
+// Within a session the sign-in notice and the collection handlers start at
+// the same moment; the collection handler waits for this session's notice.
+test("two sessions handling one sign-in together: each shows the sign-in notice, neither the return line", async () => {
+  for (let round = 0; round < 5; round++) {
     const f = collectionClient();
     f.write(`${signedIn} signOut(); startSignin();`);
     f.sessionStart("s-a");
@@ -252,7 +252,7 @@ test("two sessions handling one sign-in together: one sign-in notice, one return
       f.started("on_collection_state.js", id, "session.json").then((out) => out && "return"),
       f.started("on_collection_state.js", id, "license-status.json").then((out) => out && "return"),
     ]));
-    assert.deepEqual(outs.filter(Boolean).sort(), ["return", "signin"], `round ${round}`);
+    assert.deepEqual(outs.filter(Boolean), ["signin", "signin"], `round ${round}`);
   }
 });
 
@@ -302,39 +302,85 @@ test("token_missing, unconfigured, token_missing: the state stored at each step"
 });
 
 // The hook's timeout can kill the sign-in notice during its walk over the
-// transcripts, after it claimed the result and before it printed anything.
-// Its session must still be told.
+// transcripts, before it printed anything. That session must still be told,
+// and the other sessions are not affected.
 test("a sign-in notice killed before it shows leaves the return line", async () => {
   const f = collectionClient();
   f.write(`${signedIn} signOut(); startSignin();`);
   f.sessionStart("s");
+  f.sessionStart("other");
   f.write(signedIn);
-  // A walk that never finishes.
+  // A walk that never finishes, and says when it has started.
   const stall = path.join(f.root, "stall-walk.cjs");
+  const walking = path.join(f.root, "walking");
   fs.writeFileSync(stall, `
     const Module = require("module");
     const load = Module._load;
     Module._load = function (request) {
       const exported = load.apply(this, arguments);
       if (!/repository-telemetry$/.test(request)) return exported;
-      return { ...exported, loadRepositoryTelemetryState: () => new Promise(() => setInterval(() => {}, 1000)) };
+      return { ...exported, loadRepositoryTelemetryState: () => {
+        require("fs").writeFileSync(${JSON.stringify(walking)}, "");
+        return new Promise(() => setInterval(() => {}, 1000));
+      } };
     };
   `);
-  const marker = path.join(f.account, ".signin-notified");
-  const { ts } = JSON.parse(fs.readFileSync(path.join(f.account, "signin-result.json"), "utf8"));
   const child = spawn(process.execPath, ["-r", stall, path.join(SCRIPTS, "on_signin_result.js")], { cwd: f.repo, env: f.env });
   let stdout = "";
   child.stdout.on("data", (chunk) => (stdout += chunk));
   const exited = new Promise((resolve) => child.on("close", (code, signal) => resolve(signal)));
   child.stdin.end(JSON.stringify({ session_id: "s", hook_event_name: "FileChanged", file_path: path.join(f.account, "signin-result.json"), event: "change" }));
-  const claimed = () => { try { return fs.readFileSync(marker, "utf8") === String(ts); } catch { return false; } };
-  for (const deadline = Date.now() + 5000; !claimed() && Date.now() < deadline;) await new Promise((r) => setTimeout(r, 20));
-  assert.ok(claimed(), "the notice claimed the result");
+  for (const deadline = Date.now() + 5000; !fs.existsSync(walking) && Date.now() < deadline;) await new Promise((r) => setTimeout(r, 20));
+  assert.ok(fs.existsSync(walking), "the notice reached its walk");
   await new Promise((r) => setTimeout(r, 300));
   child.kill("SIGKILL");
   assert.equal(await exited, "SIGKILL");
   assert.equal(stdout, "", "killed before it showed anything");
   assert.deepEqual(lines(f, "s"), [RESUMED]);
+  assert.match(f.signinNotice("other").systemMessage, /SIGNED IN|TELEMETRY|REPOSITORY/);
+  assert.deepEqual(lines(f, "other"), []);
+});
+
+// A first sign-in goes from never signed in to signed in, which is healthy
+// both sides, so no return line follows: the sign-in notice is all a session
+// is told, and every open session is told.
+test("a first sign-in shows its result in every open session", () => {
+  const f = collectionClient();
+  f.sessionStart("s-a");
+  f.sessionStart("s-b");
+  f.write(signedIn);
+  for (const id of ["s-a", "s-b"]) {
+    assert.match(f.signinNotice(id).systemMessage, /SIGNED IN|TELEMETRY|REPOSITORY/, id);
+    assert.deepEqual(lines(f, id), [], id);
+  }
+});
+
+test("a failed sign-in shows in every open session, once", () => {
+  const f = collectionClient();
+  f.sessionStart("s-a");
+  f.sessionStart("s-b");
+  f.write("cs.writeSigninResult({ status: 'failure', error: 'No active SkillMeter license found' });");
+  for (const id of ["s-a", "s-b"]) {
+    assert.match(f.signinNotice(id).systemMessage, /sign-in failed — No active SkillMeter license found/, id);
+    assert.equal(f.signinNotice(id), null, `${id}: once`);
+  }
+});
+
+test("each session shows each sign-in result once, a newer one again, and no pending one", () => {
+  const f = collectionClient();
+  f.sessionStart("s");
+  f.write("cs.writeSigninPending(600000, { generation: cs.markEngaged(), deviceId: cs.getDeviceId() });");
+  assert.equal(f.signinNotice("s"), null, "a pending sign-in is not reported");
+  assert.equal(fs.existsSync(path.join(f.account, "signin-notices")), false, "and remembers nothing");
+  f.write(signedIn);
+  assert.ok(f.signinNotice("s"));
+  assert.equal(f.signinNotice("s"), null, "a second fire shows nothing");
+  f.write(signedIn);
+  assert.ok(f.signinNotice("s"), "a later sign-in shows again");
+  const dir = path.join(f.account, "signin-notices");
+  assert.equal(fs.statSync(dir).mode & 0o777, 0o700);
+  assert.equal(fs.statSync(path.join(dir, "s.json")).mode & 0o777, 0o600);
+  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(path.join(dir, "s.json"), "utf8"))), ["ts"]);
 });
 
 test("with no sign-in notice shown anywhere, the return line still comes", () => {
@@ -436,6 +482,18 @@ test("a session's state file ages out after 30 days", () => {
   assert.equal(fs.existsSync(leftLock), false);
   assert.equal(fs.existsSync(path.join(f.sessionStateDir(), "fresh.json")), true);
   assert.equal(fs.existsSync(freshLock), true, "a lock a hook may still hold stays");
+});
+
+test("a session's sign-in notice memory ages out after 30 days", () => {
+  const f = recordingClient("old", "fresh");
+  f.write(signedIn);
+  for (const id of ["old", "fresh"]) assert.ok(f.signinNotice(id), id);
+  const dir = path.join(f.account, "signin-notices");
+  const when = (Date.now() - 31 * 24 * 60 * 60 * 1000) / 1000;
+  fs.utimesSync(path.join(dir, "old.json"), when, when);
+  f.sessionStart("third");
+  assert.equal(fs.existsSync(path.join(dir, "old.json")), false);
+  assert.equal(fs.existsSync(path.join(dir, "fresh.json")), true);
 });
 
 test("SessionStart watches the session, its status record and the telemetry policy, creating the record if needed", () => {
