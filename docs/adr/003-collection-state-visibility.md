@@ -536,7 +536,10 @@ Three cases decision 2 did not rule on:
   reason, so a hook between the two writes reads `token_missing` and says so.
   The revoked line follows once, with its administrator note. The reason is not
   recorded first, because that write would run outside the generation check
-  that keeps a revocation arriving after a newer sign-in off that sign-in.
+  that keeps a revocation arriving after a newer sign-in off that sign-in. The
+  same rule fires on a second path, with the right result: a stop stored as
+  `token_missing` stays stored through a sign-in whose license names no
+  organization, and a 402 that then arrives shows the revoked line, once.
 - **A sign-out with no license.** `/skillmeter:signout` marks a client signed
   out even if it never signed in. Every open session shows the `signed out`
   line once, as decision 2 accepts for the session that ran the command, and
