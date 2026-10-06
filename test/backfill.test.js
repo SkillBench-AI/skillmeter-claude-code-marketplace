@@ -11,6 +11,7 @@ const {
   readJson,
   runNode,
   setTestEnv,
+  writeCredentials,
   writeFile,
   writeJson,
 } = require("../testing/helpers");
@@ -242,7 +243,7 @@ test("accept queues historical data without changing telemetry policy", async ()
     },
   ]));
 
-  writeJson(path.join(STATE_DIR, "credentials.json"), {
+  writeCredentials(STATE_DIR, {
     device_id: "BACKFILL-E2E-DEVICE",
     hash_salt: "0123456789abcdef0123456789abcdef",
     license_jwt: makeJwt({

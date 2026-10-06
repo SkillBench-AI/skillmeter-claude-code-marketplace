@@ -66,11 +66,10 @@ Hydra: this plugin keeps `skillmeter-plugin`, and Codex gets its own id when
 it moves.
 
 **Migration:** on first read without a `session.json`, the plugin copies
-`license_jwt` and `signed_out` from the shared file once and leaves the shared
-file as it is. That session has no refresh token and renews through
-`/refresh` until the next sign-in. A Codex user who relied on this plugin's
-sign-in keeps renewing the last shared JWT through `/refresh` until its 7-day
-window ends, then signs in to Codex.
+`signed_out` and `auth_generation` from the shared file once and leaves the
+shared file as it is. It does not copy `license_jwt`: a license from before
+this decision has no refresh token and cannot be renewed (decision 6), so the
+user signs in again.
 
 ### 2. The refresh token is the session; the license is a cache
 
@@ -94,7 +93,7 @@ window ends, then signs in to Codex.
 
 | Outcome | Result |
 |---|---|
-| Hydra `invalid_grant`; legacy `/refresh` 401 or 410 | Keep the session; terminal `reactivation_required`. A session with a refresh token never falls back to `/refresh` |
+| Hydra `invalid_grant`, or a session without a refresh token | Keep the session; terminal `reactivation_required` |
 | `/activate` 402, or 404 `workspace_not_found` for the pinned tenant | Drop the session, purge that organization's unsent data (the 402 rule of ADR 001's 2026-09-27 amendment) and revoke the refresh token; terminal `revoked` |
 | `/activate` 401 right after the broker granted | Transient: a server configuration fault, not a verdict on the session |
 | Network error or 5xx | Transient; the existing backoff. Recording continues (ADR 001 decision 3) |
@@ -141,9 +140,13 @@ the control-plane apply.
 
 ### 6. The custom refresh protocol is removed after migration
 
-`/refresh`, `parseExpiredToken`, `original_iat` and the plugin's fallback are
-removed once the server sees no `/refresh` calls for 14 days. The GitHub
-sign-in path goes when the VS Code extension moves to the broker.
+The plugin no longer calls `/refresh` (amended 2026-10-03). A session without
+a refresh token records `reactivation_required`, so the SessionStart banner
+asks for sign-in, and sign-in fails when the broker returns no refresh token.
+The server answers `/refresh` and GitHub sign-in with 410 at an announced
+deadline, once every client renews through the broker. `parseExpiredToken`,
+`original_iat` and the GitHub-only server code are removed after usage stays
+at zero.
 
 ## Consequences
 
@@ -158,8 +161,8 @@ sign-in path goes when the VS Code extension moves to the broker.
   session.
 - Every renewal depends on Hydra and on `/activate`. An outage delays
   transmission, not recording.
-- `/activate` runs once per client per TTL, as `/refresh` does today. A
-  failed `registerDevice` no longer fails the exchange.
+- `/activate` runs once per client per TTL. A failed `registerDevice` no
+  longer fails the exchange.
 
 ## Implementation mapping
 
@@ -171,7 +174,8 @@ sign-in path goes when the VS Code extension moves to the broker.
 | — | plugin | Sign-in runs the device flow when the session ended | Done: #160, 0.40.1 |
 | — | infra | Rotation grace period; roll Hydra after apply | Done: #289, #290 (dev and prod); #291 open |
 | 3 | Codex, VS Code | Own session; VS Code moves to the broker and to atomic writes | Open |
-| 4 | all | Remove `/refresh`, `original_iat`, the fallback and the GitHub path | Open, after step 3 and 14 days without `/refresh` calls |
+| 4a | plugin | Drop the `/refresh` fallback and the license migration; sign-in requires a refresh token | This change |
+| 4b | license, infra, collector | `/refresh` and GitHub sign-in return 410; remove `original_iat` and the GitHub path | Open, at the announced deadline |
 
 ## Verification (2026-09-27)
 
@@ -195,6 +199,6 @@ tenant), which is covered by unit tests only.
 
 - The absolute 90-day lifetime (decision 5).
 - An end-to-end check of removal from a workspace.
-- Steps 3 and 4. Until `/refresh` is removed, a copied license can still be
-  renewed there for up to seven days from its first activation.
+- Steps 3 and 4b. Until the server removes `/refresh`, a copied license can
+  still be renewed there for up to seven days from its first activation.
 - OS keychain storage for the refresh token is deferred.
