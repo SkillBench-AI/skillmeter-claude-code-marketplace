@@ -52,7 +52,7 @@ const BACKOFF_CAP_MS = 30 * 60_000;
 // Terminal reasons. A terminal state means the client has stopped retrying for
 // this session and the user has to act (or a new session has to start).
 const TERMINAL_REASONS = Object.freeze({
-  REVOKED: "revoked", // 402 from /refresh or /activate
+  REVOKED: "revoked", // 402 from /activate
   REACTIVATION_REQUIRED: "reactivation_required", // 410/401: only a new sign-in helps
   // Legacy: no longer written. Transient failures keep retrying at the cap;
   // a record left by an older version is ignored (see refreshBlockedReason).

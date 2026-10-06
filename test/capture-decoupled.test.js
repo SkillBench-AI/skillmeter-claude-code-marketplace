@@ -18,8 +18,8 @@ const {
   makeJwt,
   makeTempDir,
   runNode,
+  writeCredentials,
   writeFile,
-  writeJson,
   writeTelemetryPolicy,
 } = require("../testing/helpers");
 
@@ -48,18 +48,20 @@ function fixture({ credentials = {} } = {}) {
     path.join(repo, ".git", "config"),
     `[remote "origin"]\n\turl = https://github.com/${ORG}/decoupled.git\n`
   );
-  writeJson(path.join(stateDir, "credentials.json"), {
+  writeCredentials(stateDir, {
     device_id: "DECOUPLED-DEVICE",
     hash_salt: "0123456789abcdef0123456789abcdef",
     license_jwt: license(-3600),
+    refresh_token: "ory_rt_fixture",
     ...credentials,
-  });
+  }, { dataDir });
   writeTelemetryPolicy(stateDir, { orgs: { [ORG]: true }, repositories: { [REPO_KEY]: true } });
   const env = isolatedEnv({
     SKILLMETER_STATE_DIR: stateDir,
     CLAUDE_PLUGIN_DATA: dataDir,
     // Nothing may reach a real endpoint.
     SKILLMETER_ACTIVATE_URL: "http://127.0.0.1:9/activate",
+    SKILLMETER_BROKER_URL: "http://127.0.0.1:9",
     SKILLMETER_BACKEND_URL: "http://127.0.0.1:9",
   });
   const prompt = (text = "hello") =>
@@ -123,17 +125,22 @@ test("unsent data older than seven days ages out; newer data stays", () => {
   assert.equal(fs.existsSync(log), true, "today's log is kept");
 });
 
-// Loopback /refresh answering with a fixed status.
-async function refreshServer(status) {
+// Loopback broker that grants every refresh, and /activate answering with a
+// fixed status.
+async function renewalServer(activateStatus) {
   const server = http.createServer((req, res) => {
     req.resume();
     req.on("end", () => {
+      const status = req.url === "/activate" ? activateStatus : 200;
       res.writeHead(status, { "content-type": "application/json" });
-      res.end("{}");
+      res.end(req.url === "/oauth2/token"
+        ? JSON.stringify({ id_token: "id-token", refresh_token: "ory_rt_fixture" })
+        : "{}");
     });
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  return { server, url: `http://127.0.0.1:${server.address().port}/activate` };
+  const base = `http://127.0.0.1:${server.address().port}`;
+  return { server, env: { SKILLMETER_ACTIVATE_URL: `${base}/activate`, SKILLMETER_BROKER_URL: base } };
 }
 
 function runAsync(script, args, { env, cwd, input }) {
@@ -153,12 +160,12 @@ test("a revoked license (402) removes its organization's unsent data and stops r
   assert.match(f.prompt().stderr, /logged/);
   assert.equal(f.queuedEventLogs().length, 1);
 
-  const { server, url } = await refreshServer(402);
+  const { server, env } = await renewalServer(402);
   try {
     const refresh = await runAsync("-e", [
       `require(${JSON.stringify(path.join(SCRIPTS, "lib/license-activation.js"))})` +
         `.refreshLicense(require(${JSON.stringify(path.join(SCRIPTS, "credstore.js"))}).getDeviceId(), { source: "test" })`,
-    ], { env: { ...f.env, SKILLMETER_ACTIVATE_URL: url }, cwd: f.repo });
+    ], { env: { ...f.env, ...env }, cwd: f.repo });
     assert.equal(refresh.status, 0, refresh.stderr);
   } finally {
     server.close();
@@ -173,7 +180,7 @@ test("a revoked license (402) removes its organization's unsent data and stops r
 
 for (const [label, record, expectBanner] of [
   ["waiting out an outage", "recordRefreshFailure({ source: 'test', status: 503, message: 'HTTP 503' })", false],
-  ["refresh chain ended (410)", "recordTerminal({ source: 'test', reason: ls.TERMINAL_REASONS.REACTIVATION_REQUIRED, status: 410 })", true],
+  ["renewal refused", "recordTerminal({ source: 'test', reason: ls.TERMINAL_REASONS.REACTIVATION_REQUIRED, status: 400 })", true],
   ["license revoked (402)", "recordTerminal({ source: 'test', reason: ls.TERMINAL_REASONS.REVOKED, status: 402 })", true],
 ]) {
   test(`SessionStart asks to sign in only when that is what fixes it: ${label}`, () => {

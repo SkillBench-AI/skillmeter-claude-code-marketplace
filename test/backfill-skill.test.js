@@ -10,6 +10,7 @@ const {
   makeTempDir,
   readJson,
   runNode,
+  writeCredentials,
   writeFile,
   writeJson,
 } = require("../testing/helpers");
@@ -51,7 +52,7 @@ function fixture() {
     path.join(targetData, "backfill-state.json"),
     lifecycle(LIFECYCLE_ID)
   );
-  writeJson(path.join(stateDir, "credentials.json"), {
+  writeCredentials(stateDir, {
     device_id: "BACKFILL-SKILL-DEVICE",
     hash_salt: "0123456789abcdef0123456789abcdef",
     license_jwt: makeJwt({
@@ -59,7 +60,7 @@ function fixture() {
       org: { login: "SkillBench-AI" },
       orgs: ["SkillBench-AI"],
     }),
-  });
+  }, { dataDir: targetData });
   return {
     claudeConfigDir,
     stateDir,

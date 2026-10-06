@@ -10,6 +10,7 @@ const {
   makeTempDir,
   readJson,
   setTestEnv,
+  writeCredentials,
   writeFile,
   writeJson,
   writeTelemetryPolicy,
@@ -20,7 +21,7 @@ const DATA_DIR = makeTempDir("skm-policy-data-");
 setTestEnv("SKILLMETER_STATE_DIR", STATE_DIR);
 setTestEnv("CLAUDE_PLUGIN_DATA", DATA_DIR);
 
-writeJson(path.join(STATE_DIR, "credentials.json"), {
+writeCredentials(STATE_DIR, {
   device_id: "POLICY-TEST-DEVICE",
   hash_salt: "0123456789abcdef0123456789abcdef",
   license_jwt: makeJwt({

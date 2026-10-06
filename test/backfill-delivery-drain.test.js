@@ -13,6 +13,7 @@ const {
   makeTempDir,
   readJson,
   setTestEnv,
+  writeCredentials,
   writeFile,
   writeJson,
 } = require("../testing/helpers");
@@ -25,7 +26,7 @@ setTestEnv("CLAUDE_CONFIG_DIR", makeTempDir("skm-backfill-drain-claude-"));
 // Reserved domain; every request is answered by the stub below.
 setTestEnv("SKILLMETER_BACKEND_URL", "https://collector.skillbench.example");
 
-writeJson(path.join(STATE_DIR, "credentials.json"), {
+writeCredentials(STATE_DIR, {
   device_id: "BACKFILL-DRAIN-DEVICE",
   hash_salt: "0123456789abcdef0123456789abcdef",
   license_jwt: makeJwt({

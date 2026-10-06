@@ -14,7 +14,7 @@ const {
   makeJwt,
   makeTempDir,
   setTestEnv,
-  writeJson,
+  writeCredentials,
   writeTelemetryPolicy,
 } = require("../testing/helpers");
 
@@ -23,6 +23,7 @@ const DATA_DIR = makeTempDir("skm-unauth-data-");
 setTestEnv("SKILLMETER_STATE_DIR", STATE_DIR);
 setTestEnv("CLAUDE_PLUGIN_DATA", DATA_DIR);
 setTestEnv("SKILLMETER_ACTIVATE_URL", "https://activation.test/activate");
+setTestEnv("SKILLMETER_BROKER_URL", "https://id.test");
 setTestEnv("SKILLMETER_BACKEND_URL", "https://collector.skillbench.example");
 
 const ORG = "skillbench-ai";
@@ -49,10 +50,11 @@ process.on("exit", () => { global.fetch = realFetch; });
 
 let calls;
 beforeEach(() => {
-  writeJson(path.join(STATE_DIR, "credentials.json"), {
+  writeCredentials(STATE_DIR, {
     device_id: "UNAUTH-DEVICE",
     hash_salt: "0123456789abcdef0123456789abcdef",
     license_jwt: license(),
+    refresh_token: "ory_rt_fixture",
   });
   writeTelemetryPolicy(STATE_DIR, { orgs: { [ORG]: true }, repositories: { [REPO.repoKey]: true } });
   licenseStatus.clearLicenseStatus({ source: "test" });
@@ -61,11 +63,18 @@ beforeEach(() => {
   calls = [];
 });
 
-// Transcript POSTs answer from `uploads`; /refresh mints a new token.
+// Transcript POSTs answer from `uploads`; the broker grant and /activate
+// renew the license.
+const TOKEN_URL = "https://id.test/oauth2/token";
+const renewals = () => calls.filter((u) => u === TOKEN_URL).length;
 function stubFetch(uploads) {
   global.fetch = async (url) => {
     calls.push(String(url));
-    if (String(url).endsWith("/refresh")) {
+    if (String(url) === TOKEN_URL) {
+      const body = JSON.stringify({ id_token: "id-token", refresh_token: "ory_rt_fixture" });
+      return { ok: true, status: 200, json: async () => JSON.parse(body), text: async () => body };
+    }
+    if (String(url) === "https://activation.test/activate") {
       return { ok: true, status: 200, json: async () => ({ token: license() }), text: async () => "" };
     }
     const status = uploads.shift() ?? 500;
@@ -92,7 +101,7 @@ test("a 401 refreshes once and resends the chunk", async () => {
 
   assert.equal(result.ok, 1, "sent on the retry");
   assert.equal(fs.existsSync(body), false);
-  assert.equal(calls.filter((u) => u.endsWith("/refresh")).length, 1, "one refresh");
+  assert.equal(renewals(), 1, "one refresh");
   assert.notEqual(credstore.getLicenseTokenUncached(), before, "the new token is stored");
 });
 
@@ -107,7 +116,7 @@ test("a 401 that persists keeps the chunk without spending its retry budget", as
   assert.equal(fs.existsSync(body), true, "kept for the next drain");
   const meta = JSON.parse(fs.readFileSync(body.replace(/\.jsonl$/, ".meta.json"), "utf8"));
   assert.ok(!meta.uploadAttempts, "no retry budget spent on a rejected token");
-  assert.equal(calls.filter((u) => u.endsWith("/refresh")).length, 1, "still only one refresh");
+  assert.equal(renewals(), 1, "still only one refresh");
 });
 
 test("other failures still spend the retry budget and trigger no refresh", async () => {
@@ -119,5 +128,5 @@ test("other failures still spend the retry budget and trigger no refresh", async
 
   const meta = JSON.parse(fs.readFileSync(body.replace(/\.jsonl$/, ".meta.json"), "utf8"));
   assert.equal(meta.uploadAttempts, 1);
-  assert.equal(calls.filter((u) => u.endsWith("/refresh")).length, 0);
+  assert.equal(renewals(), 0);
 });

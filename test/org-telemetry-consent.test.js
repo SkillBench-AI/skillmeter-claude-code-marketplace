@@ -195,8 +195,7 @@ for (const [name, overrides, expected] of POLICY_CASES) {
 
 test("org consent CLI validates the JWT org and persists the explicit choice", () => {
   const stateDir = makeTempDir("skm-org-consent-");
-  const credentialPath = path.join(stateDir, "credentials.json");
-  writeJson(credentialPath, {
+  writeCredentials(stateDir, {
     license_jwt: licenseJwt(),
   });
 
@@ -238,9 +237,9 @@ test("signin expansion emits an explicit pending-consent state for a new sign-in
     created_at: Date.now(),
     updated_at: Date.now(),
   });
-  writeJson(path.join(stateDir, "credentials.json"), {
+  writeCredentials(stateDir, {
     license_jwt: licenseJwt(),
-  });
+  }, { dataDir });
 
   const script = path.resolve(
     __dirname,
@@ -347,8 +346,7 @@ test("FileChanged sign-in success immediately shows every discovered repository"
 
 test("transmission authorization requires org consent and honors the global kill-switch", () => {
   const stateDir = makeTempDir("skm-org-consent-");
-  const credentialPath = path.join(stateDir, "credentials.json");
-  writeJson(credentialPath, {
+  writeCredentials(stateDir, {
     license_jwt: licenseJwt(),
   });
   const env = isolatedEnv({ SKILLMETER_STATE_DIR: stateDir });
@@ -442,13 +440,12 @@ test("hook capture stays off until both org and repository are enabled", () => {
     path.join(repo, ".git", "config"),
     '[remote "origin"]\n\turl = https://github.com/SkillBench-AI/example.git\n'
   );
-  const credentialPath = path.join(stateDir, "credentials.json");
   const baseStore = {
     device_id: "TEST-DEVICE",
     hash_salt: "0123456789abcdef0123456789abcdef",
     license_jwt: licenseJwt(),
   };
-  writeJson(credentialPath, baseStore);
+  writeCredentials(stateDir, baseStore, { dataDir });
 
   const hook = path.resolve(__dirname, "../skillmeter/scripts/hook.js");
   const env = isolatedEnv({
@@ -519,11 +516,11 @@ test("a skipped unselected-repository hook advances the transcript privacy curso
       "",
     ].join("\n")
   );
-  writeJson(path.join(stateDir, "credentials.json"), {
+  writeCredentials(stateDir, {
     device_id: "TEST-DEVICE",
     hash_salt: "0123456789abcdef0123456789abcdef",
     license_jwt: licenseJwt(),
-  });
+  }, { dataDir });
   writeTelemetryPolicy(stateDir, { orgs: { "skillbench-ai": true } });
   const env = isolatedEnv({
     SKILLMETER_STATE_DIR: stateDir,
@@ -571,11 +568,11 @@ test("organization OFF deletes its repository queue and skipped hooks do not rec
     path.join(repo, ".git", "config"),
     '[remote "origin"]\n\turl = https://github.com/SkillBench-AI/example.git\n'
   );
-  writeJson(path.join(stateDir, "credentials.json"), {
+  writeCredentials(stateDir, {
     device_id: "TEST-DEVICE",
     hash_salt: "0123456789abcdef0123456789abcdef",
     license_jwt: licenseJwt(),
-  });
+  }, { dataDir });
   const env = isolatedEnv({
     SKILLMETER_STATE_DIR: stateDir,
     CLAUDE_PLUGIN_DATA: dataDir,
