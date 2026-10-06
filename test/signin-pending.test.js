@@ -173,8 +173,10 @@ test("bin/signin run again while a sign-in waits for approval reports it and kee
   assert.equal(f.signin({ tty: false }).status, 0);
   const intent = f.session().auth_generation;
   const pending = f.sentinel();
+  const record = f.statusBytes();
   const again = f.signin({ tty: false });
   assert.equal(again.status, 0, again.stderr);
+  assert.equal(f.statusBytes(), record, "the status record is left alone");
   assert.match(again.stdout, /sign-in in progress/);
   assert.match(again.stdout, /bin\/signin --restart/);
   assert.equal(f.session().auth_generation, intent, "no new intent");
