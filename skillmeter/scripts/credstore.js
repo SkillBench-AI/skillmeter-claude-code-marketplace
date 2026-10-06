@@ -417,30 +417,33 @@ function signOut() {
 }
 
 // Explicit sign-in starts a new intent even if the server reuses the same JWT.
+// A sign-out stays recorded until a sign-in commits: the new generation alone
+// is what stops an earlier intent from committing.
 function markEngaged() {
   return mutateSession((session) => {
-    delete session.signed_out;
     session.auth_generation = crypto.randomUUID();
     return session.auth_generation;
   });
 }
 
 // Explicit issuance is bound to its originating intent. A refresh in that
-// same intent may rotate the token while browser approval is pending.
+// same intent may rotate the token while browser approval is pending. A
+// sign-out, or a newer sign-in, changes the generation, so a sign-in started
+// before it cannot commit.
 function signinMatches(session, expected) {
-  return !expected.signedOut && session.signed_out !== true &&
-    (session.auth_generation || null) === expected.generation &&
+  return (session.auth_generation || null) === expected.generation &&
     currentDeviceId() === expected.deviceId;
 }
 
 // onCommit publishes local status/notifications before another intent can win.
 // It must be synchronous and must not acquire the session lock again. A sign-in
 // without a refresh token (a broker that did not grant `offline`) clears any
-// earlier one, so renewal never mixes two sign-ins.
+// earlier one, so renewal never mixes two sign-ins. The commit is what ends a
+// sign-out.
 function commitSignin({ jwt, refreshToken = null, expected, onCommit }) {
   return mutateSession((session) => {
-    if (session.signed_out === true) return false;
     if (expected && !signinMatches(session, expected)) return false;
+    delete session.signed_out;
     session.license_jwt = jwt;
     if (refreshToken) session.refresh_token = refreshToken;
     else delete session.refresh_token;

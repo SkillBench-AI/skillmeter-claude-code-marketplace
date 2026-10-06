@@ -150,7 +150,8 @@ async function main() {
   // still valid for up to one lifetime; that license is not a sign-in to keep.
   const sessionEnded = isSessionEnded();
 
-  // Explicit sign-in clears the signed-out sentinel before starting the flow.
+  // Explicit sign-in starts a new intent. A sign-out stays recorded until the
+  // sign-in commits.
   const deviceId = credstore.getDeviceId();
   const generation = credstore.markEngaged();
   const expected = { generation, deviceId };

@@ -396,5 +396,7 @@ the approval. The result carries `expires_at`, the device code's lifetime
 capped at 30 minutes, and belongs to the sign-in that wrote it: its success or
 failure, a sign-out, a newer sign-in, a revocation or the expiry ends it. No
 "discarded" result is written. A poller that stops without a result is not
-detected, so the in-progress status offers starting over. This closes the open
-item on the sentinel.
+detected, so the in-progress status offers starting over. A sign-out stays
+recorded while a sign-in waits: `signed_out` holds until a sign-in commits, and
+the sign-in's generation alone stops a stale commit, since a sign-out or a
+newer sign-in changes it. This closes the open item on the sentinel.

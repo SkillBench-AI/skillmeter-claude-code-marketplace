@@ -135,7 +135,8 @@ async function main() {
     return;
   }
 
-  // Explicit sign-in clears the signed-out sentinel and resets refresh status.
+  // Explicit sign-in starts a new intent and resets refresh status. A
+  // sign-out stays recorded until the sign-in commits.
   credstore.markEngaged();
   clearLicenseStatus({ source: "signin" });
 
