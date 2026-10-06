@@ -518,23 +518,20 @@ Three cases decision 2 did not rule on:
   record, since both run at once. A notice that takes longer, because its walk
   over the transcripts for the repository inventory is slow, gives its session
   both lines rather than none. A deadline on that walk is a follow-up.
-- **A sign-in that has started.** Starting a sign-in clears `signed_out` before
-  anything is signed in. On a client with no recorded sign-in, that turns
-  `signed_out` into `never_signed_in`, which is healthy. A stop therefore ends
-  only in a state that can collect (`unconfigured` or `recording`), the
-  destinations decision 2 itself names. Neither a started sign-in nor the pause
-  is a return, with or without a license. The pending sign-in result is not the
-  guard. It is written after a round trip to the broker, so the session write
-  that starts the sign-in is usually resolved before it exists, and a failed
-  sign-in ends it with nothing signed in. A license that names no organization
-  puts every repository outside it, so that client cannot collect anywhere. The
-  notice holds back for it too, and the stored stop stays until a sign-in with
-  a license that names one. A move from a stop straight into `delivery_paused`
-  is not announced either: a sign-in commits the license before it clears an
-  ended session's reason, so a client signed out after its session ended passes
-  through `delivery_paused` on its way back. A genuine move, which needs that
-  second write to fail after the commit, is shown by the next session's card,
-  not mid-session.
+- **A sign-in that has started.** A started sign-in does not change the
+  resolver's answer: `signed_out` holds until a sign-in commits, and a lost
+  license stays `token_missing`. A stop still ends only in a state that can
+  collect (`unconfigured` or `recording`), the destinations decision 2 itself
+  names, because the pause and a license that names no organization need it:
+  neither is a return, with or without a license. A license that names no
+  organization puts every repository outside it, so that client cannot collect
+  anywhere, and the stored stop stays until a sign-in with a license that names
+  one. A move from a stop straight into `delivery_paused` is not announced
+  either: a sign-in commits the license before it clears an ended session's
+  reason, so a client signed out after its session ended passes through
+  `delivery_paused` on its way back. A genuine move, which needs that second
+  write to fail after the commit, is shown by the next session's card, not
+  mid-session.
 - **A sign-out with no license.** `/skillmeter:signout` marks a client signed
   out even if it never signed in. Every open session shows the `signed out`
   line once, as decision 2 accepts for the session that ran the command, and

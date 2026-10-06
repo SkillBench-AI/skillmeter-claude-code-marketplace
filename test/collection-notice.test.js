@@ -343,7 +343,7 @@ test("an earlier sign-in's notice does not hide a later return", () => {
 });
 
 // (c) and (f): a client that never signed in. Signing out still marks it
-// signed out, and a sign-in that starts leaves it with no license.
+// signed out, and the sign-out holds until a sign-in commits.
 test("a sign-in that has started is not a return, until it completes", () => {
   const f = collectionClient();
   f.sessionStart("s");
@@ -353,7 +353,8 @@ test("a sign-in that has started is not a return, until it completes", () => {
   assert.equal(signout.stdout, "SkillMeter: already signed out.\n");
   assert.deepEqual(lines(f, "s"), [STOPPED("signed out")]);
 
-  // markEngaged drops signed_out before the pending result exists.
+  // A started sign-in, then its pending result, then its failure: the
+  // sign-out holds throughout.
   f.write("cs.markEngaged();");
   assert.deepEqual(lines(f, "s"), []);
   f.write("ls.clearLicenseStatus({ source: 'signin' }); cs.writeSigninPending(600000, { generation: cs.recoverySnapshot().generation, deviceId: cs.getDeviceId() });");
