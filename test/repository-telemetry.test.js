@@ -763,7 +763,21 @@ test("telemetry skill resolves a reply only against the list it printed", () => 
   );
   assert.match(
     TELEMETRY_SKILL,
-    /every numbered line whose `displayName` contains it,\s+ignoring case/
+    /every numbered line whose `displayName`\s+contains it, ignoring case/
+  );
+  // A filler word that occurs in exactly one name would otherwise select it.
+  assert.match(TELEMETRY_SKILL, /Any other token shorter than three characters/);
+  const stopWords = TELEMETRY_SKILL.match(
+    /shorter than three characters, or, ignoring case, any of\s+([^]*?), is not a repository, whatever names contain it\./
+  );
+  assert.ok(stopWords, "the stop-word rule makes such a token not a repository");
+  assert.deepEqual(
+    [...stopWords[1].matchAll(/`([^`]+)`/g)].map((match) => match[1]),
+    [
+      "the", "a", "an", "to", "for", "in", "of", "on", "off", "all", "turn",
+      "enable", "disable", "please", "repo", "repos", "repository",
+      "repositories", "telemetry",
+    ]
   );
   assert.match(TELEMETRY_SKILL, /One line: that repository\. None: not a repository/);
   assert.match(TELEMETRY_SKILL, /Several: ambiguous\./);
@@ -778,7 +792,14 @@ test("telemetry skill resolves a reply only against the list it printed", () => 
     TELEMETRY_SKILL,
     /If any token is not a repository or is ambiguous, change nothing at all/
   );
-  assert.match(TELEMETRY_SKILL, /ask for the whole selection again/);
+  assert.match(TELEMETRY_SKILL, /ask for the whole selection again by\s+number or name/);
+  // `toggle` applies each repository's own action, so a direction the user
+  // types is not followed; the quote-back says so instead of obeying it.
+  assert.match(
+    TELEMETRY_SKILL,
+    /Say once that each repository switches as the list shows, off\s+to on and on to off/
+  );
+  assert.match(TELEMETRY_SKILL, /a word like `on` or `off` is not an instruction\./);
 });
 
 test("telemetry skill applies a run in one toggle and asks again after a stale one", () => {

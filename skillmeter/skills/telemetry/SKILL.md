@@ -104,16 +104,22 @@ Otherwise split the reply into tokens at commas, whitespace and the word `and`,
 and resolve each to exactly one numbered line:
 
 - A token of digits only is a line number. No such line: not a repository.
-- Any other token names every numbered line whose `displayName` contains it,
-  ignoring case. One line: that repository. None: not a repository — if it
-  matches only a blocked repository, say so and why. Several: ambiguous.
+- Any other token shorter than three characters, or, ignoring case, any of
+  `the`, `a`, `an`, `to`, `for`, `in`, `of`, `on`, `off`, `all`, `turn`,
+  `enable`, `disable`, `please`, `repo`, `repos`, `repository`,
+  `repositories`, `telemetry`, is not a repository, whatever names contain it.
+- Each remaining token names every numbered line whose `displayName`
+  contains it, ignoring case. One line: that repository. None: not a repository
+  — if it matches only a blocked repository, say so and why. Several: ambiguous.
 
 Never match a path, an `id`, an `optionLabel`, a `description`, or anything
 else the list did not print, and never guess. A repository named twice counts
 once. If any token is not a repository or is ambiguous, change nothing at all,
 not even for the tokens that resolved: quote each one back, the ambiguous ones
-with the numbered lines they matched, ask for the whole selection again, and
-end your turn. When every token resolves, apply them all in one `toggle`.
+with the numbered lines they matched, and ask for the whole selection again by
+number or name. Say once that each repository switches as the list shows, off
+to on and on to off, so a word like `on` or `off` is not an instruction. End
+your turn. When every token resolves, apply them all in one `toggle`.
 
 ## Applying
 
