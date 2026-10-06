@@ -255,7 +255,7 @@ generation; those stay separate gates.
 | C4 | Consent changes between a failed upload and its retry | The retry re-checks consent; no newly revoked payload is sent. |
 | C5 | Reaffirmation or an edit to another repository | An unrelated edit preserves authorization; a reaffirmation follows C3 until a stronger contract exists. |
 | C6 | Global OFF and repository or organization A OFF together | A's payloads revoked despite the pause; B's queues and all privacy cursors retained. |
-| C7 (proposed, 2026-10-02) | A session works in repository A while it is OFF or outside the license, then in B, ON | What was written in A then is not sent for B, even if A is turned ON before it is staged; from a turn that ends in A, A once ON receives only what follows its last hook that did not record. Limits: the 2026-10-02 amendment. |
+| C7 (proposed, 2026-10-02) | A session works in repository A while it is OFF or outside the license, then in B, ON | What was written in A then is not sent, for B or for A, even if A is turned ON before it is staged; A once ON starts with the next turn. Limits: the 2026-10-02 amendment. |
 | C8 (proposed, 2026-10-02) | A session moves between repositories A and B, both ON | Each turn is sent once, for the last of them it was recorded in. Limits: the 2026-10-02 amendment. |
 
 ## Open items
@@ -295,19 +295,21 @@ tree, counts as written in the recorded directory.
 - A turn is sent for no repository if it was recorded in a directory that no
   longer exists, or in a repository that is not collecting when the turn is
   staged.
-- A turn is not sent for a repository if one of its hooks ran in another
-  repository that was not collecting at that moment. A turn that ends in the
-  repository that was not collecting is not held back from it: turned on
-  part-way through the turn, that repository receives what follows its last
-  hook that did not record.
+- A turn is not sent if one of its hooks ran while signed out, or in a
+  repository that was not collecting at that moment, including the one the
+  turn ends in. Recording turned on part-way through a turn starts with the
+  next turn: a hook reads the transcript after the fact, so records the turn
+  wrote before and after that hook cannot be told apart.
 - A repository first observed collecting part-way through a transcript starts
   with the turn in which it was observed. Earlier turns are excluded,
-  including a resumed session's.
+  including a resumed session's. Staged without a turn, at the end of a
+  session, a transcript the repository was never observed collecting in
+  sends nothing.
 
-Where no mark protects a turn, only the state at staging does: if no hook of
-the turn ran in the repository that was not collecting, or that turn's mark
-could not be written or read, a repository turned on before the turn is
-staged no longer holds it back.
+Where no mark protects a turn, only the state at staging and the boundary
+below do: if no hook of the turn ran while it was not collecting, or that
+turn's mark could not be written or read, a repository turned on before the
+turn is staged no longer holds it back.
 
 The boundary a hook sets for a period it does not record is different: the
 repository's cursor or, when signed out, the signed-out mark. When it cannot
@@ -325,14 +327,15 @@ Marks and these boundaries are kept while any repository holds a cursor for
 their transcript, and otherwise for 30 days. A transcript that no repository
 ever held a cursor for can lose them. If such a transcript is later staged
 by a turn, it starts at that turn. If it is staged without one, at the end
-of a session, it starts from its first line.
+of a session, nothing from it is sent.
 
 On Claude Code versions that write no prompt ids, turns are grouped by user
-prompts, no hook marks its turn, and the first-observation rule does not
-apply. A turn whose records name no directory is left to whichever
+prompts, no hook marks its turn, the first-observation rule does not apply,
+and a transcript staged at the end of a session without a cursor starts from
+its first line. A turn whose records name no directory is left to whichever
 repository stages it, and can be sent for more than one.
 
-This plugin's proof, alongside its privacy cursors: a hook that runs in a
-repository that is not collecting marks its turn locally with the prompt id
-and an HMAC of that repository, and staging reads these marks with the
-recorded directories.
+This plugin's proof, alongside its privacy cursors: a hook that is not
+recorded marks its turn locally with the prompt id and an HMAC of the
+repository it ran in, or `*` when signed out, and staging drops every marked
+turn while it reads the recorded directories.

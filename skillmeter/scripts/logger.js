@@ -29,8 +29,8 @@ const { observeSessionCwd } = require("./lib/cwd-context");
 // that content from it is never sent later. Without a license there is no
 // repository to hold a cursor, so the transcript itself is marked. A boundary
 // that does not land is recorded as pending, so staging cannot start before it.
-// Inside a repository the turn is marked too, so it is never sent for another
-// one.
+// The turn is marked too, so what it writes after this hook read the
+// transcript is not sent either.
 function keepTranscriptCursorAtTail(input, repoScopeDecision) {
   if (!input.transcript_path) return;
   let transfer;
@@ -40,7 +40,7 @@ function keepTranscriptCursorAtTail(input, repoScopeDecision) {
     return;
   }
   try {
-    if (repoScopeDecision.repoRoot) transfer.markUnrecordedTurn(input, repoScopeDecision);
+    transfer.markUnrecordedTurn(input, repoScopeDecision);
   } catch {}
   const repository = repoScopeDecision.repoKey
     ? { repoKey: repoScopeDecision.repoKey, org: repoScopeDecision.remoteOrg }
@@ -62,16 +62,17 @@ function getTranscriptId(transcriptPath) {
   return path.basename(transcriptPath);
 }
 
+// "logged", "refused" when sending is not allowed, or "failed".
 function logEvent(event, sessionId, data, deviceId, repoKey, hashSalt) {
-  if (!deviceId || !repoKey || !hashSalt) return false;
-  if (!credstore.isTelemetryTransmissionAllowed(repoKey)) return false;
+  if (!deviceId || !repoKey || !hashSalt) return "failed";
+  if (!credstore.isTelemetryTransmissionAllowed(repoKey)) return "refused";
 
   const queue = repositoryQueuePaths(repoKey, hashSalt);
   const logFile = queue.eventLog;
   try {
     fs.mkdirSync(path.dirname(logFile), { recursive: true });
     const existing = safeReadJson(queue.metadata, null);
-    if (existing && existing.repoKey !== repoKey) return false;
+    if (existing && existing.repoKey !== repoKey) return "failed";
     if (!existing) {
       atomicWriteJson(queue.metadata, {
         repoKey,
@@ -91,10 +92,10 @@ function logEvent(event, sessionId, data, deviceId, repoKey, hashSalt) {
     };
 
     fs.appendFileSync(logFile, JSON.stringify(logEntry) + "\n");
-    return true;
+    return "logged";
   } catch (err) {
     console.error(`[skillmeter] ${event}: log write failed (${err.message})`);
-    return false;
+    return "failed";
   }
 }
 
@@ -343,7 +344,7 @@ async function runHook(eventName, buildData, options = {}) {
   // same-named field a hook might emit.
   data._sanitization = meta;
 
-  const logged = logEvent(
+  const result = logEvent(
     eventName,
     sessionId,
     data,
@@ -351,13 +352,13 @@ async function runHook(eventName, buildData, options = {}) {
     repoScopeDecision.repoKey,
     hashSalt
   );
-  if (!logged) {
-    console.error(`[skillmeter] ${eventName}: skipped (policy changed before write)`);
+  if (result !== "logged") {
     // The gate reads only this repository's organization; sending needs every
     // licensed organization. When sending is refused, this period is not
     // recorded either, and the same rule applies. A write that failed is not a
     // refusal and leaves the cursor for the next turn.
-    if (!credstore.isTelemetryTransmissionAllowed(repoScopeDecision.repoKey)) {
+    if (result === "refused") {
+      console.error(`[skillmeter] ${eventName}: skipped (policy changed before write)`);
       keepTranscriptCursorAtTail(input, repoScopeDecision);
     }
     await runOptionalCallback(

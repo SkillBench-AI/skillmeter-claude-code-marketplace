@@ -155,14 +155,13 @@ test("turnDestinations: a turn goes to the repository it ended in, if every one 
   ]);
 });
 
-test("turnDestinations: a turn seen not recording in another repository goes nowhere", () => {
+test("turnDestinations: a turn seen not recording goes nowhere, even where it ends", () => {
   const places = { "/a": { key: "A", recording: true }, "/b": { key: "B", recording: true } };
   const turn = (promptId, cwd) => ({ type: "user", promptId, cwd });
   const objs = [turn("in-b", "/a"), turn("in-a", "/a"), turn("untold"), turn("clean", "/a")];
-  const marked = { "in-b": "B", "in-a": "A", untold: "B" };
-  const seenUnrecorded = (promptId, key) => promptId in marked && marked[promptId] !== key;
-  assert.deepEqual(d.turnDestinations(objs, (cwd) => places[cwd], seenUnrecorded),
-    [null, "A", null, "A"]);
+  const marked = new Set(["in-b", "in-a", "untold"]);
+  assert.deepEqual(d.turnDestinations(objs, (cwd) => places[cwd], (promptId) => marked.has(promptId)),
+    [null, null, null, "A"]);
 });
 
 test("buildChunkPlan: keep sends only the selected records, and the cursor passes the rest", () => {
@@ -317,6 +316,42 @@ test("transcriptTailUuid: empty without a uuid or a file", () => {
   writeFile(file, JSON.stringify({ type: "permission-mode" }) + "\n");
   assert.equal(transfer.transcriptTailUuid(file, 5), "");
   assert.equal(transfer.transcriptTailUuid(path.join(DATA_DIR, "absent.jsonl")), "");
+});
+
+// Two hooks that run at once: the slower one read the transcript earlier.
+test("a signed-out mark is not moved back by a hook that read the transcript earlier", () => {
+  const file = path.join(DATA_DIR, "race-mark.jsonl");
+  const mark = path.join(DATA_DIR, "logs", "unlicensed-transcripts", "race-mark.jsonl.json");
+  writeFile(file, JSON.stringify({ uuid: "first" }) + "\n");
+  const later = { transcriptId: "race-mark.jsonl", lastUuid: "second", size: 1000, updatedAt: Date.now() + 60_000 };
+  writeFile(mark, JSON.stringify(later));
+  assert.equal(transfer.markUnlicensedTranscript(file), true);
+  assert.equal(JSON.parse(fs.readFileSync(mark, "utf8")).lastUuid, "second", "written since this read");
+
+  // A mark written before this read is replaced, even from a longer transcript.
+  writeFile(mark, JSON.stringify({ ...later, updatedAt: Date.now() - 60_000 }));
+  assert.equal(transfer.markUnlicensedTranscript(file), true);
+  assert.equal(JSON.parse(fs.readFileSync(mark, "utf8")).lastUuid, "first");  fs.rmSync(mark);
+});
+
+test("a discarded cursor is not moved back by a hook that read the transcript earlier", () => {
+  const repository = { repoKey: "github.com/skillbench-ai/race", org: "skillbench-ai" };
+  const file = path.join(DATA_DIR, "race-cursor.jsonl");
+  writeFile(file, toJsonl([content("a"), content("b")]));
+  const cursor = (lastUuid, updatedAt) =>
+    transfer.writeCursor({ transcriptId: "race-cursor.jsonl", lastUuid, seq: 1, updatedAt, discarded: true }, repository);
+
+  cursor("c", Date.now() + 60_000);
+  assert.equal(transfer.advanceCursorToTranscriptTail(file, repository), true);
+  assert.equal(transfer.readCursor("race-cursor.jsonl", repository).lastUuid, "c", "past what this read saw");
+
+  cursor("a", Date.now() + 60_000);
+  assert.equal(transfer.advanceCursorToTranscriptTail(file, repository), true);
+  assert.equal(transfer.readCursor("race-cursor.jsonl", repository).lastUuid, "b", "behind what this read saw");
+
+  cursor("c", Date.now() - 60_000);
+  assert.equal(transfer.advanceCursorToTranscriptTail(file, repository), true);
+  assert.equal(transfer.readCursor("race-cursor.jsonl", repository).lastUuid, "b", "written before this read");
 });
 
 test("a signed-out mark ages out unless a cursor for its transcript remains", () => {
@@ -552,6 +587,26 @@ test("startTranscriptAtTurn: starts with the turn it was seen in", () => {
   assert.equal(at("p2", "first").cursor.lastUuid, null);
 });
 
+test("startTranscriptAtTurn: a transcript with nothing written yet starts at this turn", () => {
+  const repository = { repoKey: "github.com/skillbench-ai/fresh", org: "skillbench-ai" };
+  const file = path.join(DATA_DIR, "fresh.jsonl");
+  assert.equal(transfer.startTranscriptAtTurn({ transcript_path: file, prompt_id: "p1" }, repository), true);
+  assert.equal(transfer.readCursor("fresh.jsonl", repository).lastUuid, null);
+});
+
+test("startTranscriptAtTurn: a cursor that cannot be read is kept", () => {
+  const repository = { repoKey: "github.com/skillbench-ai/broken", org: "skillbench-ai" };
+  const file = path.join(DATA_DIR, "broken.jsonl");
+  writeFile(file, toJsonl([{ type: "user", promptId: "p1", uuid: "u" }, content("a")]));
+  transfer.writeCursor({ transcriptId: "broken.jsonl", lastUuid: "a", seq: 1, updatedAt: 1 }, repository);
+  const cursorFile = path.join(DATA_DIR, "logs", "repositories",
+    repositoryStorageId(repository.repoKey, credstore.getOrCreateHashSalt()),
+    "transcripts", "cursors", "broken.jsonl.json");
+  fs.writeFileSync(cursorFile, "{not json");
+  assert.equal(transfer.startTranscriptAtTurn({ transcript_path: file, prompt_id: "p2" }, repository), false);
+  assert.equal(fs.readFileSync(cursorFile, "utf8"), "{not json");
+});
+
 test("startTranscriptAtTurn: needs a prompt id and a transcript that records them", () => {
   const repository = { repoKey: "github.com/skillbench-ai/untold", org: "skillbench-ai" };
   const file = path.join(DATA_DIR, "untold.jsonl");
@@ -575,11 +630,13 @@ test("markUnrecordedTurn: appends the prompt id and a hashed repository, once", 
   assert.equal(mark("p1", uncovered), true);
   assert.equal(mark(undefined, off), false, "a hook without a turn marks nothing");
   assert.equal(mark("p2", {}), false, "outside any repository marks nothing");
+  assert.equal(mark("p5", { classification: "not_activated" }), true, "signed out marks every repository");
 
   const raw = fs.readFileSync(file, "utf8");
   const lines = raw.split("\n").filter(Boolean).map(JSON.parse);
-  assert.deepEqual(lines.map((l) => l.promptId), ["p1", "p1"], "each repository once");
+  assert.deepEqual(lines.map((l) => l.promptId), ["p1", "p1", "p5"], "each repository once");
   assert.notEqual(lines[0].place, lines[1].place);
+  assert.equal(lines[2].place, "*");
   assert.doesNotMatch(raw, /skillbench-ai|off|work|elsewhere/, "no repository name or path");
   assert.equal(fs.statSync(path.dirname(file)).mode & 0o777, 0o700, "a private directory");
   assert.equal(fs.statSync(file).mode & 0o777, 0o600, "a private file");
@@ -592,10 +649,10 @@ test("markUnrecordedTurn: appends the prompt id and a hashed repository, once", 
   const readable = () => fs.readFileSync(file, "utf8").split("\n").filter(Boolean)
     .filter((line) => { try { JSON.parse(line); return true; } catch { return false; } })
     .map((line) => JSON.parse(line).promptId);
-  assert.deepEqual(readable(), ["p1", "p1", "p4"], "p4 is on a line of its own");
+  assert.deepEqual(readable(), ["p1", "p1", "p5", "p4"], "p4 is on a line of its own");
   // And it is read back past the partial line: marking p4 again appends nothing.
   assert.equal(mark("p4", off), true);
-  assert.deepEqual(readable(), ["p1", "p1", "p4"]);
+  assert.deepEqual(readable(), ["p1", "p1", "p5", "p4"]);
 });
 
 test("an unrecorded-turn mark ages out unless a cursor for its transcript remains", () => {
