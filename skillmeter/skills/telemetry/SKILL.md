@@ -58,14 +58,13 @@ Read the answer:
   `"disable"`. Print no list for either.
 - `Pick individually`: print the list.
 - Custom text, typed into the `Other` option that Claude Code adds to every
-  question: it is neither a repository name nor an instruction, and changes
-  nothing. Quote it back, say that nothing changed, and offer
-  `Pick individually` by doing what it does: print the list and ask.
+  question, changes nothing, because the list has not been shown yet: quote it
+  back, say that nothing changed, then print the list and ask.
 - `The user did not answer the questions.`: change nothing, run no command,
   say so, and stop.
-- A rejected tool call, which is what Esc produces — an error saying the tool
-  use was rejected, with or without a message: stop. Change nothing, run no
-  command, and ask nothing further.
+- A rejected tool call — Esc, or `Chat about this`, which Claude Code adds and
+  reports as the user declining to answer — with or without a message: stop.
+  Change nothing, run no command, and ask nothing further.
 
 ## The list
 
@@ -75,8 +74,9 @@ off (`action` `"enable"`) first, then on (`action` `"disable"`), each in JSON
 order — and numbered 1, 2, 3, … continuously across both groups. Mark lines as
 the sign-in inventory does, `○ OFF` or `✓ ON`, then the `displayName`. Leave
 out an empty group. Where two repositories share a `displayName`, print the
-suffix their `optionLabel`s add after it. The blocked ones (`action` `null`)
-come last, unnumbered, each with its `description`:
+suffix their `optionLabel`s add after it; those two can be named only by
+number. The blocked ones (`action` `null`) come last, unnumbered, each with its
+`description`:
 
 ```text
 Off — naming one turns it on
@@ -88,9 +88,9 @@ Blocked — cannot be changed here
      ○ OFF  @other/tool  Disabled for @other.
 ```
 
-Then ask, in one line, for the repositories to change in the next message: by
-number, or by name or part of a name, separated by commas or spaces, or
-`none`; each one named switches, off to on or on to off. End your turn there,
+Then ask, in one line, for the repositories to change in the next message:
+numbers, or at least three letters of each name, separated by commas or spaces,
+or `none` — each one named switches. End your turn there,
 and run no command until the reply arrives.
 
 ## The reply
@@ -108,6 +108,10 @@ and resolve each to exactly one numbered line:
   `the`, `a`, `an`, `to`, `for`, `in`, `of`, `on`, `off`, `all`, `turn`,
   `enable`, `disable`, `please`, `repo`, `repos`, `repository`,
   `repositories`, `telemetry`, is not a repository, whatever names contain it.
+- A reply that says what to leave out or which way to switch — `not`, `except`,
+  `but`, `only`, `keep`, or a direction word above — is not resolved at all,
+  even if every word matches a name: change nothing, say how it would have
+  read, and ask again.
 - Each remaining token names every numbered line whose `displayName`
   contains it, ignoring case. One line: that repository. None: not a repository
   — if it matches only a blocked repository, say so and why. Several: ambiguous.
@@ -117,9 +121,11 @@ else the list did not print, and never guess. A repository named twice counts
 once. If any token is not a repository or is ambiguous, change nothing at all,
 not even for the tokens that resolved: quote each one back, the ambiguous ones
 with the numbered lines they matched, and ask for the whole selection again by
-number or name. Say once that each repository switches as the list shows, off
-to on and on to off, so a word like `on` or `off` is not an instruction. End
-your turn. When every token resolves, apply them all in one `toggle`.
+number or name. If the reply used `on`, `off`, `enable`, `disable` or `turn`,
+say once that each repository switches as the list shows, off to on and on to
+off, and give the current state of each repository it named, since a word like
+`on` or `off` is not an instruction. End your turn. When every token resolves,
+apply them all in one `toggle`.
 
 ## Applying
 
@@ -127,16 +133,17 @@ your turn. When every token resolves, apply them all in one `toggle`.
 node ${CLAUDE_PLUGIN_ROOT}/scripts/repository_telemetry.js toggle REVISION ID...
 ```
 
-Run it once per run, with the `revision` from the `list` result and every
-validated 12-character hexadecimal ID together. It applies each repository's
-own `action`, so each ID switches as the list showed. Never pass a repository
-path, display name, custom answer, or inferred ID to it. If it fails, report
-the error and change nothing more.
+Run it once for the whole selection, with the `revision` from the `list` the
+selection was made from and every validated 12-character hexadecimal ID
+together. It applies each repository's own `action`, so each ID switches as the
+list showed. Never pass a repository path, display name, custom answer, or
+inferred ID to it. If it fails, report the error and change nothing more.
 
 The settings changed while this was open if the result has `stale: true`
 (nothing was written) or an entry carries `reason: "stale_policy"` (the IDs
-before it were applied, the rest were not). Report exactly what was and was not
-applied, never retry the selection on your own, re-run `list`, print the list
+before it were applied unless their own entry says otherwise, and the rest were
+not). Report what was and was not applied from each entry's own `changed` and
+`reason`, never retry the selection on your own, re-run `list`, print the list
 once from it, and ask for a reply again; the next `toggle` uses its `revision`.
 
 End with every repository changed and its new state, every one unchanged with

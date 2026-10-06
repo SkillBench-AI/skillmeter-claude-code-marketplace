@@ -717,7 +717,7 @@ test("telemetry skill asks one single-select question for the coarse choice", ()
   // looks like a search box, so whatever is typed there changes nothing.
   assert.match(
     TELEMETRY_SKILL,
-    /neither a repository name nor an instruction, and changes\s+nothing\. Quote it back/
+    /changes nothing, because the list has not been shown yet: quote it\s+back/
   );
   assert.match(
     TELEMETRY_SKILL,
@@ -725,7 +725,7 @@ test("telemetry skill asks one single-select question for the coarse choice", ()
   );
   assert.match(
     TELEMETRY_SKILL,
-    /stop\. Change nothing, run no\s+command, and ask nothing further/
+    /stop\.\s+Change nothing, run no\s+command, and ask nothing further/
   );
 });
 
@@ -741,7 +741,7 @@ test("telemetry skill prints the repositories as one grouped, numbered list", ()
   assert.match(TELEMETRY_SKILL, /numbered 1, 2, 3, … continuously across both groups/);
   assert.match(
     TELEMETRY_SKILL,
-    /come last, unnumbered, each with its `description`/
+    /come last, unnumbered, each with its\s+`description`/
   );
   assert.match(
     TELEMETRY_SKILL,
@@ -797,9 +797,14 @@ test("telemetry skill resolves a reply only against the list it printed", () => 
   // types is not followed; the quote-back says so instead of obeying it.
   assert.match(
     TELEMETRY_SKILL,
-    /Say once that each repository switches as the list shows, off\s+to on and on to off/
+    /If the reply used `on`, `off`, `enable`, `disable` or `turn`,\s+say once/
   );
-  assert.match(TELEMETRY_SKILL, /a word like `on` or `off` is not an instruction\./);
+  assert.match(
+    TELEMETRY_SKILL,
+    /each repository switches as the list shows, off to on and on to\s+off/
+  );
+  assert.match(TELEMETRY_SKILL, /give the current state of each repository it named/);
+  assert.match(TELEMETRY_SKILL, /a word like\s+`on` or `off` is not an instruction\./);
 });
 
 test("telemetry skill applies a run in one toggle and asks again after a stale one", () => {
@@ -809,9 +814,9 @@ test("telemetry skill applies a run in one toggle and asks again after a stale o
   );
   assert.match(
     TELEMETRY_SKILL,
-    /Run it once per run, with the `revision` from the `list` result/
+    /Run it once for the whole selection, with the `revision` from the `list` the\s+selection was made from/
   );
-  assert.match(TELEMETRY_SKILL, /hexadecimal ID together/);
+  assert.match(TELEMETRY_SKILL, /hexadecimal ID\s+together/);
   assert.doesNotMatch(TELEMETRY_SKILL, /`revision` returned by the previous\s+`toggle`/);
   assert.match(TELEMETRY_SKILL, /`stale: true`\s+\(nothing was written\)/);
   assert.match(TELEMETRY_SKILL, /an entry carries `reason: "stale_policy"`/);
