@@ -59,7 +59,7 @@ concise English for readers who do not know the team's internal history.
 
 Release notes are public. They say what changed for the user; the PR holds the
 rest. Read the latest published release before writing one;
-[0.38.0](https://github.com/SkillBench-AI/skillmeter-claude-code-marketplace/releases/tag/v0.38.0)
+[0.42.0](https://github.com/SkillBench-AI/skillmeter-claude-code-marketplace/releases/tag/v0.42.0)
 is the model for length and tone.
 
 - Title `SkillMeter X.Y.Z`, then `### What changed`, `### After updating`,

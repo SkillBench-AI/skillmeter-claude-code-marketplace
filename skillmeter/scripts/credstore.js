@@ -113,11 +113,12 @@ function mutateStore(fn) {
 }
 
 // The session. Before ADR 005 it lived in the shared store, so the first read
-// without a session file copies it from there, once: the license, sign-out and
-// sign-in intent. The shared store is left as it is, because other clients
-// still read it. From then on nothing another client writes there reaches this
-// session.
-const SESSION_FIELDS = ["license_jwt", "signed_out", "auth_generation"];
+// without a session file copies sign-out and sign-in intent from there, once.
+// The license is not copied: one from before ADR 005 has no refresh token and
+// cannot be renewed, so the user signs in again. The shared store is left as
+// it is, because other clients still read it. From then on nothing another
+// client writes there reaches this session.
+const SESSION_FIELDS = ["signed_out", "auth_generation"];
 
 function ensureSession() {
   if (fs.existsSync(SESSION_FILE)) return;
@@ -369,8 +370,9 @@ function hasValidLicense() {
   return !!t && !isLicenseTokenExpired(t);
 }
 
-// Sign-out blocks background refresh and in-flight sign-in commits.
-// Read from disk so other processes observe it. Explicit sign-in clears it.
+// The user's recorded sign-out. It blocks background refresh; the generation,
+// not this flag, blocks a stale sign-in commit. Read from disk so other
+// processes observe it. Only a completed sign-in clears it.
 function getSignedOut() {
   return readSession().signed_out === true;
 }
@@ -436,10 +438,10 @@ function signinMatches(session, expected) {
 }
 
 // onCommit publishes local status/notifications before another intent can win.
-// It must be synchronous and must not acquire the session lock again. A sign-in
-// without a refresh token (a broker that did not grant `offline`) clears any
-// earlier one, so renewal never mixes two sign-ins. The commit is what ends a
-// sign-out.
+// It must be synchronous and must not acquire the session lock again. A commit
+// without a refresh token clears any earlier one, so renewal never mixes two
+// sign-ins.
+// The commit is what ends a sign-out.
 function commitSignin({ jwt, refreshToken = null, expected, onCommit }) {
   return mutateSession((session) => {
     if (expected && !signinMatches(session, expected)) return false;

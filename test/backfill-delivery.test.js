@@ -11,6 +11,7 @@ const {
   readJson,
   runNode,
   setTestEnv,
+  writeCredentials,
   writeFile,
   writeJson,
 } = require("../testing/helpers");
@@ -266,7 +267,7 @@ test("the dashboard link is derived only from a tenant meter audience", () => {
 function hookEnv() {
   const stateDir = makeTempDir("skm-backfill-hook-state-");
   const dataDir = makeTempDir("skm-backfill-hook-data-");
-  writeJson(path.join(stateDir, "credentials.json"), {
+  writeCredentials(stateDir, {
     device_id: "BACKFILL-HOOK-DEVICE",
     hash_salt: "0123456789abcdef0123456789abcdef",
     license_jwt: makeJwt({
@@ -275,7 +276,7 @@ function hookEnv() {
       aud: "https://acme.meter.skillbench.example",
       org: { login: "SkillBench-AI" },
     }),
-  });
+  }, { dataDir });
   return {
     dataDir,
     env: {
