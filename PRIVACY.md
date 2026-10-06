@@ -228,9 +228,9 @@ the feature is introduced.
   organization audit records (an accepted history import stays queued for a
   sign-in to the same tenant), but
   retains the random device identifier, hashing salt, and telemetry policy;
-- the time of the last completed sign-in is kept locally, through later
-  sign-ins and sign-outs, so the plugin can tell a lost license from a fresh
-  install; it is never uploaded;
+- the time of the last completed sign-in or license renewal is kept locally,
+  also after a sign-out or a sign-in that does not complete, so the plugin can
+  tell a lost license from a fresh install; it is never uploaded;
 - for each open Claude Code session, the plugin keeps the collection state it
   last reported, so a stop or a return is announced once. The file holds only
   the state's name, is named by the session identifier, is never sent, and is
