@@ -531,7 +531,12 @@ Three cases decision 2 did not rule on:
   reason, so a client signed out after its session ended passes through
   `delivery_paused` on its way back. A genuine move, which needs that second
   write to fail after the commit, is shown by the next session's card, not
-  mid-session.
+  mid-session. One move within capture stopped is announced: `token_missing` to
+  `revoked`. A 402 drops the license from the session before it records the
+  reason, so a hook between the two writes reads `token_missing` and says so.
+  The revoked line follows once, with its administrator note. The reason is not
+  recorded first, because that write would run outside the generation check
+  that keeps a revocation arriving after a newer sign-in off that sign-in.
 - **A sign-out with no license.** `/skillmeter:signout` marks a client signed
   out even if it never signed in. Every open session shows the `signed out`
   line once, as decision 2 accepts for the session that ran the command, and

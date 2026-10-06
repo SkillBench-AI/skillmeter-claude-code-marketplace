@@ -4,7 +4,7 @@
  * 003, decision 2), when the session, its status record or the telemetry
  * policy changes; SessionStart watches all three. One systemMessage plus an
  * OSC 777 desktop notification, and nothing when the state's group did not
- * change.
+ * change, except to correct a lost license that was a revocation.
  */
 
 const { readStdinJson } = require("./lib/io");

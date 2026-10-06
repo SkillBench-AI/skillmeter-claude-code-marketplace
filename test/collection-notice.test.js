@@ -62,6 +62,24 @@ test("a revoked license shows the stop line, naming the administrator", () => {
   assert.deepEqual(lines(f, "s"), []);
 });
 
+// A 402 drops the license from the session before it records the reason, so a
+// hook between the two writes reads a lost license. The reason that follows
+// corrects the line, once, with the administrator.
+test("a revocation first read as a lost license is corrected once", () => {
+  const f = recordingClient("s");
+  f.write("cs.dropRevokedLicense(cs.recoverySnapshot(), () => {});");
+  assert.deepEqual(lines(f, "s"), [STOPPED("license token missing")]);
+  f.write("ls.recordTerminal({ source: 'drain', reason: 'revoked', status: 402 });");
+  assert.deepEqual(lines(f, "s"), [REVOKED]);
+  assert.deepEqual(lines(f, "s"), []);
+
+  // Both writes before any hook reads: the revoked line, once.
+  const g = recordingClient("s");
+  g.write("revoke();");
+  assert.deepEqual(lines(g, "s"), [REVOKED]);
+  assert.deepEqual(lines(g, "s"), []);
+});
+
 test("an ended session shows the uploads-paused line", () => {
   const f = recordingClient("s");
   f.write("endSession();");

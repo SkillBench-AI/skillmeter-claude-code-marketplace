@@ -5,9 +5,10 @@
  * Each Claude Code session keeps the state it last resolved, or the stop it
  * is still in, and a line is shown only when the state's group changes: into
  * or out of capture stopped (signed_out, token_missing, revoked) or
- * delivery_paused. The state is resolved without a working directory. These
- * are facts about this client, so a line never claims that a repository was
- * recording.
+ * delivery_paused, and once more when a revocation first read as a lost
+ * license is corrected. The state is resolved without a working directory.
+ * These are facts about this client, so a line never claims that a
+ * repository was recording.
  */
 
 const fs = require("fs");
@@ -113,7 +114,8 @@ function signinNoticeShownHere(key, since) {
  * The line for this session after a watched file changed, or "". The state
  * is stored after every resolution, except one that cannot end a stop or that
  * passes from a stop through uploads paused: then the stop stays stored. So a
- * line follows only a change of group.
+ * line follows only a change of group, or the revocation that corrects a
+ * lost license.
  */
 function collectionNotice(sessionId) {
   const key = sessionKey(sessionId);
@@ -132,6 +134,13 @@ function collectionNotice(sessionId) {
     // reason, so a stop can pass through delivery_paused on its way out.
     if (from === GROUPS.CAPTURE_STOPPED && to === GROUPS.DELIVERY_PAUSED) return "";
     writeSessionState(file, current.state);
+    // A 402 drops the license before it records the reason, so a hook in
+    // between read a lost license and said so. The revocation corrects that
+    // line, once. Recording the reason first would happen outside the
+    // generation check that keeps a late revocation off a newer sign-in.
+    if (stored?.state === STATES.TOKEN_MISSING && current.state === STATES.REVOKED) {
+      return stoppedNotice(current, to);
+    }
     if (from === to) return "";
     if (to !== GROUPS.HEALTHY) return stoppedNotice(current, to);
     // Where the sign-in notice was shown, it already says so.
