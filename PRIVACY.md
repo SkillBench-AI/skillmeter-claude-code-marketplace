@@ -234,9 +234,10 @@ the feature is introduced.
 - for each open Claude Code session, the plugin keeps the collection state it
   last reported, so a stop or a return is announced once. The file holds only
   the state's name, is named by the session identifier, is never sent, and is
-  deleted 30 days after its last update. One more file records which session
-  last showed a sign-in result: that session's identifier and the result's
-  time, overwritten at each sign-in and never sent;
+  deleted 30 days after its last update. A second file per session records
+  the time of the last sign-in result that session showed, so each result is
+  shown once in each session. It is named by the session identifier, holds
+  only that time, is never sent, and is deleted 30 days after its last update;
 - uninstalling the plugin may not remove `~/.skillbench/`.
 
 To remove the retained local identity and policy files, sign out first, close

@@ -28,11 +28,11 @@ run, with a desktop notification where the terminal supports it. That happens
 when you sign out, when the license is lost or no longer active, or when the
 sign-in expires and uploads wait. While telemetry is paused, the line appears
 when the pause is lifted. Each session shows one more line when the plugin can
-collect again. The session that shows the sign-in result shows that result
-instead, or both if the result takes more than two seconds to appear. No line
-is shown while collection works, and there are no reminders. Turning a
-repository or organization off, or changing directory, shows no line:
-`/skillmeter:telemetry status` reports it.
+collect again. Every open session shows a sign-in's result once, and after a
+completed sign-in that result replaces this line, or both appear if the result
+takes more than two seconds. No line is shown while collection works, and
+there are no reminders. Turning a repository or organization off, or changing
+directory, shows no line: `/skillmeter:telemetry status` reports it.
 
 ## Collection scope
 

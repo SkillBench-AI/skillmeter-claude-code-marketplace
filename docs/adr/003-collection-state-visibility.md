@@ -510,14 +510,21 @@ the first stored.
 Three cases decision 2 did not rule on:
 
 - **A sign-in in this session.** A completed sign-in already shows the sign-in
-  result notice. There it stands for the return line, which would only repeat
-  it, and every other session still gets the line. Every open session's
-  sign-in notice starts at the same moment, so the notice claims each result
-  under a lock, and one session shows it. It records that session once the
-  notice is printed. The collection notice waits up to two seconds for that
-  record, since both run at once. A notice that takes longer, because its walk
-  over the transcripts for the repository inventory is slow, gives its session
-  both lines rather than none. A deadline on that walk is a follow-up.
+  result notice, and every open session shows each result once, a failure
+  included. Each session records the time of the last result its notice
+  printed, in `signin-notices/` in the account directory, one file per session
+  named like its state file. The record is written once the notice is printed,
+  holds the time only, and is removed 30 days after its last write; a newer
+  result shows again. Where the notice printed a completed sign-in, it stands
+  for the return line, which would only repeat it, so that session skips the
+  line. A session whose notice did not print, because it was killed first,
+  still gets the line. The collection notice waits up to two seconds for its
+  session's record, since both run at once. A notice that takes longer, because
+  its walk over the transcripts for the repository inventory is slow, gives its
+  session both lines rather than none. A deadline on that walk is a follow-up.
+  This answers a review comment on #187 (2026-10-06): the notice used to claim
+  each result under one lock for the whole client, so only one session showed
+  it, a failure included.
 - **A sign-in that has started.** A started sign-in does not change the
   resolver's answer: `signed_out` holds until a sign-in commits, and a lost
   license stays `token_missing`. A stop still ends only in a state that can
@@ -556,11 +563,7 @@ process. Every later hook of that session waits out its four seconds and shows
 nothing until that process exits. That needs a kill inside the hold and a reuse
 of the id before the next change. Nothing bounds it by age but the
 session-start cleanup, which removes any file in `collection-state/` older than
-30 days. The sign-in notice's claim lock, in the account directory, has the
-same property for the whole client, and no cleanup bounds it: if a notice is
-killed while holding it and its process id is reused, every session's sign-in
-notice waits out two seconds and shows nothing until that process exits. The
-return line still reaches every stopped session after its own two-second wait.
+30 days.
 
 Decision 6 is implemented. `/skillmeter:telemetry status` resolves the state
 for the current directory and prints the state, its reason and the next
