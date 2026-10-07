@@ -9,7 +9,7 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
 
-const { makeTempDir, setTestEnv, accountDir } = require("../testing/helpers");
+const { makeTempDir, setTestEnv, accountDir, sessionPath, writeJson } = require("../testing/helpers");
 
 const stateDir = makeTempDir("skm-license-status-");
 setTestEnv("SKILLMETER_STATE_DIR", stateDir);
@@ -109,7 +109,7 @@ test("success resets the counters and clears terminal", () => {
   assert.equal(s.updated_by, "session_start");
 });
 
-test("clearTerminal keeps history but re-arms retries; clearLicenseStatus wipes", () => {
+test("clearTerminal keeps history but re-arms retries; clearLicenseStatus wipes all but the last success", () => {
   ls.recordRefreshSuccess({ source: "daemon", now: 100 });
   ls.recordTerminal({ source: "daemon", reason: ls.TERMINAL_REASONS.REACTIVATION_REQUIRED, now: 200 });
   let s = ls.clearTerminal({ source: "session_start" });
@@ -120,8 +120,93 @@ test("clearTerminal keeps history but re-arms retries; clearLicenseStatus wipes"
   assert.equal(s.last_error.kind, "reactivation_required", "last error kept for notices");
 
   s = ls.clearLicenseStatus({ source: "signin" });
-  assert.equal(s.last_success_at, null);
   assert.equal(s.last_error, null);
+  assert.equal(s.last_outcome, null);
+  assert.equal(s.last_success_at, 100, "the evidence of a sign-in is not wiped");
+});
+
+test("a record from another session reads as empty except for the last success", () => {
+  ls.recordRefreshSuccess({ source: "drain", now: 300 });
+  ls.recordTerminal({ source: "drain", reason: ls.TERMINAL_REASONS.REACTIVATION_REQUIRED, now: 400 });
+  writeJson(sessionPath(stateDir), { auth_generation: "another-session" });
+  const s = ls.readLicenseStatus();
+  assert.equal(s.terminal, null, "another session's terminal state cannot block this one");
+  assert.equal(s.last_outcome, null);
+  assert.equal(s.last_success_at, 300);
+  // Written back on the next update, under this session.
+  ls.recordRefreshFailure({ source: "drain", now: 500, baseMs: BASE, capMs: CAP });
+  assert.equal(ls.readLicenseStatus().last_success_at, 300);
+  fs.rmSync(sessionPath(stateDir));
+});
+
+test("recordSignin starts a clean record that counts as a success", () => {
+  ls.recordRefreshFailure({ source: "drain", now: 10, baseMs: BASE, capMs: CAP });
+  ls.recordTerminal({ source: "drain", reason: ls.TERMINAL_REASONS.REACTIVATION_REQUIRED, now: 20 });
+  const s = ls.recordSignin({ source: "signin", now: 30 });
+  assert.equal(s.last_success_at, 30);
+  assert.equal(s.last_attempt_at, 30);
+  assert.equal(s.last_outcome, "signed_in");
+  assert.equal(s.terminal, null);
+  assert.equal(s.last_error, null);
+  assert.equal(s.consecutive_failures, 0);
+  assert.equal(s.next_retry_at, null);
+});
+
+test("the last terminal reason outlives SessionStart, a started sign-in and a session change", () => {
+  ls.clearLicenseStatus();
+  ls.recordTerminal({ source: "drain", reason: ls.TERMINAL_REASONS.REACTIVATION_REQUIRED, status: 400, now: 10 });
+  let s = ls.clearTerminal({ source: "session_start" });
+  assert.equal(s.terminal, null);
+  assert.equal(ls.refreshBlockedReason(s, 11), null, "the new session still gets its attempt");
+  assert.equal(ls.lastTerminalReason(s), "reactivation_required");
+
+  s = ls.clearLicenseStatus({ source: "signin" });
+  assert.equal(ls.isSessionEnded(s), true, "a sign-in that only started does not end it");
+
+  writeJson(sessionPath(stateDir), { auth_generation: "a-new-intent" });
+  s = ls.readLicenseStatus();
+  assert.equal(s.terminal, null, "another session's terminal state cannot block this one");
+  assert.equal(ls.refreshBlockedReason(s, 12), null);
+  assert.equal(ls.isSessionEnded(s), true);
+
+  s = ls.recordRefreshFailure({ source: "drain", status: 503, now: 13, baseMs: BASE, capMs: CAP });
+  assert.equal(ls.isSessionEnded(s), true, "an outage says nothing about the session");
+  fs.rmSync(sessionPath(stateDir));
+});
+
+test("only a completed sign-in or a successful renewal clears the last terminal reason", () => {
+  ls.recordTerminal({ source: "drain", reason: ls.TERMINAL_REASONS.REVOKED, status: 402, now: 20 });
+  let s = ls.recordSignin({ source: "signin" });
+  assert.equal(ls.lastTerminalReason(s), null);
+  assert.equal(s.terminal, null);
+
+  ls.recordTerminal({ source: "drain", reason: ls.TERMINAL_REASONS.REACTIVATION_REQUIRED, now: 30 });
+  s = ls.recordRefreshSuccess({ source: "drain", now: 40 });
+  assert.equal(ls.lastTerminalReason(s), null);
+  assert.equal(ls.isSessionEnded(s), false);
+});
+
+test("a late transient failure on a terminal record does not change the reason", () => {
+  ls.clearLicenseStatus();
+  ls.recordTerminal({ source: "drain", reason: ls.TERMINAL_REASONS.REACTIVATION_REQUIRED, now: 50 });
+  ls.recordRefreshFailure({ source: "drain", kind: "refresh", status: 500, now: 60, baseMs: BASE, capMs: CAP });
+  const s = ls.clearTerminal({ source: "session_start" });
+  assert.equal(s.last_error.kind, "refresh");
+  assert.equal(ls.lastTerminalReason(s), "reactivation_required");
+});
+
+test("a terminal record written before the reason had its own field", () => {
+  fs.writeFileSync(ls.LICENSE_STATUS_FILE, JSON.stringify({
+    schema_version: 1,
+    last_outcome: "terminal",
+    last_error: { kind: "reactivation_required", status: 410, message: "" },
+    terminal: { reason: "reactivation_required", at: 70, status: 410, message: "" },
+    revision: 90,
+  }));
+  assert.equal(ls.isSessionEnded(), true);
+  const s = ls.clearTerminal({ source: "session_start" });
+  assert.equal(s.last_terminal_reason, "reactivation_required", "SessionStart carries it over");
+  assert.equal(ls.isSessionEnded(s), true);
 });
 
 test("a terminal record stays terminal when a late transient failure lands", () => {

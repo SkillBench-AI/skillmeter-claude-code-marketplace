@@ -204,11 +204,25 @@ also explain that the global kill-switch still blocks transmission until
 onboarding list remain off and will ask for an explicit choice when first
 entered; use `/skillmeter:telemetry list` for granular changes.
 
+## Sign-in in progress
+
+This is the branch for a hook status that starts with `SkillMeter sign-in in
+progress.` A sign-in is already waiting for the user to approve its code in the
+browser.
+
+Tell the user to approve the code in the browser, then run `/skillmeter:signin`
+again to confirm. Do not present the `!` command as the next step: it runs
+`bin/signin --restart`, which starts a new sign-in and cancels the one waiting
+for approval. Mention it only as a way to start over, for a user who closed the
+browser page, whose code expired, or who already approved and keeps getting
+this status. When you mention it, give it exactly as the hook provided, in a
+fenced code block, and say that it cancels the sign-in in progress.
+
 ## Sign-in required
 
-This is the branch for any hook status that is not the sign-in state JSON
-above — today that is `Sign-in is required.`, and it is what a person without a
-current licence gets.
+This is the branch for any other hook status that is not the sign-in state
+JSON above — today that is `Sign-in is required.`, alone or after `Your
+SkillMeter session ended.` It is what a person without a current licence gets.
 
 Reply with the status the hook gave, and include the `!`-prefixed command
 exactly as provided, on its own line in a fenced code block. Do not rephrase,

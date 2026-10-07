@@ -73,8 +73,32 @@ test("first read without a session copies sign-out and sign-in intent from the s
   assert.deepEqual(fs.readFileSync(shared), before);
   writeJson(shared, { ...original, license_jwt: "later-shared-token" });
   store.markEngaged();
+  assert.equal(store.getSignedOut(), true, "the copied sign-out holds");
   assert.equal(store.getLicenseToken(), null, "copied once, not followed");
   assert.equal(store.isSignedIn(), false);
+});
+
+// A sign-out stays the user's recorded choice while a sign-in waits for
+// approval, and only the sign-in's commit ends it.
+test("a sign-out stays recorded through a started sign-in, until it commits", () => {
+  store.signOut();
+  const expected = { generation: store.markEngaged(), deviceId: original.device_id };
+  assert.equal(store.getSignedOut(), true, "starting a sign-in does not end the sign-out");
+  assert.equal(store.getLicenseToken(), null);
+  assert.equal(store.commitSignin({ jwt: "approved", expected }), true);
+  assert.equal(store.getSignedOut(), false, "the commit ends it");
+  assert.equal(store.getLicenseToken(), "approved");
+});
+
+// The generation is what stops a stale commit: a sign-out during a pending
+// sign-in changes it, so that sign-in cannot commit.
+test("a sign-out during a pending sign-in refuses its commit, on the generation alone", () => {
+  const expected = { generation: store.markEngaged(), deviceId: original.device_id };
+  store.signOut();
+  const before = fs.readFileSync(session);
+  assert.equal(store.commitSignin({ jwt: "late-approval", expected }), false);
+  assert.deepEqual(fs.readFileSync(session), before, "the sign-out stands");
+  assert.equal(store.getSignedOut(), true);
 });
 
 test("terminal status from a previous authentication context cannot block a new token", () => {

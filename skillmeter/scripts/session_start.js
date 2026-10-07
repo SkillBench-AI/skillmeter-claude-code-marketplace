@@ -7,6 +7,8 @@ const {
 } = require("./lib/transfer");
 const {
   clearTerminal,
+  isSessionEnded,
+  lastTerminalReason,
   readLicenseStatus,
   TERMINAL_REASONS,
 } = require("./lib/license-status");
@@ -15,11 +17,10 @@ const {
 // banner is for states only a new sign-in can fix: the refresh chain ended
 // (410/401) or the organization license was revoked (402).
 // SessionStart clears the terminal state to give the new session one attempt,
-// so the banner decision uses the state as the session found it.
-let terminalAtStart = null;
-
+// so the banner reads the last terminal reason, which that clear keeps: it asks
+// for sign-in in every session until a sign-in completes or a renewal succeeds.
 function signInRequiredToRecover() {
-  const reason = (terminalAtStart || readLicenseStatus()?.terminal)?.reason;
+  const reason = lastTerminalReason(readLicenseStatus());
   return (
     reason === TERMINAL_REASONS.REACTIVATION_REQUIRED ||
     reason === TERMINAL_REASONS.REVOKED
@@ -37,6 +38,7 @@ const {
 const { getLicenseAudiences } = require("./lib/jwt");
 const {
   signInRequiredBanner,
+  sessionEndedBanner,
   telemetryConsentRequiredBanner,
   telemetryRepositoryRequiredBanner,
   telemetryActiveBanner,
@@ -64,7 +66,6 @@ async function prepareSession() {
   // sign-in-required state: SessionStart clears the terminal state. Done
   // before the global gate so a session that starts paused and is re-enabled
   // later does not inherit a stale terminal state.
-  terminalAtStart = readLicenseStatus()?.terminal || null;
   clearTerminal({ source: "session_start" });
 }
 
@@ -134,7 +135,9 @@ function runSessionStartHook() {
           credstore.markUploadNotified();
         }
       }
-      if (!credstore.isSignedIn() || signInRequiredToRecover()) {
+      if (credstore.isSignedIn() && isSessionEnded()) {
+        lines.push(sessionEndedBanner());
+      } else if (!credstore.isSignedIn() || signInRequiredToRecover()) {
         lines.push(signInRequiredBanner());
       } else if (gate.mode === "org_consent_required") {
         lines.push(telemetryConsentRequiredBanner(repoScopeDecision.remoteOrg));
