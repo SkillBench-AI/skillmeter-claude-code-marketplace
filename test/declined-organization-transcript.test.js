@@ -46,6 +46,24 @@ test("a resumed session does not send what came before it, once the other organi
   assert.deepEqual(c.transcript(), ["on-u", "on-a"]);
 });
 
+// Here the repository was recording before the other organization was turned
+// off, so its cursor already exists when sending is refused.
+test("turns refused after recording began are not sent once the other organization is on", async (t) => {
+  const c = await collector();
+  t.after(c.close);
+  const f = session(c.url, { orgs: [ORG, OTHER], policy: BOTH_ENABLED });
+
+  await f.sessionStart("startup");
+  await f.turn("first");
+  await f.drained(() => c.transcript().includes("first-a"));
+  f.setPolicy(OTHER_OFF);
+  await f.turn("off");
+  f.setPolicy(BOTH_ENABLED);
+  await f.turn("on");
+  await f.drained(() => c.transcript().includes("on-a"));
+  assert.deepEqual(c.transcript(), ["first-u", "first-a", "on-u", "on-a"]);
+});
+
 // The baseline the two tests above rely on: a session that records normally
 // never sends what its transcript held before it started.
 test("a resumed session that records normally sends only its own turns", async (t) => {
