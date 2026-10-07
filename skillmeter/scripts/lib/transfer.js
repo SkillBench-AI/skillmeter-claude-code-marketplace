@@ -941,7 +941,8 @@ function stageTranscriptDelta(transcriptPath, promptId, deviceId, repository) {
     const cursor = readCursor(transcriptId, other);
     if (!cursor || cursor.discarded) continue;
     if (place.recording) {
-      chunks += stageRepositoryTurns(objs, destinations, transcriptId, promptId, other);
+      // The triggering turn is not this repository's, so no prompt id.
+      chunks += stageRepositoryTurns(objs, destinations, transcriptId, null, other);
     } else {
       advanceCursorToTranscriptTail(transcriptPath, other);
     }
@@ -952,7 +953,12 @@ function stageTranscriptDelta(transcriptPath, promptId, deviceId, repository) {
 // Stage, for one repository, the turns after its cursor that belong to it.
 function stageRepositoryTurns(objs, destinations, transcriptId, promptId, repository) {
   const cursor = readCursor(transcriptId, repository);
-  const delta = liveDeltaStart(objs, cursor, transcriptId, repository);
+  // A recorded hook with a prompt id gives the repository a cursor
+  // (startTranscriptAtTurn), so without one nothing here was recorded for it.
+  // Staging without a turn, at session end, then sends nothing.
+  const neverRecorded = !cursor && !promptId &&
+    objs.some((record) => typeof record?.promptId === "string");
+  const delta = neverRecorded ? { hold: true } : liveDeltaStart(objs, cursor, transcriptId, repository);
   if (delta.hold) {
     // Where an unrecorded period ended is unknown, so it ends here: nothing
     // before this point is sent.
@@ -1139,6 +1145,7 @@ function advanceCursorToTranscriptTail(transcriptPath, repository, {
   const transcriptId = path.basename(transcriptPath);
   const existing = readCursor(transcriptId, repository);
   if (onlyWhenMissing && existing) return false;
+  const readAt = Date.now();
   let raw;
   try {
     raw = fs.readFileSync(transcriptPath, "utf8");
@@ -1150,6 +1157,13 @@ function advanceCursorToTranscriptTail(transcriptPath, repository, {
     record && typeof record.uuid === "string" && record.uuid
   );
   if (!last) return false;
+  // Hooks that run at once read the transcript at different lengths. A cursor
+  // written since this read, past everything it saw, is not moved back.
+  const current = onlyWhenMissing ? null : readCursor(transcriptId, repository);
+  if (current?.lastUuid && (current.updatedAt || 0) >= readAt &&
+      !objs.some((record) => record?.uuid === current.lastUuid)) {
+    return true;
+  }
   const written = writeCursor({
     transcriptId,
     lastUuid: last.uuid,
@@ -1178,12 +1192,18 @@ function startTranscriptAtTurn(input, repository) {
   const transcriptPath = input?.transcript_path;
   if (!transcriptPath || !input.prompt_id || !repository?.repoKey) return false;
   const transcriptId = path.basename(transcriptPath);
-  if (readCursor(transcriptId, repository)) return false;
+  // A cursor that cannot be read still holds staging; it is not replaced.
+  if (readBoundaryFile(cursorPath(transcriptId, repository))) return false;
   let objs;
   try {
     objs = parseJsonl(fs.readFileSync(transcriptPath, "utf8")).objs;
-  } catch {
-    return false;
+  } catch (err) {
+    if (err.code !== "ENOENT") return false;
+    objs = [];
+  }
+  // Nothing written yet: the transcript starts with this turn.
+  if (!lastContentUuid(objs)) {
+    return writeCursor({ transcriptId, lastUuid: null, seq: 0, updatedAt: Date.now() }, repository);
   }
   if (!objs.some((record) => typeof record?.promptId === "string")) return false;
   // Not written yet: the whole transcript came before this turn.
@@ -1216,10 +1236,18 @@ function unlicensedMarkPath(transcriptId) {
 // "" when the transcript is absent or holds no record yet, null when it
 // cannot be read.
 function transcriptTailUuid(transcriptPath, blockBytes = TAIL_BLOCK_BYTES) {
+  const tail = readTranscriptTail(transcriptPath, blockBytes);
+  return tail && tail.uuid;
+}
+
+// { uuid, size }: the newest record's uuid ("" when none) in the first `size`
+// bytes of the transcript; null when it cannot be read.
+function readTranscriptTail(transcriptPath, blockBytes = TAIL_BLOCK_BYTES) {
   let fd;
   try {
     fd = fs.openSync(transcriptPath, "r");
-    let end = fs.fstatSync(fd).size;
+    const size = fs.fstatSync(fd).size;
+    let end = size;
     let cut = Buffer.alloc(0);
     while (end > 0) {
       const start = Math.max(0, end - blockBytes);
@@ -1234,12 +1262,12 @@ function transcriptTailUuid(transcriptPath, blockBytes = TAIL_BLOCK_BYTES) {
         lines = lineEnd === -1 ? Buffer.alloc(0) : lines.subarray(lineEnd + 1);
       }
       const uuid = lastContentUuid(parseJsonl(lines.toString("utf8")).objs);
-      if (uuid) return uuid;
+      if (uuid) return { uuid, size };
       end = start;
     }
-    return "";
+    return { uuid: "", size };
   } catch (err) {
-    return err.code === "ENOENT" ? "" : null;
+    return err.code === "ENOENT" ? { uuid: "", size: 0 } : null;
   } finally {
     if (fd !== undefined) {
       try { fs.closeSync(fd); } catch {}
@@ -1254,14 +1282,21 @@ function transcriptTailUuid(transcriptPath, blockBytes = TAIL_BLOCK_BYTES) {
  */
 function markUnlicensedTranscript(transcriptPath) {
   if (!transcriptPath) return false;
-  const lastUuid = transcriptTailUuid(transcriptPath);
-  if (lastUuid === null) return null;
-  if (!lastUuid) return false;
+  const readAt = Date.now();
+  const tail = readTranscriptTail(transcriptPath);
+  if (tail === null) return null;
+  if (!tail.uuid) return false;
   const transcriptId = path.basename(transcriptPath);
+  const file = unlicensedMarkPath(transcriptId);
+  // Hooks that run at once read the transcript at different lengths. A mark
+  // written since this read, from a longer transcript, is not moved back.
+  const current = safeReadJson(file, null);
+  if ((current?.updatedAt || 0) >= readAt && current.size > tail.size) return true;
   try {
-    atomicWriteJson(unlicensedMarkPath(transcriptId), {
+    atomicWriteJson(file, {
       transcriptId,
-      lastUuid,
+      lastUuid: tail.uuid,
+      size: tail.size,
       updatedAt: Date.now(),
     });
     return true;
@@ -1315,12 +1350,12 @@ function recordPendingBoundary(transcriptPath, repository) {
   }
 }
 
-// A hook that runs inside a repository that is not recording marks its turn,
-// by prompt id, with that repository. Staging never sends a marked turn for
-// another repository, even once the marked one records: whether it was
-// recording is decided when the turn was written. The mark holds the prompt id
-// and an HMAC of the repository, never a path or content, and is appended so
-// that hooks running at once cannot lose one. Local only.
+// A hook that is not recorded marks its turn, by prompt id, with the
+// repository it ran in, or "*" when signed out. Staging never sends a marked
+// turn, even once that repository records: whether it was recording is decided
+// when the turn was written. The mark holds the prompt id and an HMAC of the
+// repository, never a path or content, and is appended so that hooks running
+// at once cannot lose one. Local only.
 const UNRECORDED_TURN_DIR = path.join(LOG_DIR, "unrecorded-turns");
 
 function unrecordedTurnPath(transcriptId) {
@@ -1345,13 +1380,13 @@ function readUnrecordedTurns(transcriptId) {
 
 function markUnrecordedTurn(input, repoScopeDecision) {
   const promptId = input?.prompt_id;
+  const signedOut = repoScopeDecision?.classification === "not_activated";
   const repository = repoScopeDecision?.repoKey ||
     (repoScopeDecision?.repoRoot ? `root:${repoScopeDecision.repoRoot}` : "");
-  if (!input?.transcript_path || typeof promptId !== "string" || !promptId || !repository) {
-    return false;
-  }
+  if (!input?.transcript_path || typeof promptId !== "string" || !promptId) return false;
+  if (!signedOut && !repository) return false;
   const transcriptId = path.basename(input.transcript_path);
-  const place = hashHmac(repository, credstore.getOrCreateHashSalt());
+  const place = signedOut ? "*" : hashHmac(repository, credstore.getOrCreateHashSalt());
   if (!place) return false;
   if (readUnrecordedTurns(transcriptId).get(promptId)?.has(place)) return true;
   try {
@@ -1370,16 +1405,10 @@ function markUnrecordedTurn(input, repoScopeDecision) {
   }
 }
 
-// For turnDestinations: was this turn marked in a repository other than `key`?
+// For turnDestinations: was this turn marked as not recorded?
 function unrecordedTurns(transcriptId) {
   const marks = readUnrecordedTurns(transcriptId);
-  const salt = credstore.getOrCreateHashSalt();
-  return (promptId, key) => {
-    const places = marks.get(promptId);
-    if (!places) return false;
-    const own = key ? hashHmac(key, salt) : "";
-    return [...places].some((place) => place !== own);
-  };
+  return (promptId) => marks.has(promptId);
 }
 
 // A boundary file as staging sees it: null when absent, { value } when read,

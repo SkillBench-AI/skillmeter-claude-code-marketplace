@@ -293,13 +293,25 @@ test("a turn's mark outlives 30 days while the turn waits to be staged", async (
   assert.deepEqual(c.sentFor(REPO_KEY), ["a1-u", "a1-a", "a2-u", "a2-a"]);
 });
 
-// The repository itself keeps its own timing: what it records after being
-// turned on is sent for it.
-test("a repository turned on during a turn sends the rest of that turn, as before", async (t) => {
+// A hook reads the transcript after the fact, so what a turn wrote before its
+// repository was turned on cannot be told from what came after: the turn is
+// not sent, even for that repository, and recording starts with the next.
+test("a repository turned on during a turn starts with the next turn", async (t) => {
   const { c, s } = await start(t, { policy: OTHER_OFF, dir: "other" });
   await s.turn("on", { during: async () => { await s.tool("first"); s.setPolicy(BOTH); await s.tool("second"); } });
+  await s.turn("next");
+  await s.drained(() => c.transcript().includes("next-a"));
+  assert.deepEqual(c.sentFor(OTHER_KEY), ["next-u", "next-a"]);
+});
+
+test("what a turn wrote after its hooks, while its repository was off, is not sent once it is on", async (t) => {
+  const { c, s } = await start(t, { policy: OTHER_OFF, dir: "other" });
+  await s.turn("off");
+  s.late("tail");
+  s.setPolicy(BOTH);
+  await s.turn("on");
   await s.drained(() => c.transcript().includes("on-a"));
-  assert.deepEqual(c.sentFor(OTHER_KEY), ["on-second", "on-a"]);
+  assert.deepEqual(c.sentFor(OTHER_KEY), ["on-u", "on-a"]);
 });
 
 // A known loss, chosen over the leak: once the directory is gone it cannot
@@ -370,4 +382,6 @@ test("a turn that ends outside any repository is sent for the repository it work
   await s.drained(() => c.transcript().includes("next-a") && c.transcript().includes("work-a"));
   assert.deepEqual(c.sentFor(REPO_KEY), ["work-u", "work-edit", "work-a"]);
   assert.deepEqual(c.sentFor(OTHER_KEY), ["next-u", "next-a"]);
+  // Staged by another repository's turn, so it carries no prompt id.
+  assert.deepEqual([...new Set(c.promptIdsFor(REPO_KEY))], [undefined]);
 });

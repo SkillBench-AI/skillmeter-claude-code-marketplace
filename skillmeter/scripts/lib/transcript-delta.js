@@ -98,9 +98,11 @@ function startsTurn(record, promptId) {
  * records carry no working directory is `undefined`, left to the repository
  * staging it.
  *
- * `seenUnrecorded(promptId, key)` is true when a hook of that turn ran in a
- * repository other than `key` that was not recording then. Such a turn goes
- * nowhere even if that repository records by the time it is staged.
+ * `seenUnrecorded(promptId)` is true when a hook of that turn ran while it was
+ * not recorded: signed out, or in a repository not recording then. Such a turn
+ * goes nowhere, even for that repository once it records: a hook reads the
+ * transcript after the fact, so what the turn wrote before and after that
+ * hook cannot be told apart.
  */
 function turnDestinations(objs, placeOf, seenUnrecorded = () => false) {
   const turns = turnNumbers(objs);
@@ -126,7 +128,7 @@ function turnDestinations(objs, placeOf, seenUnrecorded = () => false) {
     const turn = seen.get(number);
     const key = !turn ? undefined : turn.recording ? turn.key : null;
     const promptId = prompts.get(number);
-    return promptId && seenUnrecorded(promptId, key) ? null : key;
+    return promptId && seenUnrecorded(promptId) ? null : key;
   });
 }
 

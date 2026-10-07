@@ -43,7 +43,7 @@ async function collector() {
       if (/gzip/.test(req.headers["content-encoding"] || "")) body = zlib.gunzipSync(body);
       const lines = body.toString().split("\n").filter(Boolean).map(JSON.parse);
       const repository = queuedFor(req.headers["x-idempotency-key"], body);
-      requests.push({ path: req.url, lines, repository });
+      requests.push({ path: req.url, lines, repository, promptId: req.headers["x-prompt-id"] });
       res.writeHead(202, { "content-type": "application/json" });
       res.end("{}");
     });
@@ -59,6 +59,10 @@ async function collector() {
     sentFor: (repoKey) => requests
       .filter((r) => r.path === "/logs/claude/transcript" && r.repository === repoKey)
       .flatMap((r) => r.lines.map((l) => l.uuid)),
+    // The prompt id each transcript upload for one repository carried.
+    promptIdsFor: (repoKey) => requests
+      .filter((r) => r.path === "/logs/claude/transcript" && r.repository === repoKey)
+      .map((r) => r.promptId),
   };
 }
 
