@@ -203,6 +203,78 @@ test("a sign-in after signed-out turns the hooks could not read sends nothing fr
   assert.deepEqual(c.transcript(), ["in-u", "in-a"]);
 });
 
+// With no cursor for the transcript, the turn after sign-in is where the
+// repository is first seen recording, so staging starts there.
+test("the turn after signed-out turns the hooks could not read is sent alone", async (t) => {
+  const c = await collector();
+  t.after(c.close);
+  const s = session(c.url, { policy: ENABLED, signedIn: false });
+
+  await s.sessionStart("startup");
+  s.hideTranscript();
+  await s.turn("out-1");
+  await s.turn("out-2");
+  s.showTranscript();
+  s.signIn();
+  await s.turn("in");
+  await s.drained(() => c.transcript().includes("in-a"));
+  assert.deepEqual(c.transcript(), ["in-u", "in-a"]);
+});
+
+test("what a signed-out turn wrote after its hooks is not sent after signing in again", async (t) => {
+  const c = await collector();
+  t.after(c.close);
+  const s = session(c.url, { policy: ENABLED });
+
+  await s.sessionStart("startup");
+  await s.turn("rec");
+  await s.drained(() => c.transcript().includes("rec-a"));
+  s.signOut();
+  await s.turn("out");
+  s.late("tail");
+  s.signIn();
+  await s.turn("in");
+  await s.drained(() => c.transcript().includes("in-a"));
+  assert.deepEqual(c.transcript(), ["rec-u", "rec-a", "in-u", "in-a"]);
+});
+
+test("what a signed-out turn wrote after its hooks is not sent at session end", async (t) => {
+  const c = await collector();
+  t.after(c.close);
+  const s = session(c.url, { policy: ENABLED, signedIn: false });
+
+  await s.sessionStart("startup");
+  await s.turn("out");
+  s.late("tail");
+  s.signIn();
+  await s.sessionEnd();
+  await s.drained(() => true);
+  assert.deepEqual(c.transcript(), []);
+});
+
+// The SessionStart hook can be killed before it places the cursor.
+test("a resumed session closed without a turn sends nothing when its start never ran", async (t) => {
+  const c = await collector();
+  t.after(c.close);
+  const s = session(c.url, { policy: ENABLED, history: HISTORY });
+
+  await s.sessionEnd();
+  await s.drained(() => true);
+  assert.deepEqual(c.transcript(), []);
+});
+
+test("a session closed after an interrupted first turn still sends that turn", async (t) => {
+  const c = await collector();
+  t.after(c.close);
+  const s = session(c.url, { policy: ENABLED });
+
+  await s.sessionStart("startup");
+  await s.turn("only", { stop: false });
+  await s.sessionEnd();
+  await s.drained(() => c.transcript().includes("only-a"));
+  assert.deepEqual(c.transcript(), ["only-u", "only-a"]);
+});
+
 test("a resumed session whose start could not be recorded sends its own turns, not its history", async (t) => {
   const c = await collector();
   t.after(c.close);

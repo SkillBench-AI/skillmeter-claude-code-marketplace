@@ -164,10 +164,12 @@ test("snapshot seals through the final UUID and live delta continues after it", 
   assert.match(body, /history-b/);
   assert.doesNotMatch(body, /last-prompt/);
 
+  // A new turn that names no directory. The first turn was written in one
+  // that does not exist, so it could not show it was recording.
   writeFile(transcript, jsonl([
     ...records,
     {
-      type: "assistant",
+      type: "user",
       uuid: "history-c",
       message: { content: "new live content" },
     },
