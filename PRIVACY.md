@@ -251,8 +251,8 @@ the feature is introduced.
   last reported, so a stop or a return is announced once. The file holds only
   the state's name, is named by the session identifier, is never sent, and is
   deleted 30 days after its last update. A second file per session records
-  the time of the last sign-in result that session showed, so each result is
-  shown once in each session. It is named by the session identifier, holds
+  the time of the last sign-in result that session showed, or of the one
+  current when it started, so each result is shown once in each session. It is named by the session identifier, holds
   only that time, is never sent, and is deleted 30 days after its last update;
 - uninstalling the plugin may not remove `~/.skillbench/`.
 

@@ -366,6 +366,40 @@ test("a failed sign-in shows in every open session, once", () => {
   }
 });
 
+test("a failed sign-in's line ends in one full stop", () => {
+  const f = collectionClient();
+  f.sessionStart("s");
+  f.write("cs.writeSigninResult({ status: 'failure', error: 'No active SkillMeter license found for your workspaces.' });");
+  assert.equal(
+    f.signinNotice("s").systemMessage,
+    "SkillMeter: sign-in failed — No active SkillMeter license found for your workspaces. Run /skillmeter:signin to retry.",
+  );
+});
+
+test("two handlers of one session for one write show the sign-in notice once", async () => {
+  for (let round = 0; round < 5; round++) {
+    const f = collectionClient();
+    f.sessionStart("s");
+    f.write(signedIn);
+    const outs = await Promise.all([
+      f.started("on_signin_result.js", "s", "signin-result.json"),
+      f.started("on_signin_result.js", "s", "signin-result.json"),
+    ]);
+    assert.equal(outs.filter(Boolean).length, 1, `round ${round}`);
+  }
+});
+
+test("a session opened after a sign-in does not show that result, only later ones", () => {
+  const f = collectionClient();
+  f.sessionStart("s-a");
+  f.write(signedIn);
+  assert.ok(f.signinNotice("s-a"), "an open session shows it");
+  f.sessionStart("s-late");
+  assert.equal(f.signinNotice("s-late"), null, "a session that started after it does not");
+  f.write(signedIn);
+  assert.ok(f.signinNotice("s-late"), "a later sign-in shows there");
+});
+
 test("each session shows each sign-in result once, a newer one again, and no pending one", () => {
   const f = collectionClient();
   f.sessionStart("s");

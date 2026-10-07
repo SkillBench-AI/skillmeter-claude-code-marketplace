@@ -90,6 +90,13 @@ function startSessionState(sessionId) {
   if (!fs.existsSync(LICENSE_STATUS_FILE)) updateLicenseStatus((status) => status);
   const file = sessionStateFile(sessionId);
   withSessionLock(file, () => writeSessionState(file, readCollectionState().state));
+  // A sign-in result from before this session is not news to it: its card
+  // shows where that result left the client. Recorded as shown, so a later
+  // FileChanged for the same write does not print it here.
+  const result = credstore.readSigninResult();
+  if ((result?.status === "success" || result?.status === "failure") && result.ts > lastSigninNoticeShown(sessionId)) {
+    recordSigninNoticeShown(sessionId, result.ts);
+  }
 }
 
 function signinNoticeFile(sessionId) {
@@ -105,6 +112,25 @@ function lastSigninNoticeShown(sessionId) {
 /** on_signin_result: this session's notice printed the result of time `ts`. */
 function recordSigninNoticeShown(sessionId, ts) {
   try { atomicWriteJson(signinNoticeFile(sessionId), { ts }); } catch {}
+}
+
+/**
+ * on_signin_result: hold this session's sign-in notice while one handler
+ * checks, prints and records a result. FileChanged can start two handlers of
+ * one session for one write, and the notice awaits the repository inventory
+ * before it records. The release function, or null when another handler held
+ * it throughout: that one shows the result.
+ */
+function holdSigninNotice(sessionId) {
+  const file = signinNoticeFile(sessionId);
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  let release;
+  while (!(release = acquireLock(`${file}.lock`))) {
+    if (Date.now() >= deadline) return null;
+    sleep(10);
+  }
+  return release;
 }
 
 // Whether this session's sign-in notice printed the sign-in that ended this
@@ -163,6 +189,7 @@ module.exports = {
   SESSION_STATE_DIR,
   SIGNIN_NOTICE_DIR,
   sessionKey,
+  holdSigninNotice,
   lastSigninNoticeShown,
   startSessionState,
   recordSigninNoticeShown,

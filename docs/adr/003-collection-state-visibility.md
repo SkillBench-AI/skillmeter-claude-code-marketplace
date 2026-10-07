@@ -515,16 +515,17 @@ Three cases decision 2 did not rule on:
   printed, in `signin-notices/` in the account directory, one file per session
   named like its state file. The record is written once the notice is printed,
   holds the time only, and is removed 30 days after its last write; a newer
-  result shows again. Where the notice printed a completed sign-in, it stands
+  result shows again. A session starts recorded at the result current when it
+  starts, so a result from before it is not shown there. FileChanged can start
+  two handlers of one session for one write, so they take turns under that
+  session's lock, and the second finds the result shown. Where the notice
+  printed a completed sign-in, it stands
   for the return line, which would only repeat it, so that session skips the
   line. A session whose notice did not print, because it was killed first,
   still gets the line. The collection notice waits up to two seconds for its
   session's record, since both run at once. A notice that takes longer, because
   its walk over the transcripts for the repository inventory is slow, gives its
-  session both lines rather than none. A deadline on that walk is a follow-up.
-  This answers a review comment on #187 (2026-10-06): the notice used to claim
-  each result under one lock for the whole client, so only one session showed
-  it, a failure included.
+  session both lines rather than none.
 - **A sign-in that has started.** A started sign-in does not change the
   resolver's answer: `signed_out` holds until a sign-in commits, and a lost
   license stays `token_missing`. A stop still ends only in a state that can

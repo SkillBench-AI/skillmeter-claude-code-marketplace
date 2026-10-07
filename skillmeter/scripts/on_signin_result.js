@@ -17,7 +17,11 @@ const {
 } = require("./lib/repository-telemetry");
 const telemetryStore = require("./lib/telemetry-store");
 const { readStdinJson } = require("./lib/io");
-const { lastSigninNoticeShown, recordSigninNoticeShown } = require("./lib/collection-notice");
+const {
+  holdSigninNotice,
+  lastSigninNoticeShown,
+  recordSigninNoticeShown,
+} = require("./lib/collection-notice");
 
 // OSC 777 desktop notification. Real ESC/BEL bytes; Claude Code emits the
 // terminalSequence to the terminal verbatim (this field DOES honor escapes,
@@ -37,12 +41,22 @@ async function main() {
   if (!result || result.status === "none" || result.status === "pending") return;
 
   // Every open session shows each result once: FileChanged may report one write
-  // more than once, so each session remembers the last result it showed. The
-  // memory is written once the notice is printed, so a notice killed before
-  // that leaves nothing recorded.
+  // more than once, so each session remembers the last result it showed, and
+  // its handlers take turns. The memory is written once the notice is printed,
+  // so a notice killed before that leaves nothing recorded.
   const sessionId = input?.session_id;
-  if (result.ts && result.ts <= lastSigninNoticeShown(sessionId)) return;
+  const shown = () => result.ts && result.ts <= lastSigninNoticeShown(sessionId);
+  if (shown()) return;
+  const release = holdSigninNotice(sessionId);
+  if (!release) return;
+  try {
+    if (!shown()) await showResult(result, sessionId);
+  } finally {
+    release();
+  }
+}
 
+async function showResult(result, sessionId) {
   if (result.status === "success") {
     const scope = getRepoScopeDecision(process.cwd());
     const org = credstore.getAllowedGitHubOrgs()[0] || "";
@@ -85,7 +99,8 @@ async function main() {
   }
 
   if (result.status === "failure") {
-    const why = result.error ? ` — ${result.error}` : "";
+    // The error is a sentence already; the line adds its own full stop.
+    const why = result.error ? ` — ${String(result.error).replace(/[.\s]+$/, "")}` : "";
     emit({
       systemMessage: `SkillMeter: sign-in failed${why}. Run /skillmeter:signin to retry.`,
       terminalSequence: osc777("SkillMeter", "Sign-in failed — run /skillmeter:signin to retry"),
