@@ -203,6 +203,24 @@ test("a sign-in after signed-out turns the hooks could not read sends nothing fr
   assert.deepEqual(c.transcript(), ["in-u", "in-a"]);
 });
 
+// With no cursor for the transcript, the turn after sign-in is where the
+// repository is first seen recording, so staging starts there.
+test("the turn after signed-out turns the hooks could not read is sent alone", async (t) => {
+  const c = await collector();
+  t.after(c.close);
+  const s = session(c.url, { policy: ENABLED, signedIn: false });
+
+  await s.sessionStart("startup");
+  s.hideTranscript();
+  await s.turn("out-1");
+  await s.turn("out-2");
+  s.showTranscript();
+  s.signIn();
+  await s.turn("in");
+  await s.drained(() => c.transcript().includes("in-a"));
+  assert.deepEqual(c.transcript(), ["in-u", "in-a"]);
+});
+
 test("a resumed session whose start could not be recorded sends its own turns, not its history", async (t) => {
   const c = await collector();
   t.after(c.close);

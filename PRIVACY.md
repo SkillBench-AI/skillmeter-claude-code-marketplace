@@ -97,7 +97,15 @@ device flow, and sent that token to the activation service.
   identifiers;
 - assistant messages exposed by lifecycle hooks;
 - task descriptions and metadata, compact instructions, and failure messages;
-- sanitized transcript records added since the last local transcript cursor;
+- sanitized transcript records added since the last local transcript cursor,
+  from turns last recorded in that repository. A turn is not sent if it was
+  recorded in a directory that no longer exists or in a repository not
+  collecting when the turn is staged. Where the plugin could record it
+  locally, a turn is also not sent for a repository if one of its hooks ran
+  in another that was not collecting at that moment. A
+  repository turned on part-way through a turn that ends in it receives the
+  rest of that turn. Where a turn was written is the working directory Claude
+  Code records, so a file read by path from elsewhere counts as written there;
 - when separately approved, sanitized historical prompt and response records
   through a fixed transcript UUID boundary; historical tool-result and image
   blocks are removed before sanitization;
@@ -224,6 +232,12 @@ the feature is introduced.
   sent; without a position, nothing is sent until the plugin has closed the
   period at a later point. These records are never sent and are kept as long
   as the markers;
+- while a repository is not collecting, the plugin records, for each session
+  transcript, the prompt identifiers of the turns that ran in it, with a
+  hashed repository identifier, so that those turns are not sent for another
+  repository. These records hold no content or paths and are never sent. They
+  are kept while any repository holds a transcript cursor for that session,
+  and are otherwise removed once they are 30 days old;
 - sign-out removes the license and deletes unsent repository telemetry and
   organization audit records (an accepted history import stays queued for a
   sign-in to the same tenant), but
