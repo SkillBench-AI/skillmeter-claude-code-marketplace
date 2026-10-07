@@ -7,20 +7,17 @@
  *   node telemetry.js disable         # opt this project out
  *   node telemetry.js enable-global   # clear the global kill-switch
  *   node telemetry.js disable-global  # set the global kill-switch
- *   node telemetry.js status          # show global + per-project + sign-in state
+ *   node telemetry.js status          # show the collection state + repository settings
  */
 
 const telemetryStore = require("./lib/telemetry-store");
 const { purgeRepositoryQueue } = require("./lib/repository-queue");
 const credstore = require("./credstore.js");
-const {
-  getAllowedGitHubOrgs,
-  getLicenseToken,
-  isLicenseTokenExpired,
-  getSignedOut,
-} = credstore;
+const { getAllowedGitHubOrgs } = credstore;
 const { getRepoScopeDecision } = require("./lib/repo-scope");
 const { resolveTelemetryGate } = require("./lib/telemetry-policy");
+const { readCollectionState } = require("./lib/collection-state");
+const { ADMINISTRATOR, gateReason, needsAdministrator, nextCommand, reasonText } = require("./lib/collection-wording");
 
 const cwd = process.cwd();
 const action = process.argv[2];
@@ -42,14 +39,19 @@ function globalLine() {
   return telemetryStore.getGlobalDisabled() ? "disabled" : "enabled";
 }
 
-function licenseLine() {
-  if (getSignedOut()) return "signed out — run /skillmeter:signin";
-  const token = getLicenseToken();
-  if (!token) return "not signed in — run /skillmeter:signin";
-  if (isLicenseTokenExpired(token)) return "license expired — run /skillmeter:signin";
-  const orgs = getAllowedGitHubOrgs();
-  if (orgs.length === 0) return "signed in (no orgs cached)";
-  return `signed in as ${orgs.join(", ")}`;
+// The collection state for this directory (ADR 003, decision 6): the state
+// and reason the SessionStart card and the notices use, and what to run next.
+function stateLines() {
+  const result = readCollectionState({ cwd });
+  let lines =
+    `  state:        ${result.state}\n` +
+    `  reason:       ${reasonText(result)}\n`;
+  const command = nextCommand(result);
+  if (command) {
+    const administrator = needsAdministrator(result) ? ` · ${ADMINISTRATOR}` : "";
+    lines += `  next:         ${command}${administrator}\n`;
+  }
+  return lines;
 }
 
 function orgLine() {
@@ -75,17 +77,18 @@ function effectiveLine() {
       ? telemetryStore.getRepositoryOverride(repoScopeDecision.repoKey)
       : null,
   });
-  return gate.capture ? `enabled (${gate.mode})` : `disabled (${gate.mode})`;
+  // In the table's words, as the reason above it is.
+  return `${gate.capture ? "enabled" : "disabled"} · ${gateReason(gate.mode)}`;
 }
 
 function printStatus() {
   process.stderr.write(
     "SkillMeter telemetry:\n" +
+    stateLines() +
     `  global:       ${globalLine()}\n` +
     `  organization: ${orgLine()}\n` +
     `  this project: ${projectLine()}\n` +
-    `  effective:    ${effectiveLine()}\n` +
-    `  license:      ${licenseLine()}\n`
+    `  effective:    ${effectiveLine()}\n`
   );
 }
 

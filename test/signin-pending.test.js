@@ -267,7 +267,8 @@ test("the sign-in notice ignores pending and still reports an outcome", () => {
   const data = path.join(root, "data");
   writeCredentials(state, IDENTITY, { dataDir: data });
   const sentinel = path.join(accountDir(state, data), "signin-result.json");
-  const marker = path.join(accountDir(state, data), ".signin-notified");
+  // A hook without a session id remembers what it showed in the client's file.
+  const marker = path.join(accountDir(state, data), "signin-notices", "_client.json");
   const notify = () => spawnSync(process.execPath, [path.join(SCRIPTS, "on_signin_result.js")], {
     encoding: "utf8",
     timeout: 10_000,

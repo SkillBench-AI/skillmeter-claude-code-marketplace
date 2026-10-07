@@ -244,6 +244,16 @@ the feature is introduced.
   organization audit records (an accepted history import stays queued for a
   sign-in to the same tenant), but
   retains the random device identifier, hashing salt, and telemetry policy;
+- the time of the last completed sign-in or license renewal is kept locally,
+  also after a sign-out or a sign-in that does not complete, so the plugin can
+  tell a lost license from a fresh install; it is never uploaded;
+- for each open Claude Code session, the plugin keeps the collection state it
+  last reported, so a stop or a return is announced once. The file holds only
+  the state's name, is named by the session identifier, is never sent, and is
+  deleted 30 days after its last update. A second file per session records
+  the time of the last sign-in result that session showed, so each result is
+  shown once in each session. It is named by the session identifier, holds
+  only that time, is never sent, and is deleted 30 days after its last update;
 - uninstalling the plugin may not remove `~/.skillbench/`.
 
 To remove the retained local identity and policy files, sign out first, close

@@ -17,6 +17,7 @@ const telemetryStore = require("./lib/telemetry-store");
 const { repositoryQueuePaths } = require("./lib/paths");
 const { getRepoScopeDecision } = require("./lib/repo-scope");
 const { resolveTelemetryGate } = require("./lib/telemetry-policy");
+const { gateReason } = require("./lib/collection-wording");
 const { appendCaptureExcluded } = require("./lib/organization-audit-queue");
 const { observeSessionCwd } = require("./lib/cwd-context");
 
@@ -115,18 +116,7 @@ const readStdin = () => readStdinJson({ tty: null, empty: null });
 // doesn't supply an onGate reactor.
 function defaultGateMessaging(eventName, gate) {
   if (!gate.capture) {
-    const reasons = {
-      global_disabled: "telemetry globally disabled",
-      not_signed_in: "not signed in",
-      cwd_unavailable: "hook cwd missing or invalid",
-      out_of_scope: "repository outside the licensed org",
-      org_consent_required: "organization telemetry choice required",
-      org_disabled: "telemetry disabled for this organization",
-      project_disabled: "telemetry disabled for this project",
-      repository_consent_required: "repository telemetry choice required",
-    };
-    const reason = reasons[gate.mode] || "telemetry not enabled";
-    console.error(`[skillmeter] ${eventName}: skipped (${reason})`);
+    console.error(`[skillmeter] ${eventName}: skipped (${gateReason(gate.mode)})`);
   }
 }
 

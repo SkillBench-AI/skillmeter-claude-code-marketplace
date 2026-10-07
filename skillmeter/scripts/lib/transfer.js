@@ -1809,6 +1809,17 @@ function cleanupStaleFiles() {
     }
   }
 
+  // Each session's last collection state, and the last sign-in result its
+  // notice showed. A session ends without saying so, so its files age out
+  // here. Both directories are the notices' own, so a lock a killed hook left
+  // behind ages out too; no hook holds one for more than seconds.
+  const { SESSION_STATE_DIR, SIGNIN_NOTICE_DIR } = require("./collection-notice");
+  for (const dir of [SESSION_STATE_DIR, SIGNIN_NOTICE_DIR]) {
+    try {
+      for (const f of fs.readdirSync(dir)) candidates.push(path.join(dir, f));
+    } catch {}
+  }
+
   let deleted = 0;
   for (const p of candidates) {
     try {
