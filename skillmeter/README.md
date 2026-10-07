@@ -54,6 +54,11 @@ raw path, repository name or transcript into that audit.
 Turning an organization or repository OFF deletes its queued live payloads.
 Privacy cursors track observed disabled and signed-out transcript intervals so
 enabling a repository or signing in later does not upload those intervals.
+When a session moves between repositories, each turn is sent only for the
+last repository it was recorded in, by the working directory Claude Code
+records. It is not sent if one of its hooks ran while signed out or in a
+repository that was not collecting at that moment; recording turned on
+part-way through a turn starts with the next turn.
 Global OFF pauses capture and transmission while retaining queued data.
 
 ## Historical sessions

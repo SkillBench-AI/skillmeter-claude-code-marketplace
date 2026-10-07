@@ -30,15 +30,24 @@ const { observeSessionCwd } = require("./lib/cwd-context");
 // that content from it is never sent later. Without a license there is no
 // repository to hold a cursor, so the transcript itself is marked. A boundary
 // that does not land is recorded as pending, so staging cannot start before it.
+// The turn is marked too, so what it writes after this hook read the
+// transcript is not sent either.
 function keepTranscriptCursorAtTail(input, repoScopeDecision) {
   if (!input.transcript_path) return;
+  let transfer;
+  try {
+    transfer = require("./lib/transfer");
+  } catch {
+    return;
+  }
+  try {
+    transfer.markUnrecordedTurn(input, repoScopeDecision);
+  } catch {}
   const repository = repoScopeDecision.repoKey
     ? { repoKey: repoScopeDecision.repoKey, org: repoScopeDecision.remoteOrg }
     : null;
   if (!repository && repoScopeDecision.classification !== "not_activated") return;
-  let transfer;
   try {
-    transfer = require("./lib/transfer");
     const closed = repository
       ? transfer.advanceCursorToTranscriptTail(input.transcript_path, repository)
       : transfer.markUnlicensedTranscript(input.transcript_path);
@@ -54,16 +63,17 @@ function getTranscriptId(transcriptPath) {
   return path.basename(transcriptPath);
 }
 
+// "logged", "refused" when sending is not allowed, or "failed".
 function logEvent(event, sessionId, data, deviceId, repoKey, hashSalt) {
-  if (!deviceId || !repoKey || !hashSalt) return false;
-  if (!credstore.isTelemetryTransmissionAllowed(repoKey)) return false;
+  if (!deviceId || !repoKey || !hashSalt) return "failed";
+  if (!credstore.isTelemetryTransmissionAllowed(repoKey)) return "refused";
 
   const queue = repositoryQueuePaths(repoKey, hashSalt);
   const logFile = queue.eventLog;
   try {
     fs.mkdirSync(path.dirname(logFile), { recursive: true });
     const existing = safeReadJson(queue.metadata, null);
-    if (existing && existing.repoKey !== repoKey) return false;
+    if (existing && existing.repoKey !== repoKey) return "failed";
     if (!existing) {
       atomicWriteJson(queue.metadata, {
         repoKey,
@@ -83,10 +93,10 @@ function logEvent(event, sessionId, data, deviceId, repoKey, hashSalt) {
     };
 
     fs.appendFileSync(logFile, JSON.stringify(logEntry) + "\n");
-    return true;
+    return "logged";
   } catch (err) {
     console.error(`[skillmeter] ${event}: log write failed (${err.message})`);
-    return false;
+    return "failed";
   }
 }
 
@@ -324,7 +334,7 @@ async function runHook(eventName, buildData, options = {}) {
   // same-named field a hook might emit.
   data._sanitization = meta;
 
-  const logged = logEvent(
+  const result = logEvent(
     eventName,
     sessionId,
     data,
@@ -332,13 +342,13 @@ async function runHook(eventName, buildData, options = {}) {
     repoScopeDecision.repoKey,
     hashSalt
   );
-  if (!logged) {
-    console.error(`[skillmeter] ${eventName}: skipped (policy changed before write)`);
+  if (result !== "logged") {
     // The gate reads only this repository's organization; sending needs every
     // licensed organization. When sending is refused, this period is not
     // recorded either, and the same rule applies. A write that failed is not a
     // refusal and leaves the cursor for the next turn.
-    if (!credstore.isTelemetryTransmissionAllowed(repoScopeDecision.repoKey)) {
+    if (result === "refused") {
+      console.error(`[skillmeter] ${eventName}: skipped (policy changed before write)`);
       keepTranscriptCursorAtTail(input, repoScopeDecision);
     }
     await runOptionalCallback(
@@ -356,6 +366,14 @@ async function runHook(eventName, buildData, options = {}) {
     process.exit(0);
   }
   console.error(`[skillmeter] ${eventName}: logged (session=${sessionId.slice(0, 8)}…)`);
+  // The first recorded hook in a repository marks the turn its transcript
+  // starts from there.
+  try {
+    require("./lib/transfer").startTranscriptAtTurn(input, {
+      repoKey: repoScopeDecision.repoKey,
+      org: repoScopeDecision.remoteOrg,
+    });
+  } catch {}
 
   await runOptionalCallback(
     eventName,

@@ -97,7 +97,15 @@ device flow, and sent that token to the activation service.
   identifiers;
 - assistant messages exposed by lifecycle hooks;
 - task descriptions and metadata, compact instructions, and failure messages;
-- sanitized transcript records added since the last local transcript cursor;
+- sanitized transcript records added since the last local transcript cursor,
+  from turns last recorded in that repository. A turn is not sent if it was
+  recorded in a directory that no longer exists or in a repository not
+  collecting when the turn is staged. Where the plugin could record it
+  locally, a turn is also not sent if one of its hooks ran while signed out
+  or in a repository that was not collecting at that moment, including the
+  repository it ends in: recording turned on part-way through a turn starts
+  with the next one. Where a turn was written is the working directory Claude
+  Code records, so a file read by path from elsewhere counts as written there;
 - when separately approved, sanitized historical prompt and response records
   through a fixed transcript UUID boundary; historical tool-result and image
   blocks are removed before sanitization;
@@ -213,8 +221,9 @@ the feature is introduced.
   scope, while privacy cursors can remain to prevent later upload of content
   created while telemetry was disabled;
 - while no license is held, the plugin stores, for each session transcript, the
-  identifier of the newest record it has seen, so that signing in later does
-  not upload earlier content. These markers are never sent. They are kept
+  identifier of the newest record it has seen and the transcript's length at
+  that point, so that signing in later does not upload earlier content. These
+  markers are never sent. They are kept
   while any repository holds a transcript cursor for that session, and are
   otherwise removed once they are 30 days old;
 - when such a marker or a privacy cursor cannot be written, or the transcript
@@ -224,6 +233,13 @@ the feature is introduced.
   sent; without a position, nothing is sent until the plugin has closed the
   period at a later point. These records are never sent and are kept as long
   as the markers;
+- while a repository is not collecting, or no license is held, the plugin
+  records, for each session transcript, the prompt identifiers of the turns
+  that ran then, with a hashed repository identifier (none when signed out),
+  so that those turns are not sent. These records hold no content or paths
+  and are never sent. They
+  are kept while any repository holds a transcript cursor for that session,
+  and are otherwise removed once they are 30 days old;
 - sign-out removes the license and deletes unsent repository telemetry and
   organization audit records (an accepted history import stays queued for a
   sign-in to the same tenant), but
