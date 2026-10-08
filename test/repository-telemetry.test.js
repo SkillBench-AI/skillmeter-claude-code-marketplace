@@ -838,9 +838,14 @@ test("telemetry skill resolves a reply only against the list it printed", () => 
     /plainly a\s+different request is not a reply: change nothing, handle it as that request/
   );
   // The window closes: a name sent after an unrelated exchange is not a reply.
+  // It stays open for the corrected selection a refusal asks for.
   assert.match(
     skillBlock("is a reply"),
     /\bonly the message (right |immediately |directly )?after the list\b/i
+  );
+  assert.match(
+    skillBlock("is a reply"),
+    /\bafter\s+(this\s+skill|the\s+skill|it)\s+asked\s+for\s+a\s+(corrected|new|whole)\s+selection\b/i
   );
   assert.match(skillBlock("is a reply"), /the list no longer applies/);
   assert.doesNotMatch(

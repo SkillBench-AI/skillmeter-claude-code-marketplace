@@ -94,8 +94,9 @@ or `none`. End your turn there, and run no command until the reply arrives.
 
 ## The reply
 
-Only the message right after the list is a reply, and these instructions apply
-to it; its numbers and names refer to that list. A message that is plainly a
+Only the message right after the list, or right after this skill asked for a
+corrected selection, is a reply, and these instructions apply to it; its
+numbers and names refer to the list printed last. A message that is plainly a
 different request is not a reply: change nothing, handle it as that request,
 and say that the list no longer applies — `/skillmeter:telemetry` prints it
 again. `none`, or a reply that plainly declines, changes nothing.
