@@ -33,101 +33,125 @@ Report the global state and the enabled and disabled counts. Repositories whose
 `action` is `null` are blocked by the global or organization setting: list
 their `optionLabel` and `description`, but do not offer them as toggle choices.
 
-Before opening the first page, mention in one line that
-`/skillmeter:telemetry enable`, run inside a repository, opts that repository in
-without the picker at all — the global and organization gates still apply.
+Before asking, mention in one line that `/skillmeter:telemetry enable`, run
+inside a repository, opts that repository in without this review at all — the
+global and organization gates still apply.
 
-For repositories with a non-null `action`, use `AskUserQuestion`. Claude Code's
-native question UI supports only 2-4 options per question; it does not expose a
-plugin API for an arbitrary-length scrollable picker. Paginate deterministically
-instead:
+## The question
 
-- Show exactly one question per `AskUserQuestion` call, then wait for its answer
-  before showing the next page. Never put several repository pages in one call.
-- Split repositories into stable pages while preserving JSON order: three per
-  page, the last page taking whatever remains.
-- Give every page one extra option, last, labelled exactly
-  `→ Done with this page`, described as
-  `Finish this page. Anything you selected above is still applied.` It is how a
-  page is turned, so a page is never left by submitting nothing, and every page
-  has 2-4 options without a special case for a short last page.
-- Header: `Repos X/N`, where X is the 1-based page and N is the total number of
-  pages. Keep it at most 12 characters.
-- Question: `Page X/N — select repositories to toggle. Space selects changes; choose “→ Done with this page” when you are finished with it.`
-- Use each repository's `optionLabel` and `description` exactly as returned.
-- Set `multiSelect: true` on every page.
-- After every answer, apply that page if it yielded any recognized ID, report
-  `Reviewed X/N pages`, and go on to the next page until every page has been
-  answered or a page is rejected.
+If no repository has a non-null `action`, report that there is nothing to
+change and do not call `AskUserQuestion`. Otherwise call it once, with one
+single-select question (`multiSelect: false`), header `Telemetry`, question
+`Change telemetry for these repositories?`, and these options in this order:
 
-Map selected option labels back to the exact repository IDs from the JSON.
-The latest Claude Code response may represent a multi-select answer as an array
-of labels or as one comma-joined string; normalize both forms before mapping.
-Ignore custom text and labels that were not returned by the script.
-`→ Done with this page` is this file's own option, not a repository; it
-never maps to an ID.
+- `Enable all (N off)`, if N > 0, where N counts repositories whose `action` is
+  `"enable"`. Description: `Turn on the N repositories that are off.`
+- `Disable all (M on)`, if M > 0, where M counts repositories whose `action` is
+  `"disable"`. Description: `Turn off the M repositories that are on.`
+- `Pick individually`, always. Description:
+  `Print the list and reply with numbers or names.`
 
-Judge each page only on what it returns:
+Read the answer:
 
-- An answer carrying one or more repository labels: toggle exactly those
-  repositories, then continue to the next page. If it also carries
-  `→ Done with this page`, the repository labels win and that option is
-  ignored.
-- An answer carrying only `→ Done with this page`: change nothing for that
-  page, run no command for it, and continue to the next one.
-- An answer carrying no recognized label at all, which is what a page submitted
-  with nothing selected returns. Claude Code words that result
-  `The user did not answer the questions.` — read that sentence as an answer,
-  not as a cancellation, however it is phrased: a cancellation arrives as a
-  rejected tool call instead, described next. It means what
-  `→ Done with this page` means: change nothing for that page, run no
-  command for it, and continue to the next one. Never treat it as a reason to
-  stop, and never re-ask the page. If the answer carried typed text, quote it
-  back before showing the next page so it is not passed over in silence; do not
-  read it as an instruction.
-- A rejected tool call, which is not an answer at all: an error result saying
-  the tool use was rejected, with or without a message from the user. Either
-  way, start no further page. Claude Code's rejection result itself directs the
-  model to stop and wait, so this report may not be reachable until the user
-  speaks again; when it is, cover every page already answered, including pages
-  that changed nothing, and mark later pages as unreviewed.
+- `Enable all (N off)`: apply every repository whose `action` is `"enable"`,
+  and no other, in one `toggle`. `Disable all (M on)`: the same for
+  `"disable"`. Print no list for either.
+- `Pick individually`: print the list.
+- Custom text, typed into the `Other` option that Claude Code adds to every
+  question, changes nothing, because the list has not been shown yet: quote it
+  back, say that nothing changed, then print the list and ask.
+- `The user did not answer the questions.`: change nothing, run no command,
+  say so, and stop.
+- A rejected tool call — Esc, or `Chat about this`, which Claude Code adds and
+  reports as the user declining to answer — with or without a message: stop.
+  Change nothing, run no command, and ask nothing further.
 
-Pages already applied stay applied — never roll one back. That is why each page
-is applied as it is answered rather than held to the end: a rejection can arrive
-before the last page, and what it stops is the asking, not what is already
-written.
+## The list
 
-Apply a page's selections as soon as that page is answered, one command per page
-that yielded recognized IDs, passing only the validated 12-character hexadecimal
-IDs:
+Print it as plain text in your reply, never through `AskUserQuestion`: one
+line per repository whose `action` is not `null`, grouped by current state —
+off (`action` `"enable"`) first, then on (`action` `"disable"`), each in JSON
+order — and numbered 1, 2, 3, … continuously across both groups. Mark lines as
+the sign-in inventory does, `○ OFF` or `✓ ON`, then the `displayName`. Leave
+out an empty group. Where two repositories share a `displayName`, print the
+suffix their `optionLabel`s add after it; those two can be named only by
+number. The blocked ones (`action` `null`) come last, unnumbered, each with its
+`description`:
+
+```text
+Off — naming one turns it on
+  1. ○ OFF  @acme/api
+  2. ○ OFF  @acme/web
+On — naming one turns it off
+  3. ✓ ON   @acme/docs
+Blocked — cannot be changed here
+     ○ OFF  @other/tool  Disabled for @other.
+```
+
+Then ask, in one line, for the repositories to change in the next message:
+numbers, or at least three letters of each name, separated by commas or spaces,
+or `none`. End your turn there, and run no command until the reply arrives.
+
+## The reply
+
+Only the message right after the list, or right after this skill asked for a
+corrected selection, is a reply, and these instructions apply to it; its
+numbers and names refer to the list printed last. A message that is plainly a
+different request is not a reply: change nothing, handle it as that request,
+and say that the list no longer applies — `/skillmeter:telemetry` prints it
+again. `none`, or a reply that plainly declines, changes nothing.
+
+Otherwise split the reply into tokens at commas, whitespace and the word `and`,
+and resolve each to exactly one numbered line:
+
+- A token of digits only is a line number. No such line: not a repository.
+- Any other token shorter than three characters, or, ignoring case, any of
+  `the`, `a`, `an`, `to`, `for`, `in`, `of`, `on`, `off`, `all`, `turn`,
+  `enable`, `disable`, `please`, `repo`, `repos`, `repository`,
+  `repositories`, `telemetry`, is not a repository, whatever names contain it.
+- A reply that says what to leave out or which way to switch — `not`, `except`,
+  `but`, `only`, `keep`, `on`, `off`, `turn`, `enable` or `disable` — is not
+  resolved at all, even if every word matches a name: change nothing, say how
+  it would have read, and ask again.
+- Each remaining token names every numbered line whose `displayName`
+  contains it, ignoring case. One line: that repository. None: not a repository
+  — if it matches only a blocked repository, say so and why. Several: ambiguous.
+
+Never match a path, an `id`, an `optionLabel`, a `description`, or anything
+else the list did not print, and never guess: quote an unmatched token back as
+it was typed, without suggesting which repository it might have meant. A
+repository named twice counts once.
+If any token is not a repository or is ambiguous, change nothing at all,
+not even for the tokens that resolved: quote each one back, the ambiguous ones
+with the numbered lines they matched, and ask for the whole selection again by
+number or name. If the reply used `on`, `off`, `enable`, `disable` or `turn`,
+say once that each repository switches as the list shows, off to on and on to
+off, and give the current state of each repository it named, since a word like
+`on` or `off` is not an instruction. End your turn. When every token resolves,
+apply them all in one `toggle`.
+
+## Applying
 
 ```bash
 node ${CLAUDE_PLUGIN_ROOT}/scripts/repository_telemetry.js toggle REVISION ID...
 ```
 
-For `REVISION`, use the `revision` from the `list` result on the first page that
-changes anything, and thereafter the `revision` returned by the previous
-`toggle` — every applied change advances it. Never run the command for a page
-that yielded no recognized ID; it requires at least one ID.
+Run it once for the whole selection, with the `revision` from the `list` the
+selection was made from and every validated 12-character hexadecimal ID
+together. It applies each repository's own `action`, so each ID switches as the
+list showed. Never pass a repository path, display name, custom answer, or
+inferred ID to it. If it fails, report the error and change nothing more.
 
-Never pass a repository path, display label, custom answer, or inferred ID to
-the command.
+The settings changed while this was open if the result has `stale: true`
+(nothing was written) or an entry carries `reason: "stale_policy"` (the IDs
+before it were applied unless their own entry says otherwise, and the rest were
+not). Report what was and was not applied from each entry's own `changed` and
+`reason`, never retry the selection on your own, re-run `list`, print the list
+once from it, and ask for a reply again as above; the next `toggle` uses its
+`revision`.
 
-The settings changed while the picker was open if a `toggle` result has
-`stale: true`, in which case nothing was written for that page, or if any result
-in it carries `reason: "stale_policy"`, in which case the ids before it were
-applied and the rest were not. Either way, keep whatever was applied, report it,
-do not retry the selection automatically, and re-run `list` — its `revision` is
-the one the next `toggle` uses.
-Re-paginate the repositories from the page that went stale, less any the command
-did apply, together with those on pages not yet shown — by the same
-three-at-a-time rule, with `→ Done with this page` on every page as
-before. Numbering restarts with that pagination: the `Repos X/N` header,
-the `Page X/N` question text and `Reviewed X/N pages` all follow it, so say that
-the page count changed.
-
-After the last page, report across all pages every changed repository and every
-unchanged one with its reason.
+End with every repository changed and its new state, every one unchanged with
+its reason, and the blocked ones with their `description`.
 
 For a non-empty argument other than `list`, preserve backward compatibility by
 running the existing telemetry management script:
