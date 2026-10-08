@@ -805,7 +805,8 @@ test("telemetry skill resolves a reply only against the list it printed", () => 
     TELEMETRY_SKILL,
     /A message that is plainly a different\s+request is not a reply: change nothing and handle it as that request\./
   );
-  assert.match(TELEMETRY_SKILL, /the list did not print, and never guess\./);
+  assert.match(TELEMETRY_SKILL, /the list did not print, and never guess: quote an unmatched token back/);
+  assert.match(TELEMETRY_SKILL, /without suggesting which repository it might have meant/);
   // One unresolved token holds back the whole reply, so a typo never leaves
   // the rest half-applied and the next answer restates the selection.
   assert.match(

@@ -109,16 +109,18 @@ and resolve each to exactly one numbered line:
   `enable`, `disable`, `please`, `repo`, `repos`, `repository`,
   `repositories`, `telemetry`, is not a repository, whatever names contain it.
 - A reply that says what to leave out or which way to switch — `not`, `except`,
-  `but`, `only`, `keep`, or a direction word above — is not resolved at all,
-  even if every word matches a name: change nothing, say how it would have
-  read, and ask again.
+  `but`, `only`, `keep`, `on`, `off`, `turn`, `enable` or `disable` — is not
+  resolved at all, even if every word matches a name: change nothing, say how
+  it would have read, and ask again.
 - Each remaining token names every numbered line whose `displayName`
   contains it, ignoring case. One line: that repository. None: not a repository
   — if it matches only a blocked repository, say so and why. Several: ambiguous.
 
 Never match a path, an `id`, an `optionLabel`, a `description`, or anything
-else the list did not print, and never guess. A repository named twice counts
-once. If any token is not a repository or is ambiguous, change nothing at all,
+else the list did not print, and never guess: quote an unmatched token back as
+it was typed, without suggesting which repository it might have meant. A
+repository named twice counts once.
+If any token is not a repository or is ambiguous, change nothing at all,
 not even for the tokens that resolved: quote each one back, the ambiguous ones
 with the numbered lines they matched, and ask for the whole selection again by
 number or name. If the reply used `on`, `off`, `enable`, `disable` or `turn`,
@@ -144,7 +146,8 @@ The settings changed while this was open if the result has `stale: true`
 before it were applied unless their own entry says otherwise, and the rest were
 not). Report what was and was not applied from each entry's own `changed` and
 `reason`, never retry the selection on your own, re-run `list`, print the list
-once from it, and ask for a reply again; the next `toggle` uses its `revision`.
+once from it, and ask for a reply again as above; the next `toggle` uses its
+`revision`.
 
 End with every repository changed and its new state, every one unchanged with
 its reason, and the blocked ones with their `description`.
