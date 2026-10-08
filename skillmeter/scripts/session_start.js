@@ -5,28 +5,12 @@ const {
   cleanupStaleFiles,
   initializeTranscriptCursor,
 } = require("./lib/transfer");
-const {
-  clearTerminal,
-  readLicenseStatus,
-  TERMINAL_REASONS,
-} = require("./lib/license-status");
-
-// Recording continues while a license waits out an outage, so the sign-in
-// banner is for states only a new sign-in can fix: the refresh chain ended
-// (410/401) or the organization license was revoked (402).
-// SessionStart clears the terminal state to give the new session one attempt,
-// so the banner decision uses the state as the session found it.
-let terminalAtStart = null;
-
-function signInRequiredToRecover() {
-  const reason = (terminalAtStart || readLicenseStatus()?.terminal)?.reason;
-  return (
-    reason === TERMINAL_REASONS.REACTIVATION_REQUIRED ||
-    reason === TERMINAL_REASONS.REVOKED
-  );
-}
+const { LICENSE_STATUS_FILE, clearTerminal } = require("./lib/license-status");
+const { STATES, readCollectionState } = require("./lib/collection-state");
+const { startSessionState } = require("./lib/collection-notice");
 const { detectHarness } = require("./harness.js");
 const { PLUGIN_ROOT, PLUGIN_VERSION } = require("./lib/paths");
+const { TELEMETRY_POLICY_FILE } = require("./lib/config");
 const { initializeBackfillLifecycle } = require("./lib/backfill-state");
 const {
   BACKFILL_RESULT_FILE,
@@ -37,6 +21,8 @@ const {
 const { getLicenseAudiences } = require("./lib/jwt");
 const {
   signInRequiredBanner,
+  sessionEndedBanner,
+  pausedBanner,
   telemetryConsentRequiredBanner,
   telemetryRepositoryRequiredBanner,
   telemetryActiveBanner,
@@ -64,8 +50,38 @@ async function prepareSession() {
   // sign-in-required state: SessionStart clears the terminal state. Done
   // before the global gate so a session that starts paused and is re-enabled
   // later does not inherit a stale terminal state.
-  terminalAtStart = readLicenseStatus()?.terminal || null;
   clearTerminal({ source: "session_start" });
+}
+
+// The card for the collection state (ADR 003, decision 4), or "" when the state
+// needs none. SessionStart's terminal clear has already run; the state reads
+// the reason that clear keeps.
+function stateBanner({ state, reason }, repoScopeDecision) {
+  const org = repoScopeDecision.remoteOrg;
+  switch (state) {
+    case STATES.PAUSED:
+      return pausedBanner();
+    case STATES.SIGNED_OUT:
+    case STATES.NEVER_SIGNED_IN:
+    case STATES.TOKEN_MISSING:
+    case STATES.REVOKED:
+      return signInRequiredBanner(state);
+    case STATES.DELIVERY_PAUSED:
+      return sessionEndedBanner();
+    case STATES.RECORDING:
+      return telemetryActiveBanner(org);
+    case STATES.UNCONFIGURED:
+      // Only a pending choice has a card. Telemetry the user turned off, a
+      // repository outside the license and no working directory stay quiet.
+      if (reason === "org_consent_required") return telemetryConsentRequiredBanner(org);
+      if (reason === "repository_consent_required") {
+        const repository = repoScopeDecision.repoName ? `@${org}/${repoScopeDecision.repoName}` : "";
+        return telemetryRepositoryRequiredBanner(org, repository);
+      }
+      return "";
+    default:
+      return "";
+  }
 }
 
 function runSessionStartHook() {
@@ -101,15 +117,27 @@ function runSessionStartHook() {
     };
   }, {
     // React to the gate runHook already resolved (capture decision stays central).
-    onGate: ({ gate, repoScopeDecision }) => {
+    onGate: ({ gate, repoScopeDecision, input }) => {
+      // The state this session starts in, so a FileChanged notice announces
+      // only what changes after the card below.
+      try { startSessionState(input.session_id); } catch {}
       // Single SessionStart stdout JSON. Always register the sign-in sentinel so
       // the FileChanged notifier can report sign-in success/failure without the
-      // user re-running /skillmeter:signin. Attach exactly one banner when
-      // relevant (not-signed-in vs telemetry-active are mutually exclusive).
+      // user re-running /skillmeter:signin. Register the session, its status
+      // record and the telemetry policy for the collection notices: the pause
+      // masks every other state, so lifting it can reveal a stop. Attach
+      // exactly one banner when relevant (not-signed-in vs telemetry-active are
+      // mutually exclusive).
       const out = {
         hookSpecificOutput: {
           hookEventName: "SessionStart",
-          watchPaths: [credstore.SIGNIN_RESULT_FILE, BACKFILL_RESULT_FILE],
+          watchPaths: [
+            credstore.SIGNIN_RESULT_FILE,
+            BACKFILL_RESULT_FILE,
+            credstore.SESSION_FILE,
+            LICENSE_STATUS_FILE,
+            TELEMETRY_POLICY_FILE,
+          ],
         },
       };
       // One banner (not-signed-in vs telemetry-active are mutually exclusive),
@@ -134,23 +162,8 @@ function runSessionStartHook() {
           credstore.markUploadNotified();
         }
       }
-      if (!credstore.isSignedIn() || signInRequiredToRecover()) {
-        lines.push(signInRequiredBanner());
-      } else if (gate.mode === "org_consent_required") {
-        lines.push(telemetryConsentRequiredBanner(repoScopeDecision.remoteOrg));
-      } else if (gate.mode === "repository_consent_required") {
-        const repository = repoScopeDecision.repoName
-          ? `@${repoScopeDecision.remoteOrg}/${repoScopeDecision.repoName}`
-          : "";
-        lines.push(telemetryRepositoryRequiredBanner(
-          repoScopeDecision.remoteOrg,
-          repository
-        ));
-      } else if (gate.capture && repoScopeDecision.allowed) {
-        // Telemetry actually captures only when the repo is in scope too (the
-        // hard repo-scope block downstream); show "active" only then.
-        lines.push(telemetryActiveBanner(repoScopeDecision.remoteOrg));
-      }
+      const banner = stateBanner(readCollectionState({ gate }), repoScopeDecision);
+      if (banner) lines.push(banner);
       if (lines.length) out.systemMessage = lines.join("\n");
       process.stdout.write(JSON.stringify(out) + "\n");
 

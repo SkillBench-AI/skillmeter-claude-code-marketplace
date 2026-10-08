@@ -96,6 +96,85 @@ test("computeDelta: unknown cursor uuid -> reset from 0", () => {
 });
 
 // ---- splitLinesByBudget ----------------------------------------------------
+// ---- turns -------------------------------------------------------------------
+test("turnNumbers: a new promptId starts a turn; its tool results and replies stay in it", () => {
+  const objs = [
+    meta("attachment"),
+    { type: "user", promptId: "p1", message: { content: "ask" } },
+    content("p1-a"),
+    { type: "user", promptId: "p1", message: { content: [{ type: "tool_result" }] } },
+    { type: "user", promptId: "p1", isMeta: true, message: { content: "hook context" } },
+    { type: "user", promptId: "p2", message: { content: "next" } },
+    meta(),
+  ];
+  assert.deepEqual(d.turnNumbers(objs), [0, 1, 1, 1, 1, 2, 2]);
+});
+
+test("turnNumbers: without promptIds, a user record that is not a tool result starts a turn", () => {
+  const objs = [
+    { type: "user", message: { content: "ask" } },
+    { type: "user", message: { content: [{ type: "tool_result" }] } },
+    content("a"),
+    { type: "user", message: { content: [{ type: "text", text: "next" }] } },
+  ];
+  assert.deepEqual(d.turnNumbers(objs), [1, 1, 1, 2]);
+});
+
+test("turnDestinations: a turn goes to the repository it ended in, if every one it touched records", () => {
+  const places = {
+    "/a": { key: "A", recording: true },
+    "/b": { key: "B", recording: true },
+    "/off": { key: "OFF", recording: false },
+    "/out": null,
+    "/gone": undefined,
+  };
+  const turn = (promptId, ...cwds) => [
+    { type: "user", promptId, cwd: cwds[0] },
+    ...cwds.slice(1).map((cwd) => ({ type: "assistant", cwd })),
+  ];
+  const objs = [
+    ...turn("moved", "/a", "/b"),
+    ...turn("stepped-out", "/a", "/out"),
+    ...turn("outside", "/out"),
+    ...turn("visited-off", "/a", "/off", "/a"),
+    ...turn("gone", "/gone"),
+    ...turn("gone-then-a", "/gone", "/a"),
+    ...turn("untold"),
+  ];
+  objs.splice(9, 0, meta());
+  assert.deepEqual(d.turnDestinations(objs, (cwd) => places[cwd]), [
+    "B", "B",
+    "A", "A",
+    null,
+    null, null, null,
+    // A directory that no longer exists may have been one not recording.
+    null, null,
+    null, null,
+    // No working directory recorded: left to the repository staging it.
+    undefined,
+  ]);
+});
+
+test("turnDestinations: a turn seen not recording goes nowhere, even where it ends", () => {
+  const places = { "/a": { key: "A", recording: true }, "/b": { key: "B", recording: true } };
+  const turn = (promptId, cwd) => ({ type: "user", promptId, cwd });
+  const objs = [turn("in-b", "/a"), turn("in-a", "/a"), turn("untold"), turn("clean", "/a")];
+  const marked = new Set(["in-b", "in-a", "untold"]);
+  assert.deepEqual(d.turnDestinations(objs, (cwd) => places[cwd], (promptId) => marked.has(promptId)),
+    [null, null, null, "A"]);
+});
+
+test("buildChunkPlan: keep sends only the selected records, and the cursor passes the rest", () => {
+  const objs = [content("a"), content("b"), content("c")];
+  const plan = d.buildChunkPlan(objs, { lastUuid: "a", seq: 2 }, SALT, { keep: (i) => i === 2 });
+  assert.deepEqual(plan.chunks.map((c) => c.lines.map((l) => JSON.parse(l).uuid)), [["c"]]);
+  assert.deepEqual(plan.newCursor, { lastUuid: "c", seq: 3 });
+
+  const none = d.buildChunkPlan(objs, { lastUuid: "a", seq: 2 }, SALT, { keep: () => false });
+  assert.deepEqual(none.chunks, []);
+  assert.deepEqual(none.newCursor, { lastUuid: "c", seq: 2 });
+});
+
 test("splitLinesByBudget: groups within budget, no line loss", () => {
   const lines = ["aaaa", "bbbb", "cccc"]; // 5 bytes each incl newline
   const groups = d.splitLinesByBudget(lines, 10); // 2 lines per group
@@ -216,6 +295,384 @@ test("writeCursor/readCursor round-trip", () => {
   transfer.writeCursor(c, TEST_REPOSITORY);
   assert.deepEqual(transfer.readCursor("round.jsonl", TEST_REPOSITORY), c);
   assert.equal(transfer.readCursor("missing.jsonl", TEST_REPOSITORY), null);
+});
+
+// Blocks far smaller than a record make every record cross a block edge.
+test("transcriptTailUuid: newest uuid across block edges, past a partial line and metadata", () => {
+  const file = path.join(DATA_DIR, "tail.jsonl");
+  writeFile(file, [
+    JSON.stringify({ uuid: "older", message: { content: "été ".repeat(40) } }),
+    JSON.stringify({ uuid: "newest", message: { content: "naïve ".repeat(40) } }),
+    JSON.stringify({ type: "permission-mode", permissionMode: "default" }),
+    '{"uuid":"unfinished","message":',
+  ].join("\n"));
+  for (const blockBytes of [7, 100, 64 * 1024]) {
+    assert.equal(transfer.transcriptTailUuid(file, blockBytes), "newest", `blocks of ${blockBytes}`);
+  }
+});
+
+test("transcriptTailUuid: empty without a uuid or a file", () => {
+  const file = path.join(DATA_DIR, "no-uuid.jsonl");
+  writeFile(file, JSON.stringify({ type: "permission-mode" }) + "\n");
+  assert.equal(transfer.transcriptTailUuid(file, 5), "");
+  assert.equal(transfer.transcriptTailUuid(path.join(DATA_DIR, "absent.jsonl")), "");
+});
+
+// Two hooks that run at once: the slower one read the transcript earlier.
+test("a signed-out mark is not moved back by a hook that read the transcript earlier", () => {
+  const file = path.join(DATA_DIR, "race-mark.jsonl");
+  const mark = path.join(DATA_DIR, "logs", "unlicensed-transcripts", "race-mark.jsonl.json");
+  writeFile(file, JSON.stringify({ uuid: "first" }) + "\n");
+  const later = { transcriptId: "race-mark.jsonl", lastUuid: "second", size: 1000, updatedAt: Date.now() + 60_000 };
+  writeFile(mark, JSON.stringify(later));
+  assert.equal(transfer.markUnlicensedTranscript(file), true);
+  assert.equal(JSON.parse(fs.readFileSync(mark, "utf8")).lastUuid, "second", "written since this read");
+
+  // A mark written before this read is replaced, even from a longer transcript.
+  writeFile(mark, JSON.stringify({ ...later, updatedAt: Date.now() - 60_000 }));
+  assert.equal(transfer.markUnlicensedTranscript(file), true);
+  assert.equal(JSON.parse(fs.readFileSync(mark, "utf8")).lastUuid, "first");  fs.rmSync(mark);
+});
+
+test("a discarded cursor is not moved back by a hook that read the transcript earlier", () => {
+  const repository = { repoKey: "github.com/skillbench-ai/race", org: "skillbench-ai" };
+  const file = path.join(DATA_DIR, "race-cursor.jsonl");
+  writeFile(file, toJsonl([content("a"), content("b")]));
+  const cursor = (lastUuid, updatedAt) =>
+    transfer.writeCursor({ transcriptId: "race-cursor.jsonl", lastUuid, seq: 1, updatedAt, discarded: true }, repository);
+
+  cursor("c", Date.now() + 60_000);
+  assert.equal(transfer.advanceCursorToTranscriptTail(file, repository), true);
+  assert.equal(transfer.readCursor("race-cursor.jsonl", repository).lastUuid, "c", "past what this read saw");
+
+  cursor("a", Date.now() + 60_000);
+  assert.equal(transfer.advanceCursorToTranscriptTail(file, repository), true);
+  assert.equal(transfer.readCursor("race-cursor.jsonl", repository).lastUuid, "b", "behind what this read saw");
+
+  cursor("c", Date.now() - 60_000);
+  assert.equal(transfer.advanceCursorToTranscriptTail(file, repository), true);
+  assert.equal(transfer.readCursor("race-cursor.jsonl", repository).lastUuid, "b", "written before this read");
+});
+
+test("a signed-out mark ages out unless a cursor for its transcript remains", () => {
+  const marks = path.join(DATA_DIR, "logs", "unlicensed-transcripts");
+  for (const name of ["old.jsonl", "recent.jsonl", "old-cursored.jsonl", "old-cursored-elsewhere.jsonl"]) {
+    const file = path.join(DATA_DIR, name);
+    writeFile(file, JSON.stringify({ uuid: name }) + "\n");
+    assert.equal(transfer.markUnlicensedTranscript(file), true);
+  }
+  // Cursors in two repositories: whichever is listed first, both count.
+  transfer.writeCursor({ transcriptId: "old-cursored.jsonl", lastUuid: "u", seq: 1, updatedAt: 0 }, TEST_REPOSITORY);
+  transfer.writeCursor({ transcriptId: "old-cursored-elsewhere.jsonl", lastUuid: "u", seq: 1, updatedAt: 0 },
+    { repoKey: "github.com/skillbench-ai/elsewhere", org: "skillbench-ai" });
+  const monthAgo = (Date.now() - 31 * 24 * 60 * 60 * 1000) / 1000;
+  for (const name of ["old.jsonl.json", "old-cursored.jsonl.json", "old-cursored-elsewhere.jsonl.json"]) {
+    fs.utimesSync(path.join(marks, name), monthAgo, monthAgo);
+  }
+  transfer.cleanupStaleFiles();
+  // A cursor for the transcript can still be behind the mark.
+  assert.deepEqual(fs.readdirSync(marks).sort(),
+    ["old-cursored-elsewhere.jsonl.json", "old-cursored.jsonl.json", "recent.jsonl.json"]);
+});
+
+// ---- boundaries that could not be written where staging reads them --------
+const credstore = require("../skillmeter/scripts/credstore");
+const { repositoryStorageId } = require("../skillmeter/scripts/lib/paths");
+const PENDING_REPOSITORY = { repoKey: "github.com/skillbench-ai/pending", org: "skillbench-ai" };
+const OTHER_PENDING_REPOSITORY = { repoKey: "github.com/skillbench-ai/pending-other", org: "skillbench-ai" };
+
+// Let the clock move, so a boundary written next is later than the last.
+function tick() {
+  const until = Date.now() + 2;
+  while (Date.now() < until) {}
+}
+
+// Run `fn` while `dir` is replaced by a file, as a stale file or failing disk
+// would leave it, then put the directory back.
+function withBlocked(dir, fn) {
+  const saved = `${dir}.saved`;
+  const existed = fs.existsSync(dir);
+  if (existed) fs.renameSync(dir, saved);
+  fs.mkdirSync(path.dirname(dir), { recursive: true });
+  fs.writeFileSync(dir, "");
+  try {
+    return fn();
+  } finally {
+    fs.rmSync(dir, { force: true });
+    if (existed) fs.renameSync(saved, dir);
+  }
+}
+
+function unreadable(file, fn) {
+  fs.chmodSync(file, 0o200);
+  try {
+    return fn();
+  } finally {
+    fs.chmodSync(file, 0o600);
+  }
+}
+
+// The uuids `stageTranscriptDelta` seals for this repository.
+function stagedUuids(file, repository) {
+  const before = new Set(transfer.listDeltaChunks());
+  transfer.stageTranscriptDelta(file, "prompt", "device", repository);
+  return transfer.listDeltaChunks().filter((chunk) => !before.has(chunk))
+    .flatMap((chunk) => fs.readFileSync(chunk, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l).uuid));
+}
+
+test("closing a period tells nothing to close from a failure", () => {
+  const file = path.join(DATA_DIR, "close.jsonl");
+  writeFile(file, toJsonl([content("c1")]));
+  unreadable(file, () => {
+    assert.equal(transfer.transcriptTailUuid(file), null, "unreadable");
+    assert.equal(transfer.markUnlicensedTranscript(file), null);
+    assert.equal(transfer.advanceCursorToTranscriptTail(file, PENDING_REPOSITORY), null);
+  });
+  withBlocked(path.join(DATA_DIR, "logs", "unlicensed-transcripts"), () => {
+    assert.equal(transfer.markUnlicensedTranscript(file), null, "the mark cannot be written");
+  });
+  const cursors = path.join(DATA_DIR, "logs", "repositories",
+    repositoryStorageId(PENDING_REPOSITORY.repoKey, credstore.getOrCreateHashSalt()), "transcripts", "cursors");
+  withBlocked(cursors, () => {
+    assert.equal(transfer.advanceCursorToTranscriptTail(file, PENDING_REPOSITORY), null, "the cursor cannot be written");
+  });
+
+  const absent = path.join(DATA_DIR, "close-absent.jsonl");
+  assert.equal(transfer.markUnlicensedTranscript(absent), false, "nothing written yet");
+  assert.equal(transfer.advanceCursorToTranscriptTail(absent, PENDING_REPOSITORY), false);
+});
+
+test("recordPendingBoundary: the scope, the newest record when readable, privately", () => {
+  const file = path.join(DATA_DIR, "pending-record.jsonl");
+  writeFile(file, toJsonl([content("r1"), content("r2")]));
+  assert.equal(transfer.recordPendingBoundary(file, null), true);
+  assert.equal(transfer.recordPendingBoundary(file, PENDING_REPOSITORY), true);
+  unreadable(file, () => assert.equal(transfer.recordPendingBoundary(file, null), true));
+
+  const store = path.join(DATA_DIR, "logs", "transcript-boundaries", "pending-record.jsonl.ndjson");
+  const raw = fs.readFileSync(store, "utf8");
+  const entries = raw.split("\n").filter(Boolean).map(JSON.parse);
+  assert.deepEqual(entries.map((e) => [e.scope, e.lastUuid]), [
+    ["*", "r2"],
+    [repositoryStorageId(PENDING_REPOSITORY.repoKey, credstore.getOrCreateHashSalt()), "r2"],
+    ["*", undefined],
+  ]);
+  assert.ok(entries.every((e) => typeof e.at === "number"));
+  assert.doesNotMatch(raw, /skillbench-ai/, "no repository name");
+  assert.equal(fs.statSync(path.dirname(store)).mode & 0o777, 0o700);
+  assert.equal(fs.statSync(store).mode & 0o777, 0o600);
+
+  // A line a crash left partial does not swallow the next boundary.
+  fs.appendFileSync(store, '{"scope":"*","at":1,"last');
+  assert.equal(transfer.recordPendingBoundary(file, null), true);
+  const readable = fs.readFileSync(store, "utf8").split("\n").filter(Boolean)
+    .filter((line) => { try { JSON.parse(line); return true; } catch { return false; } });
+  assert.equal(readable.length, 4);
+
+  const absent = path.join(DATA_DIR, "pending-absent.jsonl");
+  assert.equal(transfer.recordPendingBoundary(absent, null), true, "nothing to protect");
+  assert.equal(fs.existsSync(path.join(path.dirname(store), "pending-absent.jsonl.ndjson")), false);
+});
+
+test("staging starts after a pending boundary, and holds on one without a position until it closes the period", () => {
+  const file = path.join(DATA_DIR, "pending-stage.jsonl");
+  writeFile(file, toJsonl([content("a1"), content("a2")]));
+  transfer.recordPendingBoundary(file, null);
+  fs.appendFileSync(file, toJsonl([content("b1")]));
+  assert.deepEqual(stagedUuids(file, PENDING_REPOSITORY), ["b1"], "after the boundary, nothing lost");
+
+  fs.appendFileSync(file, toJsonl([content("c1")]));
+  unreadable(file, () => transfer.recordPendingBoundary(file, PENDING_REPOSITORY));
+  fs.appendFileSync(file, toJsonl([content("c2")]));
+  tick();
+  assert.deepEqual(stagedUuids(file, PENDING_REPOSITORY), [], "nothing while the period has no end");
+  const closed = transfer.readCursor("pending-stage.jsonl", PENDING_REPOSITORY);
+  assert.equal(closed.lastUuid, "c2", "closed at the tail");
+  assert.equal(closed.discarded, true);
+
+  fs.appendFileSync(file, toJsonl([content("d1")]));
+  assert.deepEqual(stagedUuids(file, PENDING_REPOSITORY), ["d1"], "then staging continues");
+});
+
+test("a pending boundary of another repository does not hold this one", () => {
+  const file = path.join(DATA_DIR, "pending-scope.jsonl");
+  writeFile(file, toJsonl([content("s1")]));
+  unreadable(file, () => transfer.recordPendingBoundary(file, PENDING_REPOSITORY));
+  tick();
+  assert.deepEqual(stagedUuids(file, OTHER_PENDING_REPOSITORY), ["s1"]);
+});
+
+test("an unreadable signed-out mark holds staging until the period is closed", () => {
+  const file = path.join(DATA_DIR, "corrupt-mark.jsonl");
+  writeFile(file, toJsonl([content("m1")]));
+  writeFile(path.join(DATA_DIR, "logs", "unlicensed-transcripts", "corrupt-mark.jsonl.json"), "{not json");
+  fs.appendFileSync(file, toJsonl([content("m2")]));
+  tick();
+  assert.deepEqual(stagedUuids(file, PENDING_REPOSITORY), []);
+  fs.appendFileSync(file, toJsonl([content("m3")]));
+  assert.deepEqual(stagedUuids(file, PENDING_REPOSITORY), ["m3"]);
+});
+
+test("an unreadable cursor holds staging until the period is closed", () => {
+  const file = path.join(DATA_DIR, "corrupt-cursor.jsonl");
+  writeFile(file, toJsonl([content("k1")]));
+  const cursor = path.join(DATA_DIR, "logs", "repositories",
+    repositoryStorageId(PENDING_REPOSITORY.repoKey, credstore.getOrCreateHashSalt()),
+    "transcripts", "cursors", "corrupt-cursor.jsonl.json");
+  writeFile(cursor, "{not json");
+  fs.appendFileSync(file, toJsonl([content("k2")]));
+  tick();
+  assert.deepEqual(stagedUuids(file, PENDING_REPOSITORY), []);
+  fs.appendFileSync(file, toJsonl([content("k3")]));
+  assert.deepEqual(stagedUuids(file, PENDING_REPOSITORY), ["k3"]);
+});
+
+test("an unreadable pending store holds staging until the period is closed", () => {
+  const file = path.join(DATA_DIR, "locked-pending.jsonl");
+  writeFile(file, toJsonl([content("l1")]));
+  transfer.recordPendingBoundary(file, null);
+  const store = path.join(DATA_DIR, "logs", "transcript-boundaries", "locked-pending.jsonl.ndjson");
+  fs.appendFileSync(file, toJsonl([content("l2")]));
+  fs.chmodSync(store, 0o000);
+  try {
+    tick();
+    assert.deepEqual(stagedUuids(file, PENDING_REPOSITORY), []);
+    fs.appendFileSync(file, toJsonl([content("l3")]));
+    assert.deepEqual(stagedUuids(file, PENDING_REPOSITORY), ["l3"]);
+  } finally {
+    fs.chmodSync(store, 0o600);
+  }
+});
+
+test("a pending boundary ages out unless a cursor for its transcript remains", () => {
+  const dir = path.join(DATA_DIR, "logs", "transcript-boundaries");
+  for (const name of ["pending-old", "pending-kept"]) {
+    const file = path.join(DATA_DIR, `${name}.jsonl`);
+    writeFile(file, toJsonl([content(name)]));
+    transfer.recordPendingBoundary(file, null);
+  }
+  transfer.writeCursor({ transcriptId: "pending-kept.jsonl", lastUuid: "u", seq: 1, updatedAt: 0 }, TEST_REPOSITORY);
+  const monthAgo = (Date.now() - 31 * 24 * 60 * 60 * 1000) / 1000;
+  for (const name of ["pending-old", "pending-kept"]) {
+    fs.utimesSync(path.join(dir, `${name}.jsonl.ndjson`), monthAgo, monthAgo);
+  }
+  transfer.cleanupStaleFiles();
+  const left = fs.readdirSync(dir);
+  assert.equal(left.includes("pending-old.jsonl.ndjson"), false);
+  assert.equal(left.includes("pending-kept.jsonl.ndjson"), true);
+});
+
+// A repository first seen recording part-way through a transcript.
+test("startTranscriptAtTurn: starts with the turn it was seen in", () => {
+  const file = path.join(DATA_DIR, "turns.jsonl");
+  writeFile(file, toJsonl([
+    { type: "attachment", uuid: "open" },
+    { type: "user", promptId: "p1", uuid: "p1-u" },
+    content("p1-a"),
+    { type: "user", promptId: "p2", uuid: "p2-u" },
+  ]));
+  const at = (promptId, repoName) => {
+    const repository = { repoKey: `github.com/skillbench-ai/${repoName}`, org: "skillbench-ai" };
+    const started = transfer.startTranscriptAtTurn({ transcript_path: file, prompt_id: promptId }, repository);
+    return { started, cursor: transfer.readCursor("turns.jsonl", repository) };
+  };
+
+  assert.equal(at("p2", "later").cursor.lastUuid, "p1-a", "after the earlier turn");
+  assert.equal(at("p3", "unwritten").cursor.lastUuid, "p2-u", "a turn not written yet follows everything");
+  const first = at("p1", "first");
+  assert.equal(first.started, true);
+  assert.equal(first.cursor.lastUuid, null, "the first turn keeps the records that open the session");
+
+  assert.equal(at("p2", "first").started, false, "an existing cursor is kept");
+  assert.equal(at("p2", "first").cursor.lastUuid, null);
+});
+
+test("startTranscriptAtTurn: a transcript with nothing written yet starts at this turn", () => {
+  const repository = { repoKey: "github.com/skillbench-ai/fresh", org: "skillbench-ai" };
+  const file = path.join(DATA_DIR, "fresh.jsonl");
+  assert.equal(transfer.startTranscriptAtTurn({ transcript_path: file, prompt_id: "p1" }, repository), true);
+  assert.equal(transfer.readCursor("fresh.jsonl", repository).lastUuid, null);
+});
+
+test("startTranscriptAtTurn: a cursor that cannot be read is kept", () => {
+  const repository = { repoKey: "github.com/skillbench-ai/broken", org: "skillbench-ai" };
+  const file = path.join(DATA_DIR, "broken.jsonl");
+  writeFile(file, toJsonl([{ type: "user", promptId: "p1", uuid: "u" }, content("a")]));
+  transfer.writeCursor({ transcriptId: "broken.jsonl", lastUuid: "a", seq: 1, updatedAt: 1 }, repository);
+  const cursorFile = path.join(DATA_DIR, "logs", "repositories",
+    repositoryStorageId(repository.repoKey, credstore.getOrCreateHashSalt()),
+    "transcripts", "cursors", "broken.jsonl.json");
+  fs.writeFileSync(cursorFile, "{not json");
+  assert.equal(transfer.startTranscriptAtTurn({ transcript_path: file, prompt_id: "p2" }, repository), false);
+  assert.equal(fs.readFileSync(cursorFile, "utf8"), "{not json");
+});
+
+test("startTranscriptAtTurn: needs a prompt id and a transcript that records them", () => {
+  const repository = { repoKey: "github.com/skillbench-ai/untold", org: "skillbench-ai" };
+  const file = path.join(DATA_DIR, "untold.jsonl");
+  writeFile(file, toJsonl([{ type: "user", uuid: "u" }, content("a")]));
+  assert.equal(transfer.startTranscriptAtTurn({ transcript_path: file, prompt_id: "p1" }, repository), false);
+  writeFile(file, toJsonl([{ type: "user", promptId: "p1", uuid: "u" }, content("a")]));
+  assert.equal(transfer.startTranscriptAtTurn({ transcript_path: file }, repository), false);
+  assert.equal(transfer.readCursor("untold.jsonl", repository), null);
+});
+
+// A turn whose hook ran inside a repository that was not recording.
+test("markUnrecordedTurn: appends the prompt id and a hashed repository, once", () => {
+  const transcript = path.join(DATA_DIR, "marked.jsonl");
+  const file = path.join(DATA_DIR, "logs", "unrecorded-turns", "marked.jsonl.ndjson");
+  const mark = (prompt_id, decision) => transfer.markUnrecordedTurn({ transcript_path: transcript, prompt_id }, decision);
+  const off = { repoKey: "github.com/skillbench-ai/off", repoRoot: "/work/off" };
+  const uncovered = { repoRoot: "/work/elsewhere" };
+
+  assert.equal(mark("p1", off), true);
+  assert.equal(mark("p1", off), true);
+  assert.equal(mark("p1", uncovered), true);
+  assert.equal(mark(undefined, off), false, "a hook without a turn marks nothing");
+  assert.equal(mark("p2", {}), false, "outside any repository marks nothing");
+  assert.equal(mark("p5", { classification: "not_activated" }), true, "signed out marks every repository");
+
+  const raw = fs.readFileSync(file, "utf8");
+  const lines = raw.split("\n").filter(Boolean).map(JSON.parse);
+  assert.deepEqual(lines.map((l) => l.promptId), ["p1", "p1", "p5"], "each repository once");
+  assert.notEqual(lines[0].place, lines[1].place);
+  assert.equal(lines[2].place, "*");
+  assert.doesNotMatch(raw, /skillbench-ai|off|work|elsewhere/, "no repository name or path");
+  assert.equal(fs.statSync(path.dirname(file)).mode & 0o777, 0o700, "a private directory");
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600, "a private file");
+
+  // A partial last line, as a crash mid-write leaves, loses neither the marks
+  // before it nor the next one written after it.
+  fs.appendFileSync(file, '{"promptId":"p3","pla');
+  assert.equal(mark("p1", off), true);
+  assert.equal(mark("p4", off), true);
+  const readable = () => fs.readFileSync(file, "utf8").split("\n").filter(Boolean)
+    .filter((line) => { try { JSON.parse(line); return true; } catch { return false; } })
+    .map((line) => JSON.parse(line).promptId);
+  assert.deepEqual(readable(), ["p1", "p1", "p5", "p4"], "p4 is on a line of its own");
+  // And it is read back past the partial line: marking p4 again appends nothing.
+  assert.equal(mark("p4", off), true);
+  assert.deepEqual(readable(), ["p1", "p1", "p5", "p4"]);
+});
+
+test("an unrecorded-turn mark ages out unless a cursor for its transcript remains", () => {
+  const dir = path.join(DATA_DIR, "logs", "unrecorded-turns");
+  const transcript = (name) => path.join(DATA_DIR, `${name}.jsonl`);
+  for (const name of ["old-turns", "recent-turns"]) {
+    transfer.markUnrecordedTurn({ transcript_path: transcript(name), prompt_id: "p" }, { repoKey: "github.com/skillbench-ai/x" });
+  }
+  transfer.markUnrecordedTurn({ transcript_path: transcript("old-cursored"), prompt_id: "p" }, { repoKey: "github.com/skillbench-ai/x" });
+  transfer.writeCursor({ transcriptId: "old-cursored.jsonl", lastUuid: "u", seq: 1, updatedAt: 0 }, TEST_REPOSITORY);
+  const monthAgo = (Date.now() - 31 * 24 * 60 * 60 * 1000) / 1000;
+  for (const name of ["old-turns", "old-cursored"]) {
+    fs.utimesSync(path.join(dir, `${name}.jsonl.ndjson`), monthAgo, monthAgo);
+  }
+  transfer.cleanupStaleFiles();
+  const left = fs.readdirSync(dir);
+  assert.equal(left.includes("old-turns.jsonl.ndjson"), false);
+  assert.equal(left.includes("recent-turns.jsonl.ndjson"), true);
+  // A cursor for the transcript can still be behind the marked turn.
+  assert.equal(left.includes("old-cursored.jsonl.ndjson"), true);
 });
 
 test("sealDeltaChunk writes body+meta and listDeltaChunks finds it", () => {

@@ -1,17 +1,27 @@
 /**
  * This client's refresh status, next to its session in the account directory
- * (ADR 005) and shared across its sessions. Refresh and sign-in update it; the upload drains read it for backoff and SessionStart for
- * its sign-in banner, without a network request.
+ * (ADR 005) and shared across its sessions. Refresh and sign-in update it; the
+ * upload drains read it for backoff, SessionStart for its sign-in banner and
+ * lib/collection-state for the collection state, without a network request.
+ * It is the history of refresh and sign-in, not the current state: nothing
+ * records a license that disappears, and the collection state reads the
+ * session for that.
  *
  * Shape (schema_version 1):
  *   last_attempt_at       ms epoch of the last refresh or re-activation attempt
- *   last_success_at       ms epoch of the last success
- *   last_outcome          "rotated" | "transient_failure" | "terminal"
+ *   last_success_at       ms epoch of the last sign-in or renewal. Kept across
+ *                         sign-ins, sign-outs and session changes: it is the
+ *                         evidence that this client was ever signed in (ADR 003)
+ *   last_outcome          "signed_in" | "rotated" | "transient_failure" | "terminal"
  *   last_error            { kind, status, message } for the last failure, or null
  *   consecutive_failures  failures since the last success
  *   next_retry_at         ms epoch before which no refresh is attempted, or null
  *   terminal              null, or { reason, at, status, message } — retrying is
  *                         pointless until SessionStart or /skillmeter:signin clears it
+ *   last_terminal_reason  the reason of the last terminal outcome, for reporting.
+ *                         Unlike `terminal` it survives SessionStart, a sign-in
+ *                         that starts and any other change of session; only a
+ *                         completed sign-in or a successful renewal clears it
  *   updated_by            "drain" | "session_start" | "signin" | ...
  *   revision              monotonically increasing write counter used for
  *                         compare-and-update (see updateLicenseStatus)
@@ -59,6 +69,7 @@ function emptyStatus() {
     consecutive_failures: 0,
     next_retry_at: null,
     terminal: null,
+    last_terminal_reason: null,
     updated_by: null,
     revision: 0,
   };
@@ -80,8 +91,18 @@ function readLicenseStatus() {
   if (!raw || typeof raw !== "object" || raw.schema_version !== SCHEMA_VERSION) {
     return emptyStatus();
   }
+  // A record from another session reads as empty, so its backoff and terminal
+  // state cannot block this one. The last terminal reason and the last
+  // success are kept for reporting: starting a sign-in changes the session,
+  // and must not make an ended or revoked session read as healthy, nor a
+  // client that was signed in read as a fresh install.
   if (raw.auth_context && raw.auth_context !== authContext()) {
-    return { ...emptyStatus(), revision: raw.revision || 0 };
+    return {
+      ...emptyStatus(),
+      revision: raw.revision || 0,
+      last_terminal_reason: lastTerminalReason(raw),
+      last_success_at: raw.last_success_at ?? null,
+    };
   }
   return { ...emptyStatus(), ...raw };
 }
@@ -186,6 +207,24 @@ function backoffDelayMs(consecutiveFailures, baseMs = getRetryBaseMs(), capMs = 
 }
 
 /**
+ * The reason of the last terminal outcome, or null. Reports only;
+ * refreshBlockedReason decides whether to retry. A record written before
+ * `last_terminal_reason` existed falls back to `terminal`.
+ */
+function lastTerminalReason(status) {
+  if (!status) return null;
+  return status.terminal?.reason || status.last_terminal_reason || null;
+}
+
+/**
+ * The broker or the refresh server ended this session: the stored license may
+ * still be valid for a while, but only a new sign-in renews it.
+ */
+function isSessionEnded(status = readLicenseStatus()) {
+  return lastTerminalReason(status) === TERMINAL_REASONS.REACTIVATION_REQUIRED;
+}
+
+/**
  * Why a refresh attempt should be skipped right now, or null when it may run.
  * Pure: takes the status object and the clock.
  * @returns {"terminal"|"backoff"|null}
@@ -211,6 +250,7 @@ function recordRefreshSuccess({ source = "unknown", outcome = "rotated", now = D
     consecutive_failures: 0,
     next_retry_at: null,
     terminal: null,
+    last_terminal_reason: null,
     updated_by: source,
   }));
 }
@@ -270,6 +310,7 @@ function recordTerminal({ source = "unknown", reason, status = null, message = "
     consecutive_failures: prev.consecutive_failures || 0,
     next_retry_at: null,
     terminal: { reason, at: now, status, message: msg },
+    last_terminal_reason: reason,
     updated_by: source,
   }));
 }
@@ -277,7 +318,7 @@ function recordTerminal({ source = "unknown", reason, status = null, message = "
 /**
  * SessionStart entry point: a new session gets one fresh attempt, so the
  * terminal flag and the backoff clock are dropped while the history
- * (last_success_at, last_error) is kept for notices.
+ * (last_success_at, last_error, last_terminal_reason) is kept for notices.
  */
 function clearTerminal({ source = "session_start" } = {}) {
   const prev = readLicenseStatus();
@@ -287,13 +328,34 @@ function clearTerminal({ source = "session_start" } = {}) {
     consecutive_failures: 0,
     next_retry_at: null,
     terminal: null,
+    last_terminal_reason: lastTerminalReason(cur),
     updated_by: source,
   }));
 }
 
-/** /skillmeter:signin entry point: start from a clean record. */
+/**
+ * /skillmeter:signin entry point, before the browser step: start from a clean
+ * record. The last terminal reason is kept until the sign-in completes, and
+ * the last success as the evidence of an earlier sign-in.
+ */
 function clearLicenseStatus({ source = "signin" } = {}) {
-  return updateLicenseStatus(() => ({ ...emptyStatus(), updated_by: source }));
+  return updateLicenseStatus((prev) => ({
+    ...emptyStatus(),
+    last_terminal_reason: lastTerminalReason(prev),
+    last_success_at: prev.last_success_at,
+    updated_by: source,
+  }));
+}
+
+/** A sign-in committed a new license: a clean record that counts as a success. */
+function recordSignin({ source = "signin", now = Date.now() } = {}) {
+  return updateLicenseStatus(() => ({
+    ...emptyStatus(),
+    last_attempt_at: now,
+    last_success_at: now,
+    last_outcome: "signed_in",
+    updated_by: source,
+  }));
 }
 
 module.exports = {
@@ -301,6 +363,8 @@ module.exports = {
   TERMINAL_REASONS,
   readLicenseStatus,
   backoffDelayMs,
+  lastTerminalReason,
+  isSessionEnded,
   refreshBlockedReason,
   updateLicenseStatus,
   recordRefreshSuccess,
@@ -308,4 +372,5 @@ module.exports = {
   recordTerminal,
   clearTerminal,
   clearLicenseStatus,
+  recordSignin,
 };

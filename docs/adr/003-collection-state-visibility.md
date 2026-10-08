@@ -4,10 +4,12 @@
 **Status:** Accepted (PR #111, 2026-09-25). Revised the same day against
 `main` (0.37.0): the backfill monitor is gone, sign-in is broker-only and ADR
 001 decision 4 is retired, Stop-triggered recovery exists, and the review
-threads of 2026-09-17 are folded in. Acceptance covers the design; B1
-implements decisions 1 to 4 and verifies the two Claude Code behaviours
-listed under Open items before it merges. Amended 2026-10-01: the retry
-monitor is removed and decision 3 is retired (see the amendment at the end).
+threads of 2026-09-17 are folded in. Acceptance covers the design.
+Amended 2026-10-01 (see the amendments at the end): the retry monitor is
+removed and decision 3 retired; sign-in after an ended session; decision 1
+implemented as the resolver; decision 4 implemented as the card. Amended
+2026-10-05: decision 2 implemented as the notices, decision 6 as the status
+command.
 **Related:** ADR 001 (decision 2, its Stop-recovery amendment and the local status record it requires; decision 4 is retired by the 2026-09-16 amendment), `skillmeter-codex-marketplace`, `skillmeter-vscode-extension` (parity)
 
 ## Context
@@ -373,3 +375,211 @@ kept until then (and ages out after seven days, as before). The per-chunk
 retry budget is now spent by turns and session starts rather than by a
 two-minute sweep. `test/delivery.test.js` covers delivery by Stop, recovery
 after an outage at the next turn, and recovery at the next session start.
+
+## Amendment 2026-10-01: sign-in after an ended session, and a sign-in in progress
+
+The status record keeps `last_terminal_reason`, the reason of the last
+terminal outcome. Every terminal outcome sets it. It is kept when SessionStart
+clears `terminal`, when a sign-in starts and when the session otherwise
+changes, and only a completed sign-in or a successful renewal clears it.
+Refresh is still blocked by `terminal` alone, and capture never reads the kept
+reason. The sign-in path does: while it says the session ended
+(`reactivation_required`) and a license is stored, `/skillmeter:signin` asks
+for sign-in without starting a new intent, `bin/signin` runs the device flow
+although the license is valid, and the SessionStart card says the sign-in
+expired and uploads are paused, in every session until a sign-in completes or
+a renewal succeeds. That card does not say telemetry is off, because hooks keep
+recording on the stored license.
+
+Decision 3 is retired, but its `pending` sign-in result exists for another
+reader. While a sign-in waits for browser approval, `/skillmeter:signin`
+reports it in progress instead of starting a new intent, which would discard
+the approval, and so does `bin/signin` run again, unless it is run with
+`--restart`. The result carries `expires_at`, the device code's lifetime capped
+at 30 minutes, and belongs to the sign-in that wrote it: its success or
+failure, a sign-out, a newer sign-in, a revocation or the expiry ends it. No
+"discarded" result is written. A poller that stops without a result is not
+detected, so the in-progress status offers starting over, with `bin/signin
+--restart`. A sign-out stays recorded while a sign-in waits: `signed_out` holds
+until a sign-in commits, and the sign-in's generation alone stops a stale
+commit, since a sign-out or a newer sign-in changes it. This closes the open
+item on the sentinel.
+
+## Amendment 2026-10-01: the resolver, after per-client sessions and without a monitor
+
+Decision 1 is implemented in `lib/collection-state.js`, with these changes:
+
+- The session fields are read from `session.json`, not `credentials.json`.
+  Since ADR 005 and ADR 006 the session, the evidence of a sign-in and consent
+  are per client, so "on this device" in decisions 1 and 2 means this client;
+  another client on the same device may still be collecting.
+- The order is `paused`, `signed_out`, `revoked`, `token_missing`,
+  `never_signed_in`, `delivery_paused`, `unconfigured`, `recording`. A 402
+  drops the license, so `revoked` precedes the missing-license states, and a
+  missing license precedes `delivery_paused`: without one nothing uploads
+  either.
+- `revoked` and `delivery_paused` read `last_terminal_reason` (previous
+  amendment); `delivery_paused` applies to `reactivation_required` only.
+- The evidence of a prior sign-in is `last_success_at`. A completed sign-in
+  records one, and starting a sign-in, clearing the record or changing session
+  keeps it. Before, every sign-in erased it, and a record from a previous
+  session read as empty.
+- A stored license counts by presence, not freshness, as it does for capture:
+  an expired license that waits for its next renewal reads as signed in.
+- `unconfigured` is every signed-in outcome of the capture gate that does not
+  capture, including a repository outside the licensed organizations,
+  organization telemetry off and no working directory. The result carries the
+  gate mode as its reason.
+- Nothing records `token_missing`: the resolver derives it from `session.json`
+  and `last_success_at`. The status record is the history of refresh and
+  sign-in, not the current state, and can still say `rotated` or `signed_in`
+  for a client that holds no license.
+
+Withdrawn, because they describe the monitor #174 removed or a record that no
+longer tracks the current state:
+
+- decision 1's "the daemon" among the resolver's users, and its paragraph on
+  the daemon recording `token_missing` and reconciling the record;
+- decision 2's "daemon's routine rewrite of `credentials.json` on each
+  refresh" and "the monitor's exit … is a moment signal";
+- in Consequences, "the status record is always current" and the bullet on
+  what waits "when the daemon has exited".
+
+Also out of date: decision 2's `watchPaths` would name `session.json`, not
+`credentials.json`, and that file changes on a renewal, which happens only when
+a drain has something to send, not every ten minutes. Decision 1's "until A3
+ships" no longer applies: ADR 001 decision 3 is implemented. The open items on
+a token restored by another client and on the shared-credential ownership rule
+lapse with the shared session.
+
+## Amendment 2026-10-01: the card follows the collection state
+
+Decision 4 is implemented. SessionStart chooses its card from
+`lib/collection-state.js`, after its own terminal clear and with the gate it
+already resolved:
+
+| State | Card |
+| --- | --- |
+| `paused` | its own card: telemetry off, paused for every repository; next command `/skillmeter:telemetry enable-global` |
+| `signed_out`, `never_signed_in`, `token_missing`, `revoked` | the sign-in card, with the reason line from decision 5; `revoked` adds "Contact your administrator." |
+| `delivery_paused` | the sign-in-expired card of the earlier amendment |
+| `unconfigured` | the existing setup card while an organization or repository choice is pending; nothing for a repository outside the licensed organizations, organization or repository telemetry the user turned off, or no working directory. A license that names no organization puts every repository outside them, so that client never records and is never told at session start |
+| `recording` | the "telemetry on" card, unchanged |
+
+The pause comes first because it silences every other reading (decision 1).
+A paused client with an ended session or no license is not asked to sign in,
+since signing in would not start capture. Decision 5 gains a row: `paused`,
+`paused for every repository`, with `/skillmeter:telemetry enable-global` as
+its next command rather than `/skillmeter:signin`. A card that says telemetry
+is off appears only in states where hooks record no repository telemetry; where
+excluded hooks still send the exclusion audit, the repository setup card says
+so itself.
+
+## Amendment 2026-10-05: the notices and the status command
+
+Decision 2 is implemented. SessionStart adds three files to its `watchPaths`:
+`session.json` and `license-status.json`, both in this client's account
+directory, and the telemetry policy. It creates the status record if there is
+none, because a file created after the watch is registered can be missed.
+FileChanged runs `scripts/on_collection_state.js` for each of them. It resolves
+the collection state without a working directory and shows decision 2's lines,
+with the OSC 777 desktop notification the sign-in notice uses. Without a
+working directory a signed-in client resolves as `unconfigured`, so no line can
+claim that a repository was recording.
+
+Decision 2 names two files; the policy is the third. The pause comes first in
+decision 1's order and masks every other reading. A sign-out while paused
+therefore changes nothing a session can see, and lifting the pause writes only
+the policy. Without the watch, that stop would surface at some later unrelated
+write, or never. A repository toggle or the pause changes no group, so each
+costs every session one silent run.
+
+The dedupe keys on the hook's `session_id`. Claude Code gives a FileChanged
+hook a stdin JSON that carries it, and each open session's hook gets its own
+(verified on Claude Code 2.1.288 and 2.1.289). Each session keeps the state it
+last resolved in `collection-state/<session_id>.json` in the account directory.
+The file holds the state name only, is private like the other local stores, and
+is removed 30 days after its last write. SessionStart writes it with the state
+resolved the same way, without a working directory. That is `unconfigured`
+where the card shows `recording`, which is the same group, so a session that
+starts stopped is not told again. A hook without a session id shares one file
+per client. Claude Code starts the handlers for files written together at the
+same moment, so the hooks of one session take a lock, and the second sees what
+the first stored.
+
+Three cases decision 2 did not rule on:
+
+- **A sign-in in this session.** A completed sign-in already shows the sign-in
+  result notice, and every open session shows each result once, a failure
+  included. Each session records the time of the last result its notice
+  printed, in `signin-notices/` in the account directory, one file per session
+  named like its state file. The record is written once the notice is printed,
+  holds the time only, and is removed 30 days after its last write; a newer
+  result shows again. A session starts recorded at the result current when it
+  starts, so a result from before it is not shown there. FileChanged can start
+  two handlers of one session for one write, so they take turns under that
+  session's lock, and the second finds the result shown. Where the notice
+  printed a completed sign-in, it stands
+  for the return line, which would only repeat it, so that session skips the
+  line. A session whose notice did not print, because it was killed first,
+  still gets the line. The collection notice waits up to two seconds for its
+  session's record, since both run at once. A notice that takes longer, because
+  its walk over the transcripts for the repository inventory is slow, gives its
+  session both lines rather than none.
+- **A sign-in that has started.** A started sign-in does not change the
+  resolver's answer: `signed_out` holds until a sign-in commits, and a lost
+  license stays `token_missing`. A stop still ends only in a state that can
+  collect (`unconfigured` or `recording`), the destinations decision 2 itself
+  names, because the pause and a license that names no organization need it:
+  neither is a return, with or without a license. A license that names no
+  organization puts every repository outside it, so that client cannot collect
+  anywhere, and the stored stop stays until a sign-in with a license that names
+  one. A move from a stop straight into `delivery_paused` is not announced
+  either: a sign-in commits the license before it clears an ended session's
+  reason, so a client signed out after its session ended passes through
+  `delivery_paused` on its way back. A genuine move, which needs that second
+  write to fail after the commit, is shown by the next session's card, not
+  mid-session. One move within capture stopped is announced: `token_missing` to
+  `revoked`. A 402 drops the license from the session before it records the
+  reason, so a hook between the two writes reads `token_missing` and says so.
+  The revoked line follows once, with its administrator note. The reason is not
+  recorded first, because that write would run outside the generation check
+  that keeps a revocation arriving after a newer sign-in off that sign-in. The
+  same rule fires on a second path, with the right result: a stop stored as
+  `token_missing` stays stored through a sign-in whose license names no
+  organization, and a 402 that then arrives shows the revoked line, once.
+- **A sign-out with no license.** `/skillmeter:signout` marks a client signed
+  out even if it never signed in. Every open session shows the `signed out`
+  line once, as decision 2 accepts for the session that ran the command, and
+  nothing else follows.
+
+The lines are decision 2's, except that the revoked line ends with decision
+5's "contact your administrator", as the card and the status command do:
+signing in alone does not restore an organization's license.
+
+A known limitation: the session lock, like the credential lock it is built on,
+treats only a dead owner as stale, because age proves nothing. Suppose a hook
+is killed while holding the lock and its process id is then reused by a live
+process. Every later hook of that session waits out its four seconds and shows
+nothing until that process exits. That needs a kill inside the hold and a reuse
+of the id before the next change. Nothing bounds it by age but the
+session-start cleanup, which removes any file in `collection-state/` older than
+30 days.
+
+Decision 6 is implemented. `/skillmeter:telemetry status` resolves the state
+for the current directory and prints the state, its reason and the next
+command, then the repository lines it printed before: global, organization,
+this project and effective. Its licence line is gone. It merged
+`never_signed_in` with `token_missing`, gave an expired licence as a reason,
+and told a paused client to sign in. The recency decision 6 mentions (last
+upload, unsent counts) belongs to B3 and is not shown.
+
+The card, the status command and the notices read their words from one table,
+`lib/collection-wording.js`: decision 5's rows, the pause, and the capture
+gate's reasons, which are the reasons of `unconfigured` and `recording`. A new
+terminal reason adds a row there.
+
+B4, the persistent in-session indicator, remains the other half of observed
+problem 1. This ADR predates Claude Code's mods (2.1.287 and later): a mod can
+draw a band above the prompt that stays in place, and it installs as a plugin
+from a marketplace, so B4 can be built.

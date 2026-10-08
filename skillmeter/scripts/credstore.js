@@ -244,6 +244,32 @@ function readSigninResult() {
   return safeReadJson(SIGNIN_RESULT_FILE, null);
 }
 
+// A device flow is waiting for browser approval: /skillmeter:signin wrote
+// `pending` when it started, and neither a final result nor the device code's
+// expiry has ended it. The marker belongs to the sign-in attempt that wrote it:
+// a sign-out, a newer attempt or a revocation changes `auth_generation`, which
+// ends the wait just as it stops that attempt's poll from committing. No marker
+// counts for longer than the cap. A poller that died without writing a result
+// is not detected; its marker lasts until it expires.
+const SIGNIN_PENDING_MAX_MS = 30 * 60_000;
+
+function intentTag(generation) {
+  return crypto.createHash("sha256").update(String(generation)).digest("hex").slice(0, 16);
+}
+
+function writeSigninPending(lifetimeMs, expected) {
+  const expiresAt = Date.now() + Math.min(lifetimeMs, SIGNIN_PENDING_MAX_MS);
+  writeSigninResult({ status: "pending", expires_at: expiresAt, intent: intentTag(expected.generation) }, expected);
+}
+
+function isSigninPending(now = Date.now()) {
+  const result = readSigninResult();
+  if (result?.status !== "pending" || typeof result.expires_at !== "number") return false;
+  if (now >= result.expires_at || result.expires_at - now > SIGNIN_PENDING_MAX_MS) return false;
+  const generation = readSession().auth_generation;
+  return Boolean(generation) && result.intent === intentTag(generation);
+}
+
 // Pre-create the sentinel so SessionStart `watchPaths` can register it before
 // the first sign-in (some file watchers only fire on modify, not create).
 function ensureSigninResultFile() {
@@ -344,8 +370,9 @@ function hasValidLicense() {
   return !!t && !isLicenseTokenExpired(t);
 }
 
-// Sign-out blocks background refresh and in-flight sign-in commits.
-// Read from disk so other processes observe it. Explicit sign-in clears it.
+// The user's recorded sign-out. It blocks background refresh; the generation,
+// not this flag, blocks a stale sign-in commit. Read from disk so other
+// processes observe it. Only a completed sign-in clears it.
 function getSignedOut() {
   return readSession().signed_out === true;
 }
@@ -392,19 +419,21 @@ function signOut() {
 }
 
 // Explicit sign-in starts a new intent even if the server reuses the same JWT.
+// A sign-out stays recorded until a sign-in commits: the new generation alone
+// is what stops an earlier intent from committing.
 function markEngaged() {
   return mutateSession((session) => {
-    delete session.signed_out;
     session.auth_generation = crypto.randomUUID();
     return session.auth_generation;
   });
 }
 
 // Explicit issuance is bound to its originating intent. A refresh in that
-// same intent may rotate the token while browser approval is pending.
+// same intent may rotate the token while browser approval is pending. A
+// sign-out, or a newer sign-in, changes the generation, so a sign-in started
+// before it cannot commit.
 function signinMatches(session, expected) {
-  return !expected.signedOut && session.signed_out !== true &&
-    (session.auth_generation || null) === expected.generation &&
+  return (session.auth_generation || null) === expected.generation &&
     currentDeviceId() === expected.deviceId;
 }
 
@@ -412,10 +441,11 @@ function signinMatches(session, expected) {
 // It must be synchronous and must not acquire the session lock again. A commit
 // without a refresh token clears any earlier one, so renewal never mixes two
 // sign-ins.
+// The commit is what ends a sign-out.
 function commitSignin({ jwt, refreshToken = null, expected, onCommit }) {
   return mutateSession((session) => {
-    if (session.signed_out === true) return false;
     if (expected && !signinMatches(session, expected)) return false;
+    delete session.signed_out;
     session.license_jwt = jwt;
     if (refreshToken) session.refresh_token = refreshToken;
     else delete session.refresh_token;
@@ -463,6 +493,8 @@ module.exports = {
   SIGNIN_RESULT_FILE,
   writeSigninResult,
   readSigninResult,
+  writeSigninPending,
+  isSigninPending,
   ensureSigninResultFile,
   // Upload result sentinel (for the SessionStart "telemetry sent" notice)
   writeUploadResult,

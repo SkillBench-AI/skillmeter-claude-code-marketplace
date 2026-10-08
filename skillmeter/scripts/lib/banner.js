@@ -5,6 +5,7 @@
 
 const { PLUGIN_VERSION } = require("./paths");
 const { CHANNEL } = require("./config");
+const { ADMINISTRATOR, REASONS } = require("./collection-wording");
 
 // Names a non-stable channel and its environment so the destination is visible.
 function channelLabel() {
@@ -126,13 +127,53 @@ function signinStatusBanner(org, consent, repositoryEnabled = false) {
   ]);
 }
 
-// Shown at SessionStart when no valid license JWT is detected.
-function signInRequiredBanner() {
+// The states whose card asks for a sign-in, worded from the shared table (ADR
+// 003, decision 5). Every one of these holds no license, so hooks record
+// nothing.
+const SIGNIN_STATES = new Set(["never_signed_in", "signed_out", "token_missing", "revoked"]);
+
+// "sign-in expired" as the start of a sentence.
+function sentence(text) {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+// Shown at SessionStart when no license is stored. `state` names the reason.
+// A revoked license is restored by an administrator, not by the user's choice.
+function signInRequiredBanner(state = "") {
+  const lines = ["[ ACTION REQUIRED ]", ""];
+  if (SIGNIN_STATES.has(state)) lines.push(`Reason        ${REASONS[state]}`);
+  lines.push(
+    "Sign in to verify this repository.",
+    state === "revoked"
+      ? `Telemetry remains OFF. ${sentence(ADMINISTRATOR)}.`
+      : "Telemetry remains OFF until you choose.",
+    "",
+    "→ /skillmeter:signin"
+  );
+  return card(lines);
+}
+
+// Shown at SessionStart while the global pause is on. The pause stops capture
+// and uploads in every repository, so it is the reason whatever else holds.
+function pausedBanner() {
+  return card([
+    "[ TELEMETRY PAUSED ]",
+    "",
+    `Status        OFF — ${REASONS.paused}`,
+    "",
+    "→ /skillmeter:telemetry enable-global",
+  ]);
+}
+
+// Shown at SessionStart when the broker ended the session while a license is
+// still stored. Hooks keep recording on a stored license (ADR 001, decision 3),
+// so only uploads wait for a new sign-in.
+function sessionEndedBanner() {
   return card([
     "[ ACTION REQUIRED ]",
     "",
-    "Sign in to verify this repository.",
-    "Telemetry remains OFF until you choose.",
+    `${sentence(REASONS.reactivation_required)}. Uploads are paused`,
+    "until you sign in again.",
     "",
     "→ /skillmeter:signin",
   ]);
@@ -171,6 +212,8 @@ function telemetryFailedNotice(error) {
 module.exports = {
   signinStatusBanner,
   signInRequiredBanner,
+  sessionEndedBanner,
+  pausedBanner,
   telemetryConsentRequiredBanner,
   telemetryRepositoryRequiredBanner,
   signinRepositoryInventoryBanner,

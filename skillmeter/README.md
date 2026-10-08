@@ -11,7 +11,7 @@ and [privacy notice](../PRIVACY.md) before enabling collection.
 | `/skillmeter:signin` | Sign in through the SkillBench identity service and review consent |
 | `/skillmeter:signout` | Sign this plugin out and stop its authenticated uploads (other SkillMeter clients stay signed in) |
 | `/skillmeter:telemetry list` | Review and toggle known repositories |
-| `/skillmeter:telemetry status` | Inspect sign-in, global and current-repository state |
+| `/skillmeter:telemetry status` | Show the collection state here, its reason and the command to run when there is one, with the global, organization and repository settings |
 | `/skillmeter:telemetry disable-global` | Pause live and historical uploads |
 | `/skillmeter:telemetry enable-global` | Resume transmission subject to sign-in and consent |
 | `/skillmeter:backfill` | Request historical collection with separate consent |
@@ -21,6 +21,18 @@ Sign-in uses a browser-approved device code from `id.skillbench.ai`. The broker
 ID token is exchanged for a SkillMeter license; it is not stored. The license
 is this plugin's own; signing out does not affect other SkillMeter clients.
 Device identity and telemetry policy remain on disk.
+
+When a sign-in problem stops this plugin collecting or uploading while a
+session is open, each open session shows one line that says why and what to
+run, with a desktop notification where the terminal supports it. That happens
+when you sign out, when the license is lost or no longer active, or when the
+sign-in expires and uploads wait. While telemetry is paused, the line appears
+when the pause is lifted. Each session shows one more line when the plugin can
+collect again. Every open session shows a sign-in's result once, and after a
+completed sign-in that result replaces this line, or both appear if the result
+takes more than two seconds. No line is shown while collection works, and
+there are no reminders. Turning a repository or organization off, or changing
+directory, shows no line: `/skillmeter:telemetry status` reports it.
 
 ## Collection scope
 
@@ -40,9 +52,14 @@ with the event envelope. It does not copy the original prompt, tool payload,
 raw path, repository name or transcript into that audit.
 
 Turning an organization or repository OFF deletes its queued live payloads.
-Privacy cursors track observed disabled transcript intervals so enabling a
-repository later does not upload those intervals. Global OFF pauses capture
-and transmission while retaining queued data.
+Privacy cursors track observed disabled and signed-out transcript intervals so
+enabling a repository or signing in later does not upload those intervals.
+When a session moves between repositories, each turn is sent only for the
+last repository it was recorded in, by the working directory Claude Code
+records. It is not sent if one of its hooks ran while signed out or in a
+repository that was not collecting at that moment; recording turned on
+part-way through a turn starts with the next turn.
+Global OFF pauses capture and transmission while retaining queued data.
 
 ## Historical sessions
 
