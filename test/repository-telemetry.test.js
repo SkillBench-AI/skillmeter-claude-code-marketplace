@@ -654,9 +654,9 @@ test("global kill-switch lists repositories as blocked and prevents toggles", ()
 test("a toggle that goes stale partway keeps the ids it already applied", () => {
   // `saveProjectSetting` writes one repository at a time, so a policy write that
   // lands between two of them leaves the earlier ids applied and the rest not.
-  // The picker's recovery rule depends on that shape: it keeps what was applied
-  // and re-pages only the remainder. An all-or-nothing result would make the
-  // instruction dead text without failing anything.
+  // The picker's recovery rule depends on that shape: it reports what was
+  // applied, re-runs `list` and asks again for the rest. An all-or-nothing
+  // result would make the instruction dead text without failing anything.
   const state = {
     revision: 4,
     repositories: [
@@ -695,6 +695,12 @@ test("a toggle that goes stale partway keeps the ids it already applied", () => 
     ]
   );
 });
+
+// The bullet or paragraph of SKILL.md that contains `needle`, so an assertion
+// can check what that one rule says rather than a phrase anywhere in the file.
+function skillBlock(needle) {
+  return TELEMETRY_SKILL.split(/\n(?=- )|\n\n/).find((block) => block.includes(needle)) || "";
+}
 
 test("telemetry skill routes list through the repository toggle UI", () => {
   assert.match(TELEMETRY_SKILL, /allowed-tools: AskUserQuestion Bash\(node \*\)/);
@@ -740,6 +746,8 @@ test("telemetry skill asks one single-select question for the coarse choice", ()
     TELEMETRY_SKILL,
     /stop\.\s+Change nothing, run no\s+command, and ask nothing further/
   );
+  // Claude Code adds `Chat about this` too, and reports it as declining.
+  assert.match(skillBlock("rejected tool call"), /`Chat about this`/);
 });
 
 test("telemetry skill prints the repositories as one grouped, numbered list", () => {
@@ -759,6 +767,14 @@ test("telemetry skill prints the repositories as one grouped, numbered list", ()
   assert.match(
     TELEMETRY_SKILL,
     /End your turn there,\s+and run no command until the reply arrives/
+  );
+  // Two repositories with one name are told apart by a suffix nobody can type.
+  assert.match(skillBlock("share a `displayName`"), /only\s+by\s+(their\s+|its\s+)?numbers?\b/);
+  assert.doesNotMatch(TELEMETRY_SKILL, /by (their|its|the) suffix/);
+  // The user is told the minimum before the first reply, not after a refusal.
+  assert.match(
+    skillBlock("separated by commas or spaces"),
+    /at least (three|3) (letters|characters)/
   );
   // The sign-in inventory's markers, so the two lists read alike.
   const banner = fs.readFileSync(
@@ -780,6 +796,19 @@ test("telemetry skill resolves a reply only against the list it printed", () => 
   );
   // A filler word that occurs in exactly one name would otherwise select it.
   assert.match(TELEMETRY_SKILL, /Any other token shorter than three characters/);
+  // A short token never names a repository, and the rule has no exception.
+  assert.match(
+    skillBlock("shorter than three characters"),
+    /shorter than (three|3) characters[^.]*is not a repository/
+  );
+  assert.equal(TELEMETRY_SKILL.match(/\bshort/gi).length, 1, "one rule about short tokens");
+  // A reply that negates or gives a direction is held back as a whole, even
+  // when each of its words happens to occur in one name.
+  const negation = skillBlock("`except`");
+  for (const word of ["not", "except", "but", "only", "keep"]) {
+    assert.match(negation, new RegExp(`\`${word}\``), word);
+  }
+  assert.match(negation, /\b(not|never)\s+resolved\b/);
   const stopWords = TELEMETRY_SKILL.match(
     /shorter than three characters, or, ignoring case, any of\s+([^]*?), is not a repository, whatever names contain it\./
   );
@@ -805,7 +834,10 @@ test("telemetry skill resolves a reply only against the list it printed", () => 
     TELEMETRY_SKILL,
     /A message that is plainly a different\s+request is not a reply: change nothing and handle it as that request\./
   );
-  assert.match(TELEMETRY_SKILL, /the list did not print, and never guess: quote an unmatched token back/);
+  assert.match(
+    TELEMETRY_SKILL,
+    /the list did not print, and never guess: quote an unmatched token back/
+  );
   assert.match(TELEMETRY_SKILL, /without suggesting which repository it might have meant/);
   // One unresolved token holds back the whole reply, so a typo never leaves
   // the rest half-applied and the next answer restates the selection.
@@ -834,6 +866,16 @@ test("telemetry skill resolves a reply only against the list it printed", () => 
     /each repository switches as the list shows, off to on and on to\s+off/
   );
   assert.match(TELEMETRY_SKILL, /give the current state of each repository it named/);
+  // The switching note answers a direction the user typed, so it depends on
+  // one; it is not said after every refusal.
+  assert.match(
+    skillBlock("switches as the list shows"),
+    /\b(if|when|only if)\b[^.]*`on`[^.]*`off`[^.]*say once that each repository switches/i
+  );
+  assert.doesNotMatch(
+    TELEMETRY_SKILL,
+    /\b(say|give|add) (it|this|that|the note)\b[^.]*\b(also|even|always|every)\b|used none of them/i
+  );
   assert.match(TELEMETRY_SKILL, /a word like\s+`on` or `off` is not an instruction\./);
 });
 
