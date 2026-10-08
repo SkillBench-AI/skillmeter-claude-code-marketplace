@@ -1,9 +1,9 @@
 {
-  "name": "skillbench",
+  "name": "skillbench-internal",
   "owner": {
     "name": "skillbench"
   },
-  "description": "SkillBench plugins for Claude Code.",
+  "description": "SkillBench plugins for Claude Code. Internal channel: tracks next against the dev environment.",
   "plugins": [
     {
       "name": "skillmeter",
