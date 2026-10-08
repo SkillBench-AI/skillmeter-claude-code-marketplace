@@ -760,6 +760,9 @@ test("telemetry skill prints the repositories as one grouped, numbered list", ()
     /off \(`action` `"enable"`\) first, then on \(`action` `"disable"`\)/
   );
   assert.match(TELEMETRY_SKILL, /numbered 1, 2, 3, … continuously across both groups/);
+  // The headers say what naming a line does; the closing ask no longer does.
+  assert.match(TELEMETRY_SKILL, /^Off — naming one turns it on$/m);
+  assert.match(TELEMETRY_SKILL, /^On — naming one turns it off$/m);
   assert.match(
     TELEMETRY_SKILL,
     /come last, unnumbered, each with its\s+`description`/
@@ -832,7 +835,17 @@ test("telemetry skill resolves a reply only against the list it printed", () => 
   assert.doesNotMatch(TELEMETRY_SKILL, /`id`[^.\n]*\baccept|\baccept[^.\n]*`id`/i);
   assert.match(
     TELEMETRY_SKILL,
-    /A message that is plainly a different\s+request is not a reply: change nothing and handle it as that request\./
+    /plainly a\s+different request is not a reply: change nothing, handle it as that request/
+  );
+  // The window closes: a name sent after an unrelated exchange is not a reply.
+  assert.match(
+    skillBlock("is a reply"),
+    /\bonly the message (right |immediately |directly )?after the list\b/i
+  );
+  assert.match(skillBlock("is a reply"), /the list no longer applies/);
+  assert.doesNotMatch(
+    TELEMETRY_SKILL,
+    /\b(any|every) (later )?message (after|following) the list\b|\bany later message\b/i
   );
   assert.match(
     TELEMETRY_SKILL,

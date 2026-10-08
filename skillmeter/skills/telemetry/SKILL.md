@@ -90,15 +90,15 @@ Blocked — cannot be changed here
 
 Then ask, in one line, for the repositories to change in the next message:
 numbers, or at least three letters of each name, separated by commas or spaces,
-or `none` — each one named switches. End your turn there,
-and run no command until the reply arrives.
+or `none`. End your turn there, and run no command until the reply arrives.
 
 ## The reply
 
-The next message is the reply, and these instructions apply to it; numbers and
-names refer to the list printed last. A message that is plainly a different
-request is not a reply: change nothing and handle it as that request. `none`,
-or a reply that plainly declines, changes nothing.
+Only the message right after the list is a reply, and these instructions apply
+to it; its numbers and names refer to that list. A message that is plainly a
+different request is not a reply: change nothing, handle it as that request,
+and say that the list no longer applies — `/skillmeter:telemetry` prints it
+again. `none`, or a reply that plainly declines, changes nothing.
 
 Otherwise split the reply into tokens at commas, whitespace and the word `and`,
 and resolve each to exactly one numbered line:
