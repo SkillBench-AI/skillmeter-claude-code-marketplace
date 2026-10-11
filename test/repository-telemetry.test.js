@@ -774,10 +774,15 @@ test("telemetry skill prints the repositories as one grouped, numbered list", ()
   // Two repositories with one name are told apart by a suffix nobody can type.
   assert.match(skillBlock("share a `displayName`"), /only\s+by\s+(their\s+|its\s+)?numbers?\b/);
   assert.doesNotMatch(TELEMETRY_SKILL, /by (their|its|the) suffix/);
-  // The user is told the minimum before the first reply, not after a refusal.
+  // The ask says what a name must be: a part no other line's name contains.
+  // It gives no character count, which reads as "the first three letters".
   assert.match(
     skillBlock("separated by commas or spaces"),
-    /at least (three|3) (letters|characters)/
+    /part of (a|each) (repository's )?name[^.]*no other/i
+  );
+  assert.doesNotMatch(
+    skillBlock("separated by commas or spaces"),
+    /\b(three|3) (letters|characters)\b/
   );
   // The sign-in inventory's markers, so the two lists read alike.
   const banner = fs.readFileSync(
@@ -793,10 +798,13 @@ test("telemetry skill resolves a reply only against the list it printed", () => 
     TELEMETRY_SKILL,
     /A token of digits only is a line number\. No such line: not a repository\./
   );
+  // A token is matched against the repository's name, never the org every
+  // line shares, so a part of the org cannot be ambiguous across the list.
   assert.match(
-    TELEMETRY_SKILL,
-    /every numbered line whose `displayName`\s+contains it, ignoring case/
+    skillBlock("Each remaining token"),
+    /repository name[^.]*after `@org\/`[^.]*contains it, ignoring case/
   );
+  assert.doesNotMatch(TELEMETRY_SKILL, /whose `displayName`\s+contains it/);
   // A filler word that occurs in exactly one name would otherwise select it.
   assert.match(TELEMETRY_SKILL, /Any other token shorter than three characters/);
   // A short token never names a repository, and the rule has no exception.
@@ -805,6 +813,9 @@ test("telemetry skill resolves a reply only against the list it printed", () => 
     /shorter than (three|3) characters[^.]*is not a repository/
   );
   assert.equal(TELEMETRY_SKILL.match(/\bshort/gi).length, 1, "one rule about short tokens");
+  // A displayName copied from the list is a label `list` returned, so it names
+  // its line, with or without the `@` a terminal double-click leaves out.
+  assert.match(skillBlock("Each remaining token"), /\bwhole `displayName`[^.]*with or without the `@`/);
   // A reply that negates or gives a direction is held back as a whole, even
   // when each of its words happens to occur in one name.
   const negation = skillBlock("`except`");

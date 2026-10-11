@@ -89,8 +89,9 @@ Blocked — cannot be changed here
 ```
 
 Then ask, in one line, for the repositories to change in the next message:
-numbers, or at least three letters of each name, separated by commas or spaces,
-or `none`. End your turn there, and run no command until the reply arrives.
+numbers, or a part of a repository's name that no other line's name contains,
+separated by commas or spaces, or `none`.
+End your turn there, and run no command until the reply arrives.
 
 ## The reply
 
@@ -113,9 +114,11 @@ and resolve each to exactly one numbered line:
   `but`, `only`, `keep`, `on`, `off`, `turn`, `enable` or `disable` — is not
   resolved at all, even if every word matches a name: change nothing, say how
   it would have read, and ask again.
-- Each remaining token names every numbered line whose `displayName`
-  contains it, ignoring case. One line: that repository. None: not a repository
-  — if it matches only a blocked repository, say so and why. Several: ambiguous.
+- Each remaining token names every numbered line whose repository name — the
+  part of its `displayName` after `@org/` — contains it, ignoring case, or
+  whose whole `displayName` it is, with or without the `@`.
+  One line: that repository. None: not a repository — if it matches only a
+  blocked repository, say so and why. Several: ambiguous.
 
 Never match a path, an `id`, an `optionLabel`, a `description`, or anything
 else the list did not print, and never guess: quote an unmatched token back as
