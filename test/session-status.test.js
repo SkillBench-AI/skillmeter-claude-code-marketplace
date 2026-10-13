@@ -10,9 +10,20 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
 
-const { ORG, REPO_KEY, collectionClient, license } = require("../testing/collection-client");
+const { ORG, REPO_KEY, collectionClient: newClient, license } = require("../testing/collection-client");
 
 const signedIn = `signIn(${JSON.stringify(license())});`;
+
+// SessionStart spawns a detached drain unless one was requested in the last 30
+// seconds. Nothing here uploads, and a drain still writing when the test ends
+// keeps its temporary directory from being removed, so mark one as requested.
+function collectionClient(options) {
+  const f = newClient(options);
+  const lock = path.join(f.env.CLAUDE_PLUGIN_DATA, "logs", ".drain-once.lock");
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  fs.writeFileSync(lock, `test ${Date.now()}\n`);
+  return f;
+}
 
 const statusFile = (f, id) => path.join(f.env.CLAUDE_PLUGIN_DATA, "session-status", `${id}.json`);
 const status = (f, id) => JSON.parse(fs.readFileSync(statusFile(f, id), "utf8"));
@@ -86,10 +97,11 @@ test("an unchanged state is not rewritten", () => {
   const f = collectionClient();
   f.write(signedIn);
   f.sessionStart("s");
-  const old = new Date(Date.now() - 60_000);
+  // Whole seconds: a filesystem may hand the time back with sub-millisecond noise.
+  const old = Math.floor(Date.now() / 1000) - 60;
   fs.utimesSync(statusFile(f, "s"), old, old);
   f.sessionStart("s");
-  assert.equal(fs.statSync(statusFile(f, "s")).mtimeMs, old.getTime());
+  assert.equal(Math.round(fs.statSync(statusFile(f, "s")).mtimeMs / 1000), old);
 });
 
 test("a session id that cannot name a file writes nothing", () => {
