@@ -9,7 +9,14 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
+
+// The plugin's lib modules resolve the data and state directories when they
+// load; outside a plugin installation they need throwaway ones.
+const SCRATCH = fs.mkdtempSync(path.join(os.tmpdir(), "skm-status-module-"));
+process.env.CLAUDE_PLUGIN_DATA = path.join(SCRATCH, "data");
+process.env.SKILLMETER_STATE_DIR = path.join(SCRATCH, "state");
 
 const PLUGIN = path.resolve(__dirname, "../skillmeter");
 const MODULE = fs.readFileSync(path.join(PLUGIN, "hooks/status.tsx"), "utf8");
