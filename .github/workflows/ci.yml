@@ -36,3 +36,24 @@ jobs:
       # A Tier-1 corpus miss fails here and blocks merge.
       - name: Run unit tests
         run: node --test
+
+  validate:
+    name: Validate plugin (Claude Code ${{ matrix.claude-code }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest release that loads the display module (hooks/status.tsx)
+        # with the APIs it uses, and the newest this was checked against.
+        claude-code: ["2.1.280", "2.1.296"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # Reads the manifest, hooks.json and the module the way that release's
+      # loader would, and fails on anything it would refuse.
+      - name: claude plugin validate
+        run: npx -y "@anthropic-ai/claude-code@${{ matrix.claude-code }}" plugin validate skillmeter

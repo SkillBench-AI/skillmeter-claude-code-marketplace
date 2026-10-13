@@ -436,5 +436,6 @@
         ]
       }
     ]
-  }
+  },
+  "modules": ["./status.tsx"]
 }

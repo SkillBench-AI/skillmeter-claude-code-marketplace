@@ -1814,7 +1814,8 @@ function cleanupStaleFiles() {
   // here. Both directories are the notices' own, so a lock a killed hook left
   // behind ages out too; no hook holds one for more than seconds.
   const { SESSION_STATE_DIR, SIGNIN_NOTICE_DIR } = require("./collection-notice");
-  for (const dir of [SESSION_STATE_DIR, SIGNIN_NOTICE_DIR]) {
+  const { SESSION_STATUS_DIR } = require("./session-status");
+  for (const dir of [SESSION_STATE_DIR, SIGNIN_NOTICE_DIR, SESSION_STATUS_DIR]) {
     try {
       for (const f of fs.readdirSync(dir)) candidates.push(path.join(dir, f));
     } catch {}

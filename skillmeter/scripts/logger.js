@@ -20,6 +20,7 @@ const { resolveTelemetryGate } = require("./lib/telemetry-policy");
 const { gateReason } = require("./lib/collection-wording");
 const { appendCaptureExcluded } = require("./lib/organization-audit-queue");
 const { observeSessionCwd } = require("./lib/cwd-context");
+const { updateSessionStatus } = require("./lib/session-status");
 
 // ---------------------------------------------------------------------------
 // Structured event log — the per-event NDJSON written to events.jsonl. The
@@ -199,6 +200,9 @@ async function runHook(eventName, buildData, options = {}) {
       ? telemetryStore.getRepositoryOverride(repoScopeDecision.repoKey)
       : null,
   });
+  // What the display module shows for this session (ADR 003, decision 7).
+  // Written only on a change, and never at the cost of the capture below.
+  updateSessionStatus(input.session_id, { gate });
   if (options.onGate) {
     options.onGate({ gate, repoScopeDecision, orgConsent, cwd, input, eventName });
   } else {
