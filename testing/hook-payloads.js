@@ -195,6 +195,23 @@ const hookPayloadFixtures = [
       trigger: "manual",
     },
   },
+  {
+    event: "UserPromptExpansion",
+    input: {
+      ...common,
+      hook_event_name: "UserPromptExpansion",
+      expansion_type: "slash_command",
+      command_name: "example-skill",
+      command_args: "arg1 arg2",
+      command_source: "plugin",
+      prompt: "/example-skill arg1 arg2",
+    },
+    expected: {
+      expansion_type: "slash_command",
+      command_name: "example-skill",
+      command_source: "plugin",
+    },
+  },
 ];
 
 module.exports = {

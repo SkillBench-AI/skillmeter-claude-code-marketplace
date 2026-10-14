@@ -86,6 +86,19 @@
     ],
     "UserPromptExpansion": [
       {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/hook.js",
+              "UserPromptExpansion"
+            ],
+            "async": true
+          }
+        ]
+      },
+      {
         "matcher": "signin|skillmeter:signin",
         "hooks": [
           {

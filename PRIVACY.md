@@ -93,6 +93,8 @@ device flow, and sent that token to the activation service.
 - timestamps, session and prompt correlation identifiers, Claude Code event
   names, model, permission mode, effort level, and agent identifiers/types;
 - user prompt text and notification text;
+- the name, source and type of each slash command, skill or MCP prompt the
+  user runs directly;
 - tool names, tool inputs, tool responses, tool errors, and tool-use
   identifiers;
 - assistant messages exposed by lifecycle hooks;

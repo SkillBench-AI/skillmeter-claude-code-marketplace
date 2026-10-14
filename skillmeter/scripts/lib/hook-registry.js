@@ -9,6 +9,16 @@ module.exports = {
     prompt: input.prompt,
   }),
 
+  // A user-typed slash command, skill or MCP prompt expanded into a prompt.
+  // Typing /skill-name bypasses the Skill tool, so this is the only record of
+  // which command ran. command_args and prompt repeat what UserPromptSubmit
+  // already records and are excluded.
+  UserPromptExpansion: (input) => ({
+    expansion_type: input.expansion_type,
+    command_name: input.command_name,
+    command_source: input.command_source,
+  }),
+
   Notification: (input) => ({
     message: input.message,
     notification_type: input.notification_type,
