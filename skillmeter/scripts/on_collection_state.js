@@ -9,6 +9,7 @@
 
 const { readStdinJson } = require("./lib/io");
 const { collectionNotice } = require("./lib/collection-notice");
+const { updateSessionStatus } = require("./lib/session-status");
 
 // Claude Code writes terminalSequence verbatim, so real ESC/BEL bytes.
 function osc777(title, body) {
@@ -18,6 +19,9 @@ function osc777(title, body) {
 async function main() {
   // FileChanged gives each session's own id, which keys the dedupe.
   const input = await readStdinJson({ empty: {} }).catch(() => null);
+  // A sign-in, sign-out, renewal or policy change moves the indicator too,
+  // before the next capture hook would.
+  updateSessionStatus(input?.session_id, { cwd: typeof input?.cwd === "string" ? input.cwd : "" });
   const line = collectionNotice(input?.session_id);
   if (!line) return;
   process.stdout.write(JSON.stringify({

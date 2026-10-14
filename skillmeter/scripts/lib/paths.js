@@ -35,6 +35,11 @@ const SESSIONS_DIR = path.join(DATA_ROOT, "sessions");
 const BACKFILL_STATE_FILE = path.join(DATA_ROOT, "backfill-state.json");
 // Watched by FileChanged; written once when every historical chunk is settled.
 const BACKFILL_RESULT_FILE = path.join(DATA_ROOT, "backfill-result.json");
+// One file per Claude Code session with its collection state, read by the
+// display module (hooks/status.tsx). Directly under the data root, not under
+// ACCOUNT_DIR, because the module can find the data root but not the hash of
+// the state directory; a session id already names one session of one client.
+const SESSION_STATUS_DIR = path.join(DATA_ROOT, "session-status");
 
 function repositoryStorageId(repoKey, hashSalt) {
   return crypto.createHmac("sha256", hashSalt).update(repoKey).digest("hex").slice(0, 12);
@@ -87,6 +92,7 @@ module.exports = {
   SESSIONS_DIR,
   BACKFILL_STATE_FILE,
   BACKFILL_RESULT_FILE,
+  SESSION_STATUS_DIR,
   repositoryQueuePaths,
   organizationAuditQueuePaths,
   PLUGIN_VERSION,

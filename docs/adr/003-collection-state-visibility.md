@@ -9,7 +9,7 @@ Amended 2026-10-01 (see the amendments at the end): the retry monitor is
 removed and decision 3 retired; sign-in after an ended session; decision 1
 implemented as the resolver; decision 4 implemented as the card. Amended
 2026-10-05: decision 2 implemented as the notices, decision 6 as the status
-command.
+command. Amended 2026-10-13: decision 7, the in-session indicator (B4).
 **Related:** ADR 001 (decision 2, its Stop-recovery amendment and the local status record it requires; decision 4 is retired by the 2026-09-16 amendment), `skillmeter-codex-marketplace`, `skillmeter-vscode-extension` (parity)
 
 ## Context
@@ -583,3 +583,86 @@ B4, the persistent in-session indicator, remains the other half of observed
 problem 1. This ADR predates Claude Code's mods (2.1.287 and later): a mod can
 draw a band above the prompt that stays in place, and it installs as a plugin
 from a marketplace, so B4 can be built.
+
+## Amendment 2026-10-13: decision 7, the in-session indicator (B4)
+
+### 7. The state stays visible beside the prompt while the session runs
+
+The notices of decision 2 are lines in the transcript: they scroll away, and a
+user who missed one has to run `/skillmeter:telemetry status` to learn the
+state again. A Claude Code mod (2.1.280 and later; the plugin's hooks module)
+can draw in the prompt's own area, so the plugin keeps the state there:
+
+- **A footer label, always.** One dim label at the right of the prompt footer,
+  beside Claude Code's own modes (`focus`, `memory paused`): an icon, the name,
+  and at most a few words.
+
+  | State | Label |
+  |---|---|
+  | `recording` | `● SkillMeter` |
+  | `unconfigured` | `◌ SkillMeter · off here` |
+  | `paused` | `◌ SkillMeter · paused` |
+  | `never_signed_in`, `signed_out`, `token_missing` | `○ SkillMeter · signed out` |
+  | `revoked` | `○ SkillMeter · no license` |
+  | `delivery_paused` | `◐ SkillMeter · uploads paused` |
+
+  The icon carries the meaning: filled is collecting, dotted is off by
+  choice, empty is stopped, half is recording without uploading.
+- **A band, only while the user has to act.** One warning-coloured line above
+  the prompt for the states decision 2 announces as a stop:
+  `⚠ SkillMeter stopped · /skillmeter:signin` (`signed_out`, `token_missing`),
+  `⚠ SkillMeter stopped · license revoked`, and
+  `⚠ SkillMeter uploads paused · /skillmeter:signin`. It leaves when the
+  state does. `never_signed_in` has none: the SessionStart card already asks.
+- **No new notice.** Stops and returns are still announced once, by decision
+  2's notices. The indicator only keeps the current state in view.
+
+The label is drawn as a footer mode, not as the pinned status line: Claude Code
+prefixes a plugin's status line with the plugin's name, and a mode label is
+drawn as given.
+
+**Where the state comes from.** The module runs in Claude Code's own
+environment, without Node, so it cannot run the resolver. The hooks write the
+state for it:
+
+- `runHook`, which every capture hook and SessionStart pass through, resolves
+  the state with the gate it already computed for the hook's working directory
+  and writes it to `<plugin data>/session-status/<session_id>.json`
+  (`lib/session-status.js`). The FileChanged handler of decision 2 does the same
+  for its session, so a sign-in, sign-out, renewal or policy change moves the
+  indicator before the next capture hook would.
+- The file holds `{ schema, state, reason }` and is written only when the state
+  or the reason changes. It is never sent and ages out with the notices' files,
+  30 days after its last write.
+- It is not the notices' per-session record (`account/<hash>/collection-state/`).
+  That one is resolved without a working directory, because a notice describes
+  this client. This one carries the gate for the session's directory, so the
+  label can say "off here" in one repository and show collecting in the next.
+  It sits directly under the data root because the module can find the data
+  root (`CLAUDE_PLUGIN_DATA`, or the installed cache layout as
+  `lib/plugin-data-root.js` derives it) but not the hash of the state
+  directory; a session id already names one session of one client.
+- The module reads its own session's file at session start, after each turn and
+  every 10 seconds, and draws nothing when the file is absent or unreadable: an
+  older plugin version, a session before its first hook, or a read error never
+  shows a state it did not see.
+
+**Words.** The labels and the band are the module's own: it cannot import the
+CommonJS wording table (`lib/collection-wording.js`). `test/status-module.test.js`
+holds them to the resolver: every state has a label, and exactly the states
+that need the user have a band.
+
+**Compatibility.** `hooks.json` names the module under `modules`, next to the
+command hooks. `claude plugin validate` accepts that from 2.1.280 on, and CI
+runs it against 2.1.280 and the newest checked release. The module uses only
+`$.state.get` and `$.state.set`, not the state helpers 2.1.280 does not know.
+Before 2.1.280 `modules` is an unknown key. 2.1.250's validator passes over it
+(it reports only the `PostModelSwitch` event the hooks already use), so the
+command hooks, the card and the notices are expected to load as before; that
+is checked at run time on an older release while dogfooding the internal
+channel, before the release. The footer label is drawn on the terminal and in
+the desktop app; other surfaces show the band only.
+
+Open: whether to dim the label, or hide it, while a session is in a directory
+outside every licensed organization, where "off here" is expected and says
+little.

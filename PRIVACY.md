@@ -93,6 +93,8 @@ device flow, and sent that token to the activation service.
 - timestamps, session and prompt correlation identifiers, Claude Code event
   names, model, permission mode, effort level, and agent identifiers/types;
 - user prompt text and notification text;
+- the name, source and type of each slash command, skill or MCP prompt the
+  user runs directly;
 - tool names, tool inputs, tool responses, tool errors, and tool-use
   identifiers;
 - assistant messages exposed by lifecycle hooks;
@@ -254,6 +256,12 @@ the feature is introduced.
   the time of the last sign-in result that session showed, or of the one
   current when it started, so each result is shown once in each session. It is named by the session identifier, holds
   only that time, is never sent, and is deleted 30 days after its last update;
+- for each open Claude Code session, the plugin also keeps the collection
+  state for the directory the session is in, which it shows beside the prompt.
+  The file holds only the names of the state and its reason (for example
+  `unconfigured` and `org_consent_required`), no path or repository name, is
+  named by the session identifier, is never sent, and is deleted 30 days after
+  its last update;
 - uninstalling the plugin may not remove `~/.skillbench/`.
 
 To remove the retained local identity and policy files, sign out first, close

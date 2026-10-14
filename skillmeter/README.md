@@ -34,6 +34,15 @@ takes more than two seconds. No line is shown while collection works, and
 there are no reminders. Turning a repository or organization off, or changing
 directory, shows no line: `/skillmeter:telemetry status` reports it.
 
+On Claude Code 2.1.280 and later, the state also stays in view beside the
+prompt. The footer shows one dim label for the current directory —
+`● SkillMeter` while collecting, `◌ SkillMeter · off here` where this
+repository or its organization is not enabled, `○ SkillMeter · signed out`,
+`◐ SkillMeter · uploads paused` — and, only while you have to act, one line
+above the prompt says what to run, such as
+`⚠ SkillMeter stopped · /skillmeter:signin`. The footer label appears in the
+terminal and the desktop app.
+
 ## Collection scope
 
 Live collection requires a valid license, an eligible GitHub repository,
@@ -158,6 +167,7 @@ that was revoked because the workspace no longer licenses you (402), requires
 | `~/.skillbench/telemetry-policy.json` | This plugin's global, organization and repository choices; other clients keep their own |
 | `${CLAUDE_PLUGIN_DATA}/account/<id>/session.json` | This plugin's license and sign-in state, not shared with other clients |
 | `${CLAUDE_PLUGIN_DATA}/account/<id>/license-status.json` | Refresh timestamps, failures and terminal reason |
+| `${CLAUDE_PLUGIN_DATA}/session-status/<session>.json` | Each open session's collection state and reason for its directory, shown beside the prompt |
 | `${CLAUDE_PLUGIN_DATA}/logs/repositories/` | Repository event and transcript queues |
 | `${CLAUDE_PLUGIN_DATA}/logs/backfill.ndjson` | Local backfill progress and upload outcomes |
 

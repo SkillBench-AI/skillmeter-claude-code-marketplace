@@ -33,6 +33,18 @@ function derivePluginDataRoot(pluginRoot) {
   return path.join(dataParent, `${plugin}-${marketplace}`);
 }
 
+// Another plugin's SessionStart hook can export its own CLAUDE_PLUGIN_DATA
+// through CLAUDE_ENV_FILE, and every `!` and Bash command in the session then
+// inherits it. A provided root that sits beside ours in the host's data dir
+// but names a different plugin is that leak, not an override.
+function belongsToOtherPlugin(provided, derived, pluginRoot) {
+  if (!derived) return false;
+  const resolved = path.resolve(provided);
+  if (path.dirname(resolved) !== path.dirname(derived)) return false;
+  const plugin = path.basename(path.dirname(path.resolve(pluginRoot)));
+  return !path.basename(resolved).startsWith(`${plugin}-`);
+}
+
 /**
  * @param {string} pluginRoot the caller's already-resolved plugin root, which
  *   must include its own `__dirname` fallback — a skill process has neither
@@ -47,9 +59,11 @@ function resolvePluginDataRoot(pluginRoot, env = process.env) {
   // "${CLAUDE_PLUGIN_DATA}". Creating a directory by that name would be worse
   // than falling through to derivation.
   const provided = env.CLAUDE_PLUGIN_DATA;
-  if (provided && !provided.includes("${")) return provided;
-
   const derived = derivePluginDataRoot(pluginRoot);
+  if (provided && !provided.includes("${") && !belongsToOtherPlugin(provided, derived, pluginRoot)) {
+    return provided;
+  }
+
   if (derived) env.CLAUDE_PLUGIN_DATA = derived;
   return derived;
 }

@@ -58,6 +58,23 @@ test("an explicit CLAUDE_PLUGIN_DATA always wins over derivation", () => {
   assert.equal(resolvePluginDataRoot(pluginRoot, env), "/explicit/root");
 });
 
+// Another plugin can export its own CLAUDE_PLUGIN_DATA into the session shell
+// through CLAUDE_ENV_FILE, so `! bin/signin` would inherit it.
+test("another plugin's data dir leaked into the env is ignored", () => {
+  const { configRoot, pluginRoot, expected } = makeHostLayout();
+  const foreign = path.join(configRoot, "plugins", "data", "codex-openai-codex");
+  const env = { CLAUDE_PLUGIN_DATA: foreign };
+  assert.equal(resolvePluginDataRoot(pluginRoot, env), expected);
+  assert.equal(env.CLAUDE_PLUGIN_DATA, expected, "children inherit the corrected root");
+});
+
+test("this plugin's own data dir in the env is still honored", () => {
+  const { configRoot, pluginRoot, expected } = makeHostLayout();
+  const own = path.join(configRoot, "plugins", "data", "skillmeter-skillbench-internal");
+  assert.equal(resolvePluginDataRoot(pluginRoot, { CLAUDE_PLUGIN_DATA: own }), own);
+  assert.equal(resolvePluginDataRoot(pluginRoot, { CLAUDE_PLUGIN_DATA: expected }), expected);
+});
+
 test("a derived root is published to the env so children inherit it", () => {
   const { pluginRoot, expected } = makeHostLayout();
   const env = {};
@@ -147,5 +164,28 @@ test("an entrypoint launched with no plugin env at all resolves its queue", () =
   assert.equal(
     fs.realpathSync(probe.stdout),
     fs.realpathSync(path.join(expected, "logs"))
+  );
+});
+
+test("an entrypoint run from a shell with another plugin's data dir resolves its own", () => {
+  const { configRoot, pluginRoot, expected } = makeHostLayout();
+  const source = path.resolve(__dirname, "..", "skillmeter", "scripts");
+  fs.cpSync(source, path.join(pluginRoot, "scripts"), { recursive: true });
+  // The leaked value names the same data parent as Claude Code reports it;
+  // __dirname in the child is a realpath, so compare on the real parent.
+  const dataParent = fs.realpathSync(path.join(configRoot, "plugins", "data"));
+  const env = {
+    CLAUDE_PLUGIN_DATA: path.join(dataParent, "codex-openai-codex"),
+    CLAUDE_PLUGIN_ROOT: undefined,
+  };
+
+  const probe = runNode("-e", [
+    "process.stdout.write(require(process.argv[1] + '/scripts/lib/paths').LOG_DIR)",
+    fs.realpathSync(pluginRoot),
+  ], { env });
+  assert.equal(probe.status, 0, probe.stderr);
+  assert.equal(
+    probe.stdout,
+    path.join(dataParent, path.basename(expected), "logs")
   );
 });
