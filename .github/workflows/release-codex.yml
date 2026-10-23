@@ -1,0 +1,61 @@
+name: Release (Codex)
+
+# Tag strategy: Codex releases are cut by pushing an annotated tag
+# "codex-vMAJOR.MINOR.PATCH" that matches the plugin version in
+# clients/codex/plugins/skillmeter/.codex-plugin/plugin.json. The client prefix
+# keeps these tags apart from the Claude Code plugin's "v*" tags, which share
+# this repository and overlap in version numbers.
+# Pushing such a tag runs the full gate (version match + manifests + tests) and,
+# only if everything passes, publishes a GitHub Release with generated notes.
+
+on:
+  push:
+    tags:
+      - "codex-v[0-9]+.[0-9]+.[0-9]+"
+
+# Releasing requires writing the GitHub Release + uploading the source archive.
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Validate & publish release
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/codex
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify tag matches plugin version (clean SemVer)
+        run: node .github/scripts/check-version.mjs --tag "${GITHUB_REF_NAME}"
+      - name: Validate marketplace & plugin manifests
+        run: node .github/scripts/validate-manifests.mjs
+      - name: Run unit tests
+        run: node --test
+      # The Codex client and the marketplace that points at it, nothing of the
+      # Claude Code plugin.
+      - name: Package plugin archive
+        working-directory: .
+        run: |
+          mkdir -p dist
+          git archive --format=tar.gz \
+            --prefix="skillmeter-codex-${GITHUB_REF_NAME}/" \
+            -o "dist/skillmeter-codex-${GITHUB_REF_NAME}.tar.gz" \
+            "${GITHUB_REF_NAME}" -- .agents clients/codex
+      - name: Create GitHub Release
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "Codex ${GITHUB_REF_NAME#codex-}" \
+            --generate-notes \
+            --verify-tag \
+            "dist/skillmeter-codex-${GITHUB_REF_NAME}.tar.gz"

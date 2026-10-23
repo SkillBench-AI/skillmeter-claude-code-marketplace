@@ -1,0 +1,25 @@
+#!/usr/bin/env node
+/**
+ * Renew the stored license now, through the sign-in service, even if it still
+ * looks valid. Usage: node bin/sk-refresh.
+ */
+const path = require("path");
+
+const PLUGIN_ROOT = process.env.PLUGIN_ROOT || path.resolve(__dirname, "..");
+process.env.PLUGIN_ROOT = PLUGIN_ROOT;
+
+const credstore = require(path.join(PLUGIN_ROOT, "scripts", "credstore.js"));
+const { ensureFreshLicense } = require(path.join(PLUGIN_ROOT, "scripts", "lib", "license-activation.js"));
+const { purgeEventLogs } = require(path.join(PLUGIN_ROOT, "scripts", "logger.js"));
+
+(async () => {
+  const before = credstore.getLicenseToken();
+  if (!before) {
+    process.stderr.write("sk-refresh: not signed in; run the SkillMeter sign-in flow\n");
+    process.exit(1);
+  }
+  const after = await ensureFreshLicense(credstore.getDeviceId(), { force: true, onRevoked: purgeEventLogs });
+  const renewed = !!after && after !== before;
+  process.stderr.write(renewed ? "sk-refresh: license renewed\n" : "sk-refresh: license not renewed; see the message above\n");
+  process.exit(renewed ? 0 : 1);
+})();

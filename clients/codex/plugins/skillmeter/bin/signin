@@ -1,0 +1,11 @@
+#!/usr/bin/env node
+/**
+ * Sign in through the SkillMeter sign-in service from the terminal.
+ * Usage: node bin/signin.
+ */
+const path = require("path");
+
+const PLUGIN_ROOT = process.env.PLUGIN_ROOT || path.resolve(__dirname, "..");
+process.env.PLUGIN_ROOT = PLUGIN_ROOT;
+
+require(path.join(PLUGIN_ROOT, "scripts", "signin.js"));

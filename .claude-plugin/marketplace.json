@@ -7,7 +7,7 @@
   "plugins": [
     {
       "name": "skillmeter",
-      "source": "./skillmeter",
+      "source": "./clients/claude-code/skillmeter",
       "description": "Sends opt-in, sanitized Claude Code workflow and conversation telemetry to SkillBench for organization-level developer skill analytics.",
       "category": "development",
       "homepage": "https://skillbench.com"

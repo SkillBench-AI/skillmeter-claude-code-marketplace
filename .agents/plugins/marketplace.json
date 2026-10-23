@@ -1,0 +1,20 @@
+{
+  "name": "skillbench",
+  "interface": {
+    "displayName": "SkillBench"
+  },
+  "plugins": [
+    {
+      "name": "skillmeter",
+      "source": {
+        "source": "local",
+        "path": "./clients/codex/plugins/skillmeter"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "skillmeter": {
+      "command": "node",
+      "args": ["scripts/mcp_server.js"],
+      "cwd": "."
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "name": "skillmeter-codex-marketplace",
+  "private": true,
+  "description": "SkillMeter telemetry plugin marketplace for Codex. The plugin version is the single source of truth in plugins/skillmeter/.codex-plugin/plugin.json.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SkillBench-AI/skillmeter-plugins.git",
+    "directory": "clients/codex"
+  },
+  "scripts": {
+    "test": "node --test",
+    "check:version": "node .github/scripts/check-version.mjs",
+    "check:manifests": "node .github/scripts/validate-manifests.mjs",
+    "check": "npm run check:version && npm run check:manifests && npm test"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

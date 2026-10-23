@@ -1,0 +1,4 @@
+# Run only when the user names this skill ($skillmeter:telemetry), as the
+# Claude Code plugin's skills use disable-model-invocation.
+policy:
+  allow_implicit_invocation: false

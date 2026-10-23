@@ -1,0 +1,43 @@
+{
+  "name": "skillmeter",
+  "version": "0.13.0",
+  "description": "Live SkillBench telemetry for Codex \u2014 lifecycle-hook session analytics, plus sanitized export and review skills.",
+  "author": {
+    "name": "SkillBench",
+    "url": "https://github.com/SkillBench-AI"
+  },
+  "homepage": "https://skillbench.com",
+  "repository": "https://github.com/SkillBench-AI/skillmeter-codex-marketplace",
+  "license": "MIT",
+  "keywords": [
+    "skillbench",
+    "skillmeter",
+    "codex",
+    "telemetry",
+    "analytics",
+    "hooks"
+  ],
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "SkillMeter",
+    "shortDescription": "Live SkillBench telemetry for Codex sessions.",
+    "longDescription": "SkillMeter records privacy-scoped Codex lifecycle telemetry (sessions, prompts, tool use, subagents) and forwards it to the SkillBench analyzer alongside Claude Code and GitHub data. Secrets are redacted fail-closed and paths hashed; harness identifiers (skill/command/MCP/plugin names) are collected raw for internal analysis. Consent is in-context (no OS dialog): new capture requires explicit organization and repository consent recorded in Codex; allowed GitHub organization scope and the Codex pause still apply. Disabling a repository removes its queued, unsent payloads and keeps privacy cursors; the global pause retains queues. Bundled skills also collect, scope-check, and review sanitized exports.",
+    "developerName": "SkillBench",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://skillbench.com",
+    "privacyPolicyURL": "https://skillbench.com/privacy",
+    "termsOfServiceURL": "https://skillbench.com/terms",
+    "defaultPrompt": [
+      "$skillmeter:telemetry status",
+      "Use SkillMeter to check whether this repo matches my allowed GitHub org scope.",
+      "Use SkillMeter to review this sanitized export before I upload it."
+    ],
+    "brandColor": "#2563EB"
+  }
+}

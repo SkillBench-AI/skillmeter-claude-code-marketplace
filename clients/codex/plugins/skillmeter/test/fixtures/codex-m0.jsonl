@@ -1,0 +1,8 @@
+{"timestamp":"2026-09-04T23:59:40Z","type":"session_meta","payload":{"id":"m0-codex-substantive","cwd":"/synthetic/telemetry-demo","source":"cli"}}
+{"timestamp":"2026-09-04T23:59:41Z","type":"turn_context","payload":{"cwd":"/synthetic/telemetry-demo","model":"synthetic-model"}}
+{"timestamp":"2026-09-04T23:59:43Z","type":"event_msg","payload":{"type":"user_message","message":"Inspect the synthetic queue and describe how each stored record reaches the collector."}}
+{"timestamp":"2026-09-04T23:59:44Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Inspect the synthetic queue and describe how each stored record reaches the collector."}]}}
+{"timestamp":"2026-09-04T23:59:45Z","type":"event_msg","payload":{"type":"agent_message","message":"The synthetic queue contains complete JSONL records; each record needs a stable position before sanitization."}}
+{"timestamp":"2026-09-04T23:59:46Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"The synthetic queue contains complete JSONL records; each record needs a stable position before sanitization."}]}}
+{"type":"event_msg","payload":{"type":"token_count","info":{}}}
+{"type":"turn_context","payload":{"cwd":"/synthetic/telemetry-demo"}}

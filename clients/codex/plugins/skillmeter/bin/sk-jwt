@@ -1,0 +1,63 @@
+#!/usr/bin/env node
+/**
+ * Print stored license claims, expiry and device ID without the raw JWT.
+ * Usage: node bin/sk-jwt.
+ */
+const path = require("path");
+
+const PLUGIN_ROOT = process.env.PLUGIN_ROOT || path.resolve(__dirname, "..");
+
+const credstore = require(path.join(PLUGIN_ROOT, "scripts", "credstore.js"));
+const { decodeJwtPayload, getEndpointFromToken } = require(
+  path.join(PLUGIN_ROOT, "scripts", "lib", "jwt.js")
+);
+
+const token = credstore.getLicenseToken();
+const deviceId = credstore.getDeviceId() || "(none)";
+
+if (!token) {
+  process.stdout.write("SkillMeter: no license JWT stored.\n");
+  process.stdout.write(`Device ID: ${deviceId}\n`);
+  process.stdout.write("\nRun the SkillMeter signin flow (bin/signin) to authenticate.\n");
+  process.exit(0);
+}
+
+const payload = decodeJwtPayload(token);
+if (!payload) {
+  process.stdout.write("SkillMeter: license JWT is present but cannot be decoded.\n");
+  process.stdout.write(`Device ID: ${deviceId}\n`);
+  process.exit(1);
+}
+
+const now = Math.floor(Date.now() / 1000);
+const expired = credstore.isLicenseTokenExpired(token);
+const secsUntilExp = typeof payload.exp === "number" ? payload.exp - now : null;
+const statusLabel = expired
+  ? "EXPIRED (or within 5-minute refresh skew)"
+  : secsUntilExp !== null && secsUntilExp < 60
+    ? "expiring soon"
+    : "valid";
+
+function line(label, value) {
+  if (value === undefined || value === null || value === "") return;
+  process.stdout.write(`  ${label.padEnd(22)}${value}\n`);
+}
+
+process.stdout.write("SkillMeter license JWT\n");
+process.stdout.write("─".repeat(56) + "\n");
+line("Tenant (sub)", payload.sub);
+line("Workspace", payload.org && payload.org.login);
+line("User (broker_sub)", payload.broker_sub);
+line("Connected GitHub orgs", Array.isArray(payload.orgs) ? payload.orgs.join(", ") || "(none)" : undefined);
+line("Issuer (iss)", payload.iss);
+line("Telemetry endpoint", getEndpointFromToken(token) || payload.aud);
+if (typeof payload.iat === "number") {
+  line("Issued at", new Date(payload.iat * 1000).toISOString());
+}
+if (typeof payload.exp === "number") {
+  line("Expires at", new Date(payload.exp * 1000).toISOString());
+  const relative = secsUntilExp >= 0 ? `+${secsUntilExp}s` : `${secsUntilExp}s`;
+  line("Status", `${statusLabel} (${relative})`);
+}
+process.stdout.write("─".repeat(56) + "\n");
+line("Device ID", deviceId);

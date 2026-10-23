@@ -1,0 +1,12 @@
+#!/usr/bin/env node
+/**
+ * Forward project or global collection controls to scripts/telemetry.js.
+ * Usage: node bin/sk-telemetry <enable|disable> [--global], status [--details],
+ * or node bin/sk-telemetry consent-preview [--json]; consent-set --help prints choice arguments.
+ */
+const path = require("path");
+
+const PLUGIN_ROOT = process.env.PLUGIN_ROOT || path.resolve(__dirname, "..");
+process.env.PLUGIN_ROOT = PLUGIN_ROOT;
+
+require(path.join(PLUGIN_ROOT, "scripts", "telemetry.js"));

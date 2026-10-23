@@ -1,0 +1,10 @@
+#!/usr/bin/env node
+/**
+ * Sign this plugin out and revoke its session. Usage: node bin/signout.
+ */
+const path = require("path");
+
+const PLUGIN_ROOT = process.env.PLUGIN_ROOT || path.resolve(__dirname, "..");
+process.env.PLUGIN_ROOT = PLUGIN_ROOT;
+
+require(path.join(PLUGIN_ROOT, "scripts", "signout.js"));
