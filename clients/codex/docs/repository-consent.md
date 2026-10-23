@@ -21,7 +21,7 @@ the scope acknowledgement). No record, or a missing choice, grants nothing.
 ChatGPT Work transcript delivery remains unsupported; consent does not bypass that
 capability boundary.
 
-Run `node --test plugins/skillmeter/test/consent-gates.test.js` for the
+Run `node --test test/plugin/consent-gates.test.js` for the
 grant boundary tests, then `npm run check` for the full suite. Synthetic checks
 do not prove installed hook trust, production receipt or reporting.
 
@@ -82,7 +82,7 @@ sent.
 Run the record boundary tests:
 
 ```sh
-node --test plugins/skillmeter/test/consent/global-pause.test.js plugins/skillmeter/test/consent/repository-record.test.js
+node --test test/plugin/consent/global-pause.test.js test/plugin/consent/repository-record.test.js
 ```
 
 Canonical identity parsing follows Claude's pinned `repo-scope.js`: matching
@@ -135,7 +135,7 @@ and delivery gate but do not supply the durable off/on generation recorded by th
 CLI. Event batches recorded before 0.11.0, which carry no repository routing,
 were removed on the first run of 0.11.0.
 
-Run `node --test plugins/skillmeter/test/consent/queue-revocation.test.js` for mixed-batch,
+Run `node --test test/plugin/consent/queue-revocation.test.js` for mixed-batch,
 retry, cursor preservation, in-flight revocation and disable/re-enable checks.
 
 

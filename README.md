@@ -22,7 +22,15 @@ claude plugin marketplace add SkillBench-AI/skillmeter-plugins
 claude plugin install skillmeter@skillbench
 ```
 
-Codex: see [clients/codex/README.md](clients/codex/README.md).
+Codex:
+
+```sh
+codex plugin marketplace add SkillBench-AI/skillmeter-plugins --ref main
+codex plugin add skillmeter@skillbench
+```
+
+Moving from the archived `skillmeter-codex-marketplace`: see
+[clients/codex/README.md](clients/codex/README.md#update).
 
 ## Branches and channels
 

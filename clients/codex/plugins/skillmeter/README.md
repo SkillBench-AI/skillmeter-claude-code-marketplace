@@ -285,7 +285,7 @@ the repository root when changing plugin code.
 
 Tests live under `test/` by purpose (`sanitizer`, `consent`, `hooks`,
 `transport`, `auth`) with shared fixtures in `test-support/`. Queue revocation
-runs with `node --test plugins/skillmeter/test/consent/queue-revocation.test.js`
+runs with `node --test test/plugin/consent/queue-revocation.test.js`
 from the repository root; it uses synthetic repositories and an intercepted
 fetch to check repository payload purge, mixed-batch isolation and retry
 authorization against Claude's `scripts/lib/repository-queue.js` contract.

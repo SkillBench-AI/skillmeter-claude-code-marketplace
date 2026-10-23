@@ -1,13 +1,13 @@
 {
   "name": "skillmeter",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "description": "Live SkillBench telemetry for Codex \u2014 lifecycle-hook session analytics, plus sanitized export and review skills.",
   "author": {
     "name": "SkillBench",
     "url": "https://github.com/SkillBench-AI"
   },
   "homepage": "https://skillbench.com",
-  "repository": "https://github.com/SkillBench-AI/skillmeter-codex-marketplace",
+  "repository": "https://github.com/SkillBench-AI/skillmeter-plugins",
   "license": "MIT",
   "keywords": [
     "skillbench",
