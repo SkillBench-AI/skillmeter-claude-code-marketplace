@@ -220,3 +220,24 @@ test("getRemoteUrlsForRepo follows a worktree commondir", () => {
     "https://github.com/Org/repo.git",
   ]);
 });
+
+// Invalid shared metadata fails closed, as in the Codex client: the worktree's
+// private config must never stand in for the main repository's remotes.
+for (const broken of ["missing-common-directory", "missing-config", "unreadable-commondir", "empty-commondir"]) {
+  test(`getRemoteUrlsForRepo returns no remotes for a worktree with ${broken}`, () => {
+    const root = makeTempDir("skm-scope-broken-");
+    const common = path.join(root, "main", ".git");
+    const worktreeGitDir = path.join(common, "worktrees", "feature");
+    const worktree = path.join(root, "feature");
+    const commonFile = path.join(worktreeGitDir, "commondir");
+    writeFile(path.join(common, "config"), '[remote "origin"]\n\turl = https://github.com/Org/repo.git\n');
+    writeFile(commonFile, "../..\n");
+    writeFile(path.join(worktree, ".git"), `gitdir: ${worktreeGitDir}\n`);
+    writeFile(path.join(worktreeGitDir, "config"), '[remote "origin"]\n\turl = https://github.com/Org/private.git\n');
+    if (broken === "missing-common-directory") fs.writeFileSync(commonFile, "missing\n");
+    if (broken === "missing-config") fs.unlinkSync(path.join(common, "config"));
+    if (broken === "unreadable-commondir") { fs.unlinkSync(commonFile); fs.mkdirSync(commonFile); }
+    if (broken === "empty-commondir") fs.writeFileSync(commonFile, "\n");
+    assert.deepEqual(getRemoteUrlsForRepo(worktree), []);
+  });
+}
