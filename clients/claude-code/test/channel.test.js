@@ -45,7 +45,8 @@ test("the internal build uses dev regardless of the environment", (t) => {
   // The build covers both clients, so the Codex manifests come along.
   for (const file of [".github/scripts/make-internal-channel.mjs", ".claude-plugin/marketplace.json",
     ".agents/plugins/marketplace.json", "clients/codex/plugins/skillmeter/.codex-plugin/plugin.json",
-    "clients/claude-code/skillmeter/scripts/lib/config.js", "clients/claude-code/skillmeter/.claude-plugin/plugin.json"]) {
+    "clients/claude-code/skillmeter/scripts/lib/config.js", "clients/claude-code/skillmeter/scripts/lib/endpoints.js",
+    "clients/claude-code/skillmeter/.claude-plugin/plugin.json"]) {
     fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
     fs.copyFileSync(path.join(repoRoot, file), path.join(root, file));
   }

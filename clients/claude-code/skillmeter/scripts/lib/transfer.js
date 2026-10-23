@@ -20,7 +20,7 @@ const { spawn } = require("child_process");
 const credstore = require("../credstore");
 const { getEndpointFromTokenAllowExpired, isJwtExpired } = require("./jwt");
 const { ensureFreshLicense } = require("./license-activation");
-const { getEventTimeoutMs, getTranscriptChunkMaxBytes } = require("./config");
+const { getBackendUrlOverride, getEventTimeoutMs, getTranscriptChunkMaxBytes } = require("./config");
 const { atomicWriteJson, safeReadJson } = require("./io");
 const { appendBackfillLog } = require("./backfill-log");
 const { settleBackfillDelivery } = require("./backfill-delivery");
@@ -76,6 +76,12 @@ const {
 } = require("./backfill-state");
 const { listBackfillEvents, readBackfillEvent } = require("./backfill-event");
 const { currentTenantFingerprint, tenantFingerprint } = require("./tenant");
+
+// Where telemetry goes: an explicit SKILLMETER_BACKEND_URL, else the license's
+// HTTPS audience. Routing only; senders still require an unexpired license.
+function telemetryEndpoint(token) {
+  return getBackendUrlOverride() || getEndpointFromTokenAllowExpired(token);
+}
 
 // Async gzip for transcript uploads — keeps the hook's event loop responsive
 // while compressing multi-MB transcripts. Sync variants are still used for
@@ -219,7 +225,7 @@ async function transferEventLog(logFile, timeoutMs = EVENT_TIMEOUT) {
     return { ok: false };
   }
 
-  const endpoint = getEndpointFromTokenAllowExpired(token);
+  const endpoint = telemetryEndpoint(token);
   if (!endpoint) {
     console.error(`[skillmeter] Event log: no telemetry endpoint resolvable from license JWT — leaving for retry`);
     return { ok: false };
@@ -682,7 +688,7 @@ async function uploadDeltaChunk(bodyPath, deviceId, timeoutMs = TRANSCRIPT_TIMEO
     });
     return { ok: false, deferred: true };
   }
-  const endpoint = getEndpointFromTokenAllowExpired(token);
+  const endpoint = telemetryEndpoint(token);
   if (!endpoint) {
     console.error(`[skillmeter] Transcript chunk: no telemetry endpoint resolvable — kept for retry`);
     logBackfillChunk(meta, "upload_deferred", {
@@ -1637,7 +1643,7 @@ async function drainBackfillEvents(timeoutMs = EVENT_TIMEOUT) {
       if (!token || isJwtExpired(token)) continue;
       // The token this request carries, not a later re-read of it.
       if (tenantFingerprint(token, credstore.getHashSalt()) !== expectedTenant) continue;
-      const endpoint = getEndpointFromTokenAllowExpired(token);
+      const endpoint = telemetryEndpoint(token);
       if (!endpoint) continue;
 
       const body = Buffer.from(JSON.stringify(entry.event) + "\n");

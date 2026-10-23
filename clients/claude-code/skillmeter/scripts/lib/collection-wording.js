@@ -16,7 +16,7 @@ const REASONS = Object.freeze({
   revoked: "organization license inactive",
   reactivation_required: "sign-in expired",
   backoff_exhausted: "license refresh failed repeatedly",
-  paused: "paused for every repository",
+  paused: "paused for Claude Code on this machine",
 });
 
 // The capture gate's mode, which is the reason of unconfigured and recording.

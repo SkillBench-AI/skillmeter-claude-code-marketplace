@@ -42,7 +42,7 @@ cp.execSync = () => { throw new Error("Unexpected shell command"); };
 global.fetch = async (url, options) => {
   record({ url: String(url) });
   const reply = (status, body) => ({ ok: status === 200, status, json: async () => body, text: async () => JSON.stringify(body) });
-  if (String(url) === "https://id.test/oauth2/token") {
+  if (String(url) === "http://127.0.0.1:9/id/oauth2/token") {
     if (process.env.TEST_REAL_SPAWN === "1") {
       // Hold the response until the test has observed Stop exit.
       for (let attempt = 0; !fs.existsSync(process.env.TEST_RELEASE); attempt++) {
@@ -55,11 +55,11 @@ global.fetch = async (url, options) => {
       ? { id_token: "synthetic-id-token", refresh_token: "synthetic-refresh-token" }
       : { error: process.env.TEST_BROKER_ERROR || "temporarily_unavailable" });
   }
-  if (String(url) === "https://activation.test/activate") {
+  if (String(url) === "http://127.0.0.1:9/activation/activate") {
     const status = Number(process.env.TEST_ACTIVATE_STATUS || 200);
     return reply(status, status === 200 ? { token: process.env.TEST_FRESH } : { error: "synthetic failure" });
   }
-  if (String(url) === "https://id.test/oauth2/revoke") return reply(200, {});
+  if (String(url) === "http://127.0.0.1:9/id/oauth2/revoke") return reply(200, {});
   if (!String(url).startsWith("https://acme.meter.skillbench.ai/")) throw new Error("Unexpected URL");
   const jwt = options.headers.Authorization.replace(/^Bearer /, "");
   const exp = JSON.parse(Buffer.from(jwt.split(".")[1], "base64url")).exp;
@@ -81,8 +81,8 @@ global.fetch = async (url, options) => {
         NODE_OPTIONS: `--require=${preload}`, TEST_NOW: String(now), TEST_CALLS: calls,
         TEST_REAL_SPAWN: realSpawn ? "1" : "0", TEST_RELEASE: release,
         TEST_FRESH: makeJwt({ ...claims, exp: Math.floor(now / 1000) + 900 }),
-        SKILLMETER_ACTIVATE_URL: "https://activation.test/activate",
-        SKILLMETER_BACKEND_URL: "", SKILLMETER_BROKER_URL: "https://id.test",
+        SKILLMETER_ACTIVATE_URL: "http://127.0.0.1:9/activation/activate",
+        SKILLMETER_BACKEND_URL: "", SKILLMETER_BROKER_URL: "http://127.0.0.1:9/id",
         SKILLMETER_RETRY_BASE_MS: "", SKILLMETER_TIMEOUT: "", ...extra,
       },
     });
@@ -109,7 +109,7 @@ test("an expired session keeps recording, and the next drain renews the license 
   f.drain(16);
   assert.deepEqual(
     f.records().filter(r => r.url).map(r => r.url),
-    ["https://id.test/oauth2/token", "https://activation.test/activate", "https://acme.meter.skillbench.ai/logs/claude"],
+    ["http://127.0.0.1:9/id/oauth2/token", "http://127.0.0.1:9/activation/activate", "https://acme.meter.skillbench.ai/logs/claude"],
     "renewal first, then the event recorded while expired is sent"
   );
   assert.deepEqual(f.records().flatMap(r => r.messages || []), ["synthetic turn 16"]);
@@ -142,8 +142,8 @@ test("Stop's detached drain refreshes and uploads after the hook exits", async (
   const urls = records.filter(r => r.url).map(r => r.url);
   const uploads = urls.filter(url => url.endsWith("/logs/claude"));
   assert.equal(uploads.length, 1, "the event recorded while expired is sent once");
-  assert.ok(urls.includes("https://activation.test/activate"), "renewed");
-  assert.ok(urls.indexOf("https://activation.test/activate") < urls.indexOf(uploads[0]), "after a renewal");
+  assert.ok(urls.includes("http://127.0.0.1:9/activation/activate"), "renewed");
+  assert.ok(urls.indexOf("http://127.0.0.1:9/activation/activate") < urls.indexOf(uploads[0]), "after a renewal");
   const renewed = readSession(f.state, { dataDir: f.data }).license_jwt;
   assert.notEqual(renewed, f.token, "child must persist the refreshed token to the isolated state root");
   assert.match(f.hook(17, { TEST_REAL_SPAWN: "0" }).stderr, /logged/);
@@ -155,7 +155,7 @@ test("an active session records and uploads every turn across two token lifetime
     assert.match(f.hook(minute).stderr, /logged/, `capture at minute ${minute}`);
     f.drain(minute);
   }
-  assert.ok(f.records().filter(r => r.url === "https://activation.test/activate").length >= 2);
+  assert.ok(f.records().filter(r => r.url === "http://127.0.0.1:9/activation/activate").length >= 2);
   assert.deepEqual(f.records().flatMap(r => r.uploaded || []), Array(18).fill("Stop"));
   assert.deepEqual(f.records().flatMap(r => r.messages || []), Array.from({ length: 18 }, (_, i) => `synthetic turn ${i * 2}`));
 });
@@ -213,7 +213,7 @@ for (const [label, extra] of [
     f.hook(20);
     f.drain(20);
     assert.equal(f.records().filter(r => r.url).length, requests, "no further request until a new sign-in");
-    assert.equal(f.records().filter(r => r.url === "https://id.test/oauth2/token").length, 1);
+    assert.equal(f.records().filter(r => r.url === "http://127.0.0.1:9/id/oauth2/token").length, 1);
     assert.ok(JSON.parse(fs.readFileSync(path.join(accountDir(f.state, f.data), "license-status.json"))).terminal);
   });
 }

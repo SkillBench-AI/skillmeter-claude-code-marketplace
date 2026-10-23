@@ -70,14 +70,16 @@ test("findGitRoot walks up to the .git marker and handles empty input", () => {
 const expiringJwt = (expOffsetSec) =>
   makeJwt({ exp: Math.floor(Date.now() / 1000) + expOffsetSec });
 
-test("isJwtExpired default: missing token is NOT expired", () => {
-  assert.equal(isJwtExpired(null), false);
-  assert.equal(isJwtExpired(undefined), false);
+test("isJwtExpired default: a missing or undecodable token IS expired", () => {
+  // Shared with the Codex client: a malformed token is never sent.
+  assert.equal(isJwtExpired(null), true);
+  assert.equal(isJwtExpired(undefined), true);
+  assert.equal(isJwtExpired("garbage"), true);
 });
 
-test("isJwtExpired treatMissingAsExpired: missing token IS expired", () => {
-  assert.equal(isJwtExpired(null, { treatMissingAsExpired: true }), true);
-  assert.equal(isJwtExpired("garbage", { treatMissingAsExpired: true }), true);
+test("isJwtExpired treatMissingAsExpired: false opts out", () => {
+  assert.equal(isJwtExpired(null, { treatMissingAsExpired: false }), false);
+  assert.equal(isJwtExpired("garbage", { treatMissingAsExpired: false }), false);
 });
 
 test("isJwtExpired honors skewSeconds", () => {

@@ -13,8 +13,8 @@ const { makeTempDir, setTestEnv, makeJwt, writeCredentials, readSession } = requ
 
 const stateDir = makeTempDir("skm-hydra-renewal-");
 setTestEnv("SKILLMETER_STATE_DIR", stateDir);
-setTestEnv("SKILLMETER_ACTIVATE_URL", "https://activation.test/activate");
-setTestEnv("SKILLMETER_BROKER_URL", "https://id.test");
+setTestEnv("SKILLMETER_ACTIVATE_URL", "http://127.0.0.1:9/activation/activate");
+setTestEnv("SKILLMETER_BROKER_URL", "http://127.0.0.1:9/id");
 setTestEnv("SKILLMETER_BACKEND_URL", undefined);
 
 const credstore = require("../skillmeter/scripts/credstore");
@@ -88,9 +88,9 @@ beforeEach(() => {
   try { fs.unlinkSync(LOCK_FILE); } catch {}
 });
 
-const TOKEN_URL = "https://id.test/oauth2/token";
-const REVOKE_URL = "https://id.test/oauth2/revoke";
-const ACTIVATE_URL = "https://activation.test/activate";
+const TOKEN_URL = "http://127.0.0.1:9/id/oauth2/token";
+const REVOKE_URL = "http://127.0.0.1:9/id/oauth2/revoke";
+const ACTIVATE_URL = "http://127.0.0.1:9/activation/activate";
 
 test("renewal: refresh token grant, then /activate pinned to the tenant; the rotated token and the license are stored", async () => {
   const fresh = license(900);

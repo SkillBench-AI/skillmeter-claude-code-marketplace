@@ -15,8 +15,8 @@ const stateDir = makeTempDir("skm-license-activation-");
 
 setTestEnv("SKILLMETER_STATE_DIR", stateDir);
 setTestEnv("SKILLMETER_RETRY_BASE_MS", "1000");
-setTestEnv("SKILLMETER_ACTIVATE_URL", "https://activation.test/activate");
-setTestEnv("SKILLMETER_BROKER_URL", "https://id.test");
+setTestEnv("SKILLMETER_ACTIVATE_URL", "http://127.0.0.1:9/activation/activate");
+setTestEnv("SKILLMETER_BROKER_URL", "http://127.0.0.1:9/id");
 setTestEnv("SKILLMETER_BACKEND_URL", undefined);
 
 const credstore = require("../skillmeter/scripts/credstore");
@@ -27,9 +27,9 @@ const { LOG_DIR } = require("../skillmeter/scripts/lib/paths");
 const DEVICE_ID = "11111111-2222-4333-8444-555555555555";
 const LOCK_FILE = path.join(LOG_DIR, ".license-refresh.lock");
 const REFRESH_TOKEN = "ory_rt_fixture";
-const TOKEN_URL = "https://id.test/oauth2/token";
-const ACTIVATE_URL = "https://activation.test/activate";
-const REVOKE_URL = "https://id.test/oauth2/revoke";
+const TOKEN_URL = "http://127.0.0.1:9/id/oauth2/token";
+const ACTIVATE_URL = "http://127.0.0.1:9/activation/activate";
+const REVOKE_URL = "http://127.0.0.1:9/id/oauth2/revoke";
 
 function jwt({ expiresInSec }) {
   return makeJwt({

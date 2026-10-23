@@ -15,53 +15,20 @@
  * environment sees the change.
  */
 
-const fs = require("fs");
 const os = require("os");
 const path = require("path");
-
-const ENVIRONMENTS = {
-  prod: { broker: "https://id.skillbench.ai", activate: "https://api.skillbench.ai/activate", state: ".skillbench" },
-  dev: { broker: "https://id.dev.skillbench.com", activate: "https://api.dev.skillbench.com/activate", state: ".skillbench-dev" },
-};
-
-// The public device client every SkillMeter client signs in through. Each
-// device grant starts its own refresh chain, so clients' sessions stay apart.
-const OAUTH_CLIENT_ID = "skillmeter-plugin";
-// `openid` for the ID token /activate verifies; `offline` for the refresh token.
-const OAUTH_SCOPE = "openid offline";
-
-const CHANNEL_FILE = path.join(__dirname, "..", "..", "channel.json");
-
-// The release channel this installation was built for. Only the exact shape
-// the internal build writes is honoured; anything else is the stable channel.
-function channel(file = CHANNEL_FILE) {
-  try {
-    const value = JSON.parse(fs.readFileSync(file, "utf8"));
-    if (value && typeof value.channel === "string" && /^[a-z]+$/.test(value.channel) && Object.hasOwn(ENVIRONMENTS, value.env)) {
-      return { channel: value.channel, env: value.env };
-    }
-  } catch {}
-  return { channel: "stable", env: "prod" };
-}
+// Environments, channel, OAuth client and endpoint trust are shared with the
+// Claude Code client (shared/lib/endpoints.js).
+const {
+  ENVIRONMENTS,
+  CHANNEL_FILE,
+  readChannel: channel,
+  OAUTH_CLIENT_ID,
+  OAUTH_SCOPE,
+  trustedEndpoint,
+} = require("./endpoints");
 
 const defaults = () => ENVIRONMENTS[channel().env];
-
-// Credentials go only to HTTPS on skillbench.ai or skillbench.com, or to
-// loopback for a local stack. An override that fails the check is ignored with
-// a note and the environment's default is used.
-function trustedEndpoint(value, fallback, label) {
-  if (!value) return fallback;
-  try {
-    const url = new URL(value);
-    const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
-    const skillbench = /(^|\.)skillbench\.(ai|com)$/.test(url.hostname);
-    if ((url.protocol === "https:" && skillbench) || (loopback && ["http:", "https:"].includes(url.protocol))) {
-      return value.replace(/\/+$/, "");
-    }
-  } catch {}
-  console.error(`[skillmeter] ${label} override rejected (untrusted endpoint), using the default`);
-  return fallback;
-}
 
 function stateDir() {
   return process.env.SKILLMETER_STATE_DIR || path.join(os.homedir(), defaults().state);

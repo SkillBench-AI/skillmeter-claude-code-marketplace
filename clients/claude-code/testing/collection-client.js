@@ -64,7 +64,7 @@ function collectionClient({ policy = ENABLED } = {}) {
     XDG_CONFIG_HOME: path.join(root, ".config"),
     SKILLMETER_STATE_DIR: state,
     CLAUDE_PLUGIN_DATA: data,
-    SKILLMETER_BROKER_URL: "https://id.test",
+    SKILLMETER_BROKER_URL: "http://127.0.0.1:9/id",
     // Nothing may upload anywhere real.
     SKILLMETER_BACKEND_URL: "http://127.0.0.1:9",
   };

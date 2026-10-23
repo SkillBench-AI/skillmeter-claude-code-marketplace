@@ -69,7 +69,7 @@ function fixture() {
       encoding: "utf8",
       timeout: 10_000,
       cwd: root,
-      env: { ...env, SKILLMETER_BROKER_URL: "https://id.test", SKILLMETER_ACTIVATE_URL: "https://activation.test/activate" },
+      env: { ...env, SKILLMETER_BROKER_URL: "http://127.0.0.1:9/id", SKILLMETER_ACTIVATE_URL: "http://127.0.0.1:9/activation/activate" },
     });
   };
 
@@ -98,7 +98,7 @@ function fixture() {
     ...env,
     GIT_CONFIG_GLOBAL: "/dev/null",
     XDG_CONFIG_HOME: path.join(root, ".config"),
-    SKILLMETER_BROKER_URL: "https://id.test",
+    SKILLMETER_BROKER_URL: "http://127.0.0.1:9/id",
     // Nothing may upload anywhere real.
     SKILLMETER_BACKEND_URL: "http://127.0.0.1:9",
   };
@@ -168,7 +168,7 @@ test("after the broker ended the session, sign-in runs the device flow even whil
   const result = f.signin();
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stderr, /session ended/);
-  assert.deepEqual(f.urls(), ["https://id.test/oauth2/device/auth", "https://id.test/oauth2/token", "https://activation.test/activate"]);
+  assert.deepEqual(f.urls(), ["http://127.0.0.1:9/id/oauth2/device/auth", "http://127.0.0.1:9/id/oauth2/token", "http://127.0.0.1:9/activation/activate"]);
   assert.notEqual(f.session().license_jwt, f.stale);
   assert.equal(f.session().refresh_token, "fixture-new-refresh");
 });
@@ -189,7 +189,7 @@ test("a new session in between does not hide the ended session from sign-in", ()
   const result = f.signin();
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stderr, /session ended/);
-  assert.equal(f.urls()[0], "https://id.test/oauth2/device/auth");
+  assert.equal(f.urls()[0], "http://127.0.0.1:9/id/oauth2/device/auth");
   assert.equal(f.session().refresh_token, "fixture-new-refresh");
 });
 

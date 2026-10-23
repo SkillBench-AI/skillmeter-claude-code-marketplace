@@ -60,13 +60,22 @@ test("a project cannot swap the OAuth client", () => {
 });
 
 test("the environment still overrides every value", () => {
-  setTestEnv("SKILLMETER_ACTIVATE_URL", "https://api.staging.example/activate");
-  setTestEnv("SKILLMETER_BROKER_URL", "https://id.staging.example/");
+  setTestEnv("SKILLMETER_ACTIVATE_URL", "https://api.staging.skillbench.com/activate");
+  setTestEnv("SKILLMETER_BROKER_URL", "https://id.staging.skillbench.com/");
   setTestEnv("SKILLMETER_OAUTH_CLIENT_ID", "staging-client");
 
-  assert.equal(getActivateUrl(), "https://api.staging.example/activate");
-  assert.equal(getTokenUrl(), "https://id.staging.example/oauth2/token");
+  assert.equal(getActivateUrl(), "https://api.staging.skillbench.com/activate");
+  assert.equal(getTokenUrl(), "https://id.staging.skillbench.com/oauth2/token");
   assert.equal(getOAuthClientId(), "staging-client");
+});
+
+test("an HTTPS endpoint outside skillbench.ai and skillbench.com degrades to the prod default", () => {
+  // Shared with the Codex client: credentials go only to SkillBench hosts.
+  setTestEnv("SKILLMETER_ACTIVATE_URL", "https://evil.example/activate");
+  setTestEnv("SKILLMETER_BROKER_URL", "https://skillbench.ai.evil.example");
+
+  assert.equal(new URL(getActivateUrl()).hostname, PROD_ACTIVATE_HOST);
+  assert.equal(new URL(getTokenUrl()).hostname, PROD_BROKER_HOST);
 });
 
 test("a plaintext endpoint degrades to the prod default", () => {
@@ -93,10 +102,13 @@ test("a malformed override degrades to the prod default", () => {
   assert.equal(new URL(getDeviceCodeUrl()).hostname, PROD_BROKER_HOST);
 });
 
-test("the backend override must use HTTPS, or loopback http", () => {
+test("the backend override must be HTTPS on a SkillBench host, or loopback", () => {
   // Uploads carry the license JWT as a bearer token.
+  setTestEnv("SKILLMETER_BACKEND_URL", "https://collector.staging.skillbench.com");
+  assert.equal(getBackendUrlOverride(), "https://collector.staging.skillbench.com");
+
   setTestEnv("SKILLMETER_BACKEND_URL", "https://collector.staging.example");
-  assert.equal(getBackendUrlOverride(), "https://collector.staging.example");
+  assert.equal(getBackendUrlOverride(), null);
 
   setTestEnv("SKILLMETER_BACKEND_URL", "http://127.0.0.1:9");
   assert.equal(getBackendUrlOverride(), "http://127.0.0.1:9");
