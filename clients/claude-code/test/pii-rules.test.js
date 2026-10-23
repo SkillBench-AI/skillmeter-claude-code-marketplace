@@ -15,9 +15,10 @@ const rules = require("../skillmeter/scripts/lib/rules");
 const SALT = "deadbeefcafe";
 
 // --- Fixture corpus ---------------------------------------------------------
+// shared/fixtures/pii-corpus.json; the Codex client's tests run the same file.
 
 const CORPUS = JSON.parse(
-  fs.readFileSync(path.join(__dirname, "fixtures", "pii-corpus.json"), "utf8")
+  fs.readFileSync(path.join(__dirname, "..", "..", "..", "shared", "fixtures", "pii-corpus.json"), "utf8")
 );
 
 test("pii corpus: has both positive and negative fixtures for every stage-1 kind", () => {

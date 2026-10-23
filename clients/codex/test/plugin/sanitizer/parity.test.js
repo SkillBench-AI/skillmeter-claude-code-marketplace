@@ -1,31 +1,17 @@
 "use strict";
-// The vendored Claude engine must match the pinned upstream: source hashes,
-// policy version, and every fixture of the two shared corpora.
+// The Codex adapter must redact every fixture of the two corpora in
+// shared/fixtures, which the Claude Code client's tests also run. The engine
+// itself is shared/lib/sanitize.js; scripts/sync-shared.mjs keeps it identical
+// in both plugins.
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { createHash } = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
-const { PLUGIN_ROOT, FIXTURES } = require("../../../test-support/plugin.cjs");
-// `local` paths in source.json are relative to the Codex client root.
-const CLIENT_ROOT = path.resolve(PLUGIN_ROOT, "..", "..");
 const sanitizer = require("../../../plugins/skillmeter/scripts/sanitizer");
 
-const source = require("../fixtures/claude-3.1/source.json");
-const pii = require("../fixtures/claude-3.1/pii-corpus.json");
-const secrets = JSON.parse(fs.readFileSync(path.join(FIXTURES, "secret-corpus.json"), "utf8"));
-
-for (const file of source.files) {
-  test(`Claude source pin: ${file.local}`, () => {
-    const bytes = fs.readFileSync(path.join(CLIENT_ROOT, file.local));
-    assert.equal(createHash("sha256").update(bytes).digest("hex"), file.sha256,
-      "update the vendored Claude implementation and the source pin together");
-  });
-}
-
-test("the adapter declares the pinned Claude policy version", () => {
-  assert.equal(sanitizer.POLICY_VERSION, source.policyVersion);
-});
+const SHARED_FIXTURES = path.resolve(__dirname, "..", "..", "..", "..", "..", "shared", "fixtures");
+const pii = require(path.join(SHARED_FIXTURES, "pii-corpus.json"));
+const secrets = JSON.parse(fs.readFileSync(path.join(SHARED_FIXTURES, "secret-corpus.json"), "utf8"));
 
 for (const f of pii.fixtures) {
   test(`Claude PII parity: ${f.id}`, () => {
@@ -37,7 +23,7 @@ for (const f of pii.fixtures) {
 }
 
 test("the shared secret corpus keeps its version and size", () => {
-  assert.equal(secrets.version, "1", "corpus version changed; re-sync every repository copy");
+  assert.equal(secrets.version, "1", "corpus version changed; re-sync it from skillbench-docs");
   assert.ok(secrets.fixtures.filter(f => f.tier === "tier1").length >= 24);
   assert.ok(secrets.fixtures.some(f => f.tier === "tier2"));
 });

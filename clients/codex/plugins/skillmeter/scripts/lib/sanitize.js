@@ -1,3 +1,4 @@
+// GENERATED from shared/lib/sanitize.js by scripts/sync-shared.mjs. Edit that file, not this copy.
 /**
  * Apply the on-device policy in ADR002: typed secret/PII redaction and HMAC paths.
  * File-path fields keep structure, extensions and technical vocabulary; directory

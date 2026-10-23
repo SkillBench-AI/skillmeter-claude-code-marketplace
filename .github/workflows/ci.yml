@@ -68,6 +68,20 @@ jobs:
       - name: claude marketplace validate
         run: npx -y "@anthropic-ai/claude-code@${{ matrix.claude-code }}" plugin validate .
 
+  shared:
+    name: Shared modules in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # shared/lib is the source; each plugin carries a generated copy.
+      - name: Check shared/lib copies
+        run: node scripts/sync-shared.mjs --check
+
   codex-validate:
     name: "Codex: validate manifests & version"
     runs-on: ubuntu-latest

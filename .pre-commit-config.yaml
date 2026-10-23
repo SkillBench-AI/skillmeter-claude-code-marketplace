@@ -27,3 +27,9 @@ repos:
         language: system
         files: ^(clients/codex/plugins/skillmeter/\.codex-plugin/plugin\.json|\.agents/plugins/marketplace\.json)$
         pass_filenames: false
+      - id: shared-modules
+        name: shared/lib copies are in sync
+        entry: node scripts/sync-shared.mjs --check
+        language: system
+        files: ^(shared/lib/|clients/[^/]+/.*scripts/lib/)
+        pass_filenames: false

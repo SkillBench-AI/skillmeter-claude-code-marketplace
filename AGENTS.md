@@ -9,3 +9,6 @@ change: [clients/claude-code/AGENTS.md](clients/claude-code/AGENTS.md) or
   channel build. A change to them must keep both clients' checks green.
 - Keep `.agents/plugins/marketplace.json` in place; Codex would otherwise read
   the Claude Code marketplace.
+- Never edit a file that starts with `// GENERATED from shared/lib/`, or any
+  `scripts/lib` file that also exists in `shared/lib`. Edit `shared/lib` and
+  run `node scripts/sync-shared.mjs`; both clients get the change.

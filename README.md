@@ -32,6 +32,21 @@ codex plugin add skillmeter@skillbench
 Moving from the archived `skillmeter-codex-marketplace`: see
 [clients/codex/README.md](clients/codex/README.md#update).
 
+## Shared code
+
+Code both clients must run identically lives once in [`shared/lib`](shared/lib):
+today the sanitizer (`sanitize.js`, `rules.js`, `path-vocabulary.json`) and the
+`credentials.json` lock (`credential-lock.js`). Both CLIs install only the
+plugin directory, so each plugin carries a generated copy at the same path in
+its `scripts/lib`. Edit `shared/lib`, then run:
+
+```sh
+node scripts/sync-shared.mjs
+```
+
+CI fails when a copy differs from its source. Test corpora both clients run
+live in [`shared/fixtures`](shared/fixtures).
+
 ## Branches and channels
 
 - `next`: development; pull requests target it.

@@ -2,7 +2,7 @@
 // Constants shared by the sanitizer tests. Every credential is synthetic.
 const os = require("node:os");
 const path = require("node:path");
-const source = require(path.join(__dirname, "..", "test", "plugin", "fixtures", "claude-3.1", "source.json"));
+const { POLICY_VERSION } = require(path.join(__dirname, "..", "plugins", "skillmeter", "scripts", "lib", "sanitize.js"));
 
 const SALT = "deadbeefcafe";
 const HEX = "[0-9a-f]{12}";
@@ -28,4 +28,4 @@ const SAMPLES = {
   "database-url": "postgres://admin:s3cr3tP4ss@db.internal:5432/prod",
 };
 
-module.exports = { SALT, HEX, HOME, HOME_DEPENDENT, hi, SAMPLES, POLICY_VERSION: source.policyVersion };
+module.exports = { SALT, HEX, HOME, HOME_DEPENDENT, hi, SAMPLES, POLICY_VERSION };

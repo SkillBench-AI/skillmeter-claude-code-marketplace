@@ -1,3 +1,4 @@
+// GENERATED from shared/lib/credential-lock.js by scripts/sync-shared.mjs. Edit that file, not this copy.
 "use strict";
 
 const fs = require("fs");

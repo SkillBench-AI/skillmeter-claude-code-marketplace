@@ -1,12 +1,13 @@
 # Codex sanitizer parity
 
 The on-device engine, rule table and path vocabulary follow
-[Claude ADR002](https://github.com/SkillBench-AI/skillmeter-claude-code-marketplace/blob/a883b34f0228928ea3626f46f36750181eb72579/docs/adr/002-two-stage-sanitization.md),
-policy **3.1.2**. Their bytes and the shared fixture corpora are pinned to Claude
-commit `a883b34f0228928ea3626f46f36750181eb72579` in
-[`source.json`](../test/plugin/fixtures/claude-3.1/source.json).
-`npm run check` verifies those hashes and runs the policy and queue tests.
-Update shared policy in Claude first, then refresh these files and the pin.
+[ADR 002](../../claude-code/docs/adr/002-two-stage-sanitization.md). Both
+clients run the same files: `sanitize.js`, `rules.js` and `path-vocabulary.json`
+live once in [`shared/lib`](../../../shared/lib), and
+`node scripts/sync-shared.mjs` copies them into each plugin. CI fails if a copy
+differs. Both clients' tests run the corpora in
+[`shared/fixtures`](../../../shared/fixtures). To change the policy, edit
+`shared/lib` and run the sync script.
 Colliding keys receive record-local suffixes, with filename extensions preserved. These suffixes
 do not establish file identity across records.
 
