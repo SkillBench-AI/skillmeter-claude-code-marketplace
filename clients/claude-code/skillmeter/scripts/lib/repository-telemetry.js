@@ -16,8 +16,8 @@ const { findGitRoot } = require("./io");
 const {
   extractGitHubOrgFromRemote,
   getRemoteUrlsForRepo,
-  getRepoScopeDecision,
 } = require("./repo-scope");
+const { getRepoScopeDecision } = require("./scope-decision");
 const { hashHmac } = require("./sanitize");
 const telemetryStore = require("./telemetry-store");
 const { resolveTelemetryGate } = require("./telemetry-policy");

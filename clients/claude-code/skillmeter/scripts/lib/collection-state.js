@@ -20,7 +20,7 @@ const fs = require("fs");
 const path = require("path");
 const credstore = require("../credstore");
 const telemetryStore = require("./telemetry-store");
-const { getRepoScopeDecision } = require("./repo-scope");
+const { getRepoScopeDecision } = require("./scope-decision");
 const { resolveTelemetryGate } = require("./telemetry-policy");
 const {
   TERMINAL_REASONS,

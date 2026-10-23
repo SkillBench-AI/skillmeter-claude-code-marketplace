@@ -39,7 +39,7 @@ const {
   turnDestinations,
   buildChunkPlan,
 } = require("./transcript-delta");
-const { getRepoScopeDecision } = require("./repo-scope");
+const { getRepoScopeDecision } = require("./scope-decision");
 const { hashHmac } = require("./sanitize");
 const {
   PLUGIN_ROOT,

@@ -1,3 +1,4 @@
+// GENERATED from shared/lib/spinner.js by scripts/sync-shared.mjs. Edit that file, not this copy.
 /**
  * Show a TTY spinner and return stop(), which clears the line.
  * Outside a TTY, write one static status line and return a no-op stop callback.
@@ -12,6 +13,8 @@ const ESC_CLEAR_LINE = "\r\x1b[2K";
 function startSpinner(message) {
   const out = process.stdout;
   if (!out.isTTY) {
+    // A single static line so the user knows something is happening even in
+    // a buffered runner. Animation frames would be useless.
     out.write(`${message}...\n`);
     return () => {};
   }
@@ -29,17 +32,22 @@ function startSpinner(message) {
   const handle = setInterval(render, FRAME_MS);
 
   let stopped = false;
+  const exitHandler = () => stop();
+  const sigintHandler = () => { stop(); process.exit(130); };
+
   const stop = () => {
     if (stopped) return;
     stopped = true;
     clearInterval(handle);
     out.write(ESC_CLEAR_LINE);
     out.write(ESC_SHOW_CURSOR);
+    process.removeListener("exit", exitHandler);
+    process.removeListener("SIGINT", sigintHandler);
   };
 
   // Belt-and-suspenders: if the process dies mid-spin, restore the cursor.
-  process.once("exit", stop);
-  process.once("SIGINT", () => { stop(); process.exit(130); });
+  process.once("exit", exitHandler);
+  process.once("SIGINT", sigintHandler);
 
   return stop;
 }

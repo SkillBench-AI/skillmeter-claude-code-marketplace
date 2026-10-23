@@ -10,7 +10,7 @@
 const credstore = require("./credstore.js");
 const { signinStatusBanner } = require("./lib/banner.js");
 const { startSpinner } = require("./lib/spinner.js");
-const { getRepoScopeDecision } = require("./lib/repo-scope");
+const { getRepoScopeDecision } = require("./lib/scope-decision");
 const telemetryStore = require("./lib/telemetry-store");
 const { clearLicenseStatus, isSessionEnded, recordSignin } = require("./lib/license-status");
 const { STATE_DIR } = require("./lib/config");
