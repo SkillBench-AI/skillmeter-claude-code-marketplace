@@ -244,8 +244,14 @@ function getRemoteEntriesForRepo(repoRoot) {
 
   try {
     let configRoot = gitDir;
-    const commonDirText = readText(path.join(gitDir, "commondir")).trim();
-    if (commonDirText) configRoot = path.resolve(gitDir, commonDirText);
+    // An invalid commondir fails closed, as in the Codex client: it must not
+    // fall back to a potentially unrelated worktree-local config.
+    const commonFile = path.join(gitDir, "commondir");
+    if (fs.existsSync(commonFile)) {
+      const commonDirText = fs.readFileSync(commonFile, "utf8").trim();
+      if (!commonDirText) return [];
+      configRoot = path.resolve(gitDir, commonDirText);
+    }
     const configPath = path.join(configRoot, "config");
     const configContent = fs.readFileSync(configPath, "utf8");
     const entries = [];
