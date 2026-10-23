@@ -267,8 +267,9 @@ test("writers read current state after waiting for the lock", async () => {
   assert.equal(readSession().signed_out, true);
 });
 
-// The age backstop can reap a paused holder, so a writer re-checks ownership
-// before it persists.
+// A lock can still disappear under its holder (removed by hand, or by an
+// older client that reaped by age), so a writer re-checks ownership before it
+// persists.
 test("a holder can tell that its lock was reaped", () => {
   const lock = `${sessionFile}.lock.fence`;
   const release = acquireLock(lock);
@@ -304,7 +305,7 @@ test("a mutation preempted mid-flight retries on the newer state instead of clob
   const outcome = credstore.mutateSession(session => {
     calls += 1;
     if (calls === 1) {
-      // Paused past the staleness ceiling: reaped, and another writer commits.
+      // Our lock disappears and another writer commits.
       fs.unlinkSync(`${sessionFile}.lock`);
       fs.writeFileSync(sessionFile, JSON.stringify({ ...readSession(), custom_field: "other" }));
     }
@@ -317,18 +318,20 @@ test("a mutation preempted mid-flight retries on the newer state instead of clob
   assert.equal(readSession().custom_field, "other", "the other writer's change survived");
 });
 
-// A pid can be reused by an unrelated process after a crash, so age, not
-// liveness, decides when a stale lock is reaped.
-for (const [name, owner] of [["a live unrelated process", JSON.stringify({ pid: process.pid })], ["an unparseable owner file", "not json"]]) {
-  test(`a stale lock naming ${name} is still reaped`, () => {
-    const lock = `${sessionFile}.lock.stale`;
+// The lock protocol is shared with SkillMeter for Claude Code, which writes the
+// same credentials.json: only a dead owner is reaped. Age proves nothing, and a
+// malformed owner holds the lock, so neither client can evict the other's live
+// writer.
+const liveOwner = JSON.stringify({ version: 2, pid: process.pid, token: "00000000-0000-4000-8000-000000000000" });
+for (const [name, owner] of [["a live process", liveOwner], ["an unparseable owner file", "not json"]]) {
+  test(`an old lock naming ${name} is not reaped`, () => {
+    const lock = `${sessionFile}.lock.old`;
     fs.writeFileSync(lock, owner);
     const old = Date.now() - 120_000;
     fs.utimesSync(lock, old / 1000, old / 1000);
-    const release = acquireLock(lock);
-    assert.equal(typeof release, "function", "the stale owner was reaped");
-    release();
-    assert.equal(fs.existsSync(lock), false);
+    assert.equal(acquireLock(lock), null, "age alone must not evict an owner");
+    assert.equal(fs.readFileSync(lock, "utf8"), owner, "the owner file is untouched");
+    fs.unlinkSync(lock);
   });
 }
 
