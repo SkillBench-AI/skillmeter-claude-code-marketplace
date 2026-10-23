@@ -90,5 +90,5 @@ a test fails if it is present.
 ## Checks
 
 `npm run check` runs version validation, manifest validation and Node tests.
-[PR CI](../../.github/workflows/ci.yml) tests Node 22 and 24. For optional local hooks,
+[PR CI](../../.github/workflows/ci.yml) tests Node 22, 24 and 26. For optional local hooks,
 install [pre-commit](https://pre-commit.com/) and run `pre-commit install`.

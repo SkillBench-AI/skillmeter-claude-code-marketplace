@@ -287,13 +287,31 @@ test("the continuation is authorized like the first record", t => {
   assert.throws(() => f.stage({ authorizeRecord: r => r.type !== "session_continuation" }), /source-scope-changed/);
 });
 
+// The wire size of identity plus `content` staged as one chunk, measured with
+// the running zlib. Compressed sizes differ between zlib builds (Node's bundled
+// zlib and a system zlib, as in Homebrew's Node) and by a few bytes between
+// queues, so budgets derive from this with wide margins, never exact bounds.
+function identityPlus(t, content, laterBatch = false) {
+  const f = session(t);
+  f.start(meta);
+  if (laterBatch) { fs.appendFileSync(f.source, line("first")); f.stage(); }
+  fs.appendFileSync(f.source, content);
+  const [file] = f.stage({ maxEnvelope: queue.ENVELOPE_RESERVE + 1_000_000 }).files;
+  return 4 * Math.ceil(fs.statSync(file).size / 3);
+}
+
 for (const laterBatch of [false, true]) {
   test(`a split ${laterBatch ? "continuation" : "initial"} batch repeats identity in every wire chunk`, t => {
+    // Room for identity and either record, not for identity and both: noisy
+    // records barely compress, so both take about twice the room of one.
+    const one = Math.max(identityPlus(t, noisyLine("03"), laterBatch), identityPlus(t, noisyLine("07"), laterBatch));
+    const room = Math.floor(one * 1.5);
+    assert.ok(room < identityPlus(t, noisyLine("03") + noisyLine("07"), laterBatch), "both records exceed the room");
     const f = session(t);
     f.start(meta);
     if (laterBatch) { fs.appendFileSync(f.source, line("first")); f.stage(); }
     fs.appendFileSync(f.source, noisyLine("03") + noisyLine("07"));
-    const result = f.stage({ maxEnvelope: queue.ENVELOPE_RESERVE + 3000 });
+    const result = f.stage({ maxEnvelope: queue.ENVELOPE_RESERVE + room });
     const chunks = result.files.map(file => f.records([file]));
     assert.equal(chunks.length, 2);
     for (const [i, rows] of chunks.entries()) {
@@ -303,18 +321,20 @@ for (const laterBatch of [false, true]) {
       assert.equal(rows[0].payload.id, "thread-1");
       if (rows[0].type === "session_continuation") assert.equal(rows[0].timestamp, undefined);
       const bytes = fs.readFileSync(result.files[i]);
-      assert.ok(4 * Math.ceil(bytes.length / 3) + queue.ENVELOPE_RESERVE <= queue.ENVELOPE_RESERVE + 3000);
+      assert.ok(4 * Math.ceil(bytes.length / 3) <= room);
     }
     if (laterBatch) assert.equal(chunks[0][0].uuid, chunks[1][0].uuid);
   });
 }
 
 test("a wire budget that cannot fit identity plus one record does not advance capture", t => {
+  const needed = identityPlus(t, noisyLine("03"));
   const f = session(t);
   f.start(meta);
   fs.appendFileSync(f.source, noisyLine("03"));
-  assert.throws(() => f.stage({ maxEnvelope: queue.ENVELOPE_RESERVE + 2300 }), /oversized-single-record/);
-  assert.deepEqual(f.records(f.stage({ maxEnvelope: queue.ENVELOPE_RESERVE + 3000 }).files).map(r => r.type), ["session_meta", "response_item"]);
+  assert.throws(() => f.stage({ maxEnvelope: queue.ENVELOPE_RESERVE + Math.floor(needed / 2) }), /oversized-single-record/);
+  // Nothing was consumed: a budget that fits stages the same record.
+  assert.deepEqual(f.records(f.stage({ maxEnvelope: queue.ENVELOPE_RESERVE + needed + 256 }).files).map(r => r.type), ["session_meta", "response_item"]);
 });
 
 // Crash durability with real killed processes.
