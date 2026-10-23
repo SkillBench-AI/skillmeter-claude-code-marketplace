@@ -50,14 +50,15 @@ After merging the release PR:
 ## Release notes
 
 Prepare and review the user-facing notes before pushing the tag. The workflow
-publishes automatically; replace its generated title and body with the approved
-notes afterward.
+publishes automatically, titled `SkillMeter for Codex X.Y.Z` and not marked
+Latest (the repository's Latest release is always the Claude Code plugin's);
+replace its generated body with the approved notes afterward.
 
 Release notes are public. They say what changed for the user; the PRs hold the
 rest. Use [0.12.3](https://github.com/SkillBench-AI/skillmeter-codex-marketplace/releases/tag/v0.12.3)
 as the model for length and tone.
 
-- Title: `SkillMeter X.Y.Z`
+- Title: `SkillMeter for Codex X.Y.Z`
 - `### What changed`: at most four bullets, one change each. Each bullet is one
   short sentence, about 15 words or fewer, in the present tense, saying what
   the user can now do or will notice. No semicolons, no second clause after a

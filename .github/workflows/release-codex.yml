@@ -46,16 +46,19 @@ jobs:
         run: |
           mkdir -p dist
           git archive --format=tar.gz \
-            --prefix="skillmeter-codex-${GITHUB_REF_NAME}/" \
-            -o "dist/skillmeter-codex-${GITHUB_REF_NAME}.tar.gz" \
+            --prefix="skillmeter-${GITHUB_REF_NAME}/" \
+            -o "dist/skillmeter-${GITHUB_REF_NAME}.tar.gz" \
             "${GITHUB_REF_NAME}" -- .agents clients/codex
+      # Not marked Latest: the repository's Latest release is always the
+      # Claude Code plugin's, which /releases/latest links rely on.
       - name: Create GitHub Release
         working-directory: .
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${GITHUB_REF_NAME}" \
-            --title "Codex ${GITHUB_REF_NAME#codex-}" \
+            --title "SkillMeter for Codex ${GITHUB_REF_NAME#codex-v}" \
             --generate-notes \
+            --latest=false \
             --verify-tag \
-            "dist/skillmeter-codex-${GITHUB_REF_NAME}.tar.gz"
+            "dist/skillmeter-${GITHUB_REF_NAME}.tar.gz"
