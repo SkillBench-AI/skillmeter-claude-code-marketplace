@@ -22,7 +22,7 @@ capture, and choices made in SkillMeter for Claude Code do not apply here. See
 Requires Codex with plugin support, Node.js 22 or later, and a SkillMeter license.
 
 ```sh
-codex plugin marketplace add SkillBench-AI/skillmeter-codex-marketplace --ref main
+codex plugin marketplace add SkillBench-AI/skillmeter-plugins --ref main
 codex plugin add skillmeter@skillbench
 ```
 
@@ -51,6 +51,19 @@ codex plugin add skillmeter@skillbench
 Restart Codex and start a new session. Run `codex plugin list --json` to check
 the installed SkillMeter version.
 
+**Installed from `SkillBench-AI/skillmeter-codex-marketplace`?** That repository is archived and
+receives no updates; SkillMeter for Codex now ships from `SkillBench-AI/skillmeter-plugins`.
+Both use the marketplace name `skillbench`, so remove the old one first:
+
+```sh
+codex plugin marketplace remove skillbench
+codex plugin marketplace add SkillBench-AI/skillmeter-plugins --ref main
+codex plugin add skillmeter@skillbench
+```
+
+Your sign-in, repository choices and queued data are kept: they live in
+`~/.skillbench`, not in the marketplace.
+
 **Installed from a local checkout?** Update that checkout first, then run
 `codex plugin add skillmeter@skillbench`. `marketplace upgrade` only refreshes
 Git marketplaces; it does not pull a locally registered repository.
@@ -67,7 +80,7 @@ service, license server and `~/.skillbench-dev` state, and is published as the
 the stable one.
 
 ```sh
-codex plugin marketplace add SkillBench-AI/skillmeter-codex-marketplace --ref internal
+codex plugin marketplace add SkillBench-AI/skillmeter-plugins --ref internal
 codex plugin add skillmeter@skillbench-internal
 ```
 
@@ -75,13 +88,16 @@ Sign in with a dev workspace account. Remove the stable plugin first
 (`codex plugin remove skillmeter@skillbench`), or both would record the same
 sessions. Status cards show `internal (dev)` in the title. To update, run
 `codex plugin marketplace upgrade skillbench-internal` and add the plugin again.
+If `skillbench-internal` was added from `SkillBench-AI/skillmeter-codex-marketplace`, run
+`codex plugin marketplace remove skillbench-internal` before adding it from
+`SkillBench-AI/skillmeter-plugins`.
 
 ## Using SkillMeter
 
 - [Sign in, pause collection, or sign out](plugins/skillmeter/README.md#sign-in-and-controls)
 - [Understand collection scope and privacy](plugins/skillmeter/README.md#data-and-privacy)
-- [Review releases and known limitations](https://github.com/SkillBench-AI/skillmeter-codex-marketplace/releases)
-- [Report an issue](https://github.com/SkillBench-AI/skillmeter-codex-marketplace/issues)
+- [Review releases and known limitations](https://github.com/SkillBench-AI/skillmeter-plugins/releases); releases up to 0.13.0 are in the [archived repository](https://github.com/SkillBench-AI/skillmeter-codex-marketplace/releases)
+- [Report an issue](https://github.com/SkillBench-AI/skillmeter-plugins/issues)
 
 ## Development
 
