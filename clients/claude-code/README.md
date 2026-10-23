@@ -26,7 +26,7 @@ Review these documents before installing:
 Requires Node.js 22 or later on `PATH`; the plugin's hooks run `node`.
 
 ```bash
-claude plugin marketplace add SkillBench-AI/skillmeter-claude-code-marketplace
+claude plugin marketplace add SkillBench-AI/skillmeter-plugins
 claude plugin install skillmeter@skillbench
 ```
 
@@ -58,7 +58,7 @@ from the stable one.
 
 ```sh
 claude plugin uninstall skillmeter@skillbench
-claude plugin marketplace add SkillBench-AI/skillmeter-claude-code-marketplace#internal
+claude plugin marketplace add SkillBench-AI/skillmeter-plugins#internal
 claude plugin install skillmeter@skillbench-internal
 ```
 

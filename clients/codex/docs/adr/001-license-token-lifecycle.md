@@ -1,7 +1,7 @@
 # License Token Lifecycle: Lifetime, Refresh, and Recovery
 
 **Status:** Adopted by reference. Canonical text:
-[Claude Code plugin ADR 001](https://github.com/SkillBench-AI/skillmeter-claude-code-marketplace/blob/main/docs/adr/001-license-token-lifecycle.md)
+[Claude Code plugin ADR 001](../../../claude-code/docs/adr/001-license-token-lifecycle.md)
 (Accepted 2026-09-10, amended 2026-09-16: sign-in moved to the broker).
 Decisions 1 and 5 (the refresh path and the shared session) are superseded for
 this plugin by [ADR 005](005-per-client-session.md).

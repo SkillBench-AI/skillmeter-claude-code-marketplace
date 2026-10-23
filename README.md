@@ -13,6 +13,17 @@ Codex reads `.agents/plugins/marketplace.json` and falls back to
 `.claude-plugin/marketplace.json` only when it is missing, which would offer the
 Claude Code plugin to Codex. CI fails if the Codex marketplace is missing.
 
+## Install
+
+Claude Code:
+
+```sh
+claude plugin marketplace add SkillBench-AI/skillmeter-plugins
+claude plugin install skillmeter@skillbench
+```
+
+Codex: see [clients/codex/README.md](clients/codex/README.md).
+
 ## Branches and channels
 
 - `next`: development; pull requests target it.

@@ -3,7 +3,7 @@
 **Status:** Superseded on 2026-09-28 by [ADR 006](006-per-client-consent.md):
 Codex keeps its own consent record. The text below is kept as history.
 Previously adopted by reference. Canonical text:
-[Claude Code plugin ADR 004](https://github.com/SkillBench-AI/skillmeter-claude-code-marketplace/blob/main/docs/adr/004-shared-consent.md)
+[Claude Code plugin ADR 004](../../../claude-code/docs/adr/004-shared-consent.md)
 (Accepted 2026-09-25, [PR #129](https://github.com/SkillBench-AI/skillmeter-claude-code-marketplace/pull/129)).
 The decisions on migration, invalid policy and queued data restate Juho's
 proposal in [PR #128](https://github.com/SkillBench-AI/skillmeter-claude-code-marketplace/pull/128).

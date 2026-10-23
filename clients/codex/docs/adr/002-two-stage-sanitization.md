@@ -1,7 +1,7 @@
 # Two-Stage Sanitization and Typed PII Placeholders
 
 **Status:** Adopted by reference. Canonical text:
-[Claude Code plugin ADR 002](https://github.com/SkillBench-AI/skillmeter-claude-code-marketplace/blob/main/docs/adr/002-two-stage-sanitization.md)
+[Claude Code plugin ADR 002](../../../claude-code/docs/adr/002-two-stage-sanitization.md)
 (Accepted 2026-09-11; amended 2026-09-11 for path handling, repository
 identity and file-name policy, and 2026-09-23 for colliding object keys,
 policy `3.1.2`).

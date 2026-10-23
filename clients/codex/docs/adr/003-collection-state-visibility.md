@@ -1,7 +1,7 @@
 # Collection State Visibility: Notices, Monitor Lifecycle, and the Local Status Record
 
 **Status:** Adopted by reference. Canonical text:
-[Claude Code plugin ADR 003](https://github.com/SkillBench-AI/skillmeter-claude-code-marketplace/blob/main/docs/adr/003-collection-state-visibility.md)
+[Claude Code plugin ADR 003](../../../claude-code/docs/adr/003-collection-state-visibility.md)
 (Accepted 2026-09-25, [PR #111](https://github.com/SkillBench-AI/skillmeter-claude-code-marketplace/pull/111)).
 
 ## What is the same

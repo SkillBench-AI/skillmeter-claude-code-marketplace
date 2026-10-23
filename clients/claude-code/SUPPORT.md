@@ -4,7 +4,7 @@
 
 For non-sensitive defects and feature requests, open an issue at:
 
-<https://github.com/SkillBench-AI/skillmeter-claude-code-marketplace/issues>
+<https://github.com/SkillBench-AI/skillmeter-plugins/issues>
 
 Include:
 
