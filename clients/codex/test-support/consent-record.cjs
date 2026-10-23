@@ -5,7 +5,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const plugin = path.resolve(__dirname, "../plugins/skillmeter");
-const { writeCredentials, license, consentPolicyFileIn } = require(path.join(plugin, "test-support/plugin.cjs"));
+const { writeCredentials, license, consentPolicyFileIn } = require("./plugin.cjs");
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-shared-policy-"));
