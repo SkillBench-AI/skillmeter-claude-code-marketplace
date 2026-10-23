@@ -23,7 +23,7 @@ const {
   ENVIRONMENTS,
   CHANNEL_FILE,
   readChannel,
-  OAUTH_CLIENT_ID,
+  oauthClientId,
   OAUTH_SCOPE,
   trustedEndpoint,
 } = require("./endpoints");
@@ -78,7 +78,7 @@ function getRevokeUrl() {
 // overridable because a client id is the one thing likely to differ in a
 // one-off local broker.
 function getOAuthClientId() {
-  return resolveString("SKILLMETER_OAUTH_CLIENT_ID", OAUTH_CLIENT_ID);
+  return oauthClientId();
 }
 
 // Hard bypass of the JWT's `aud` endpoint claim (see transfer.js). Explicit-only:

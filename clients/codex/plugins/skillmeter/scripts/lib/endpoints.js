@@ -41,6 +41,12 @@ function readChannel(file = CHANNEL_FILE) {
 // embedded secret. Each device grant starts its own refresh chain, so the
 // clients' sessions stay apart (ADR 005).
 const OAUTH_CLIENT_ID = "skillmeter-plugin";
+// The environment can name another client for a one-off local broker, whose
+// registration may differ. Like the endpoint overrides, never project files:
+// a repository must not be able to swap the client the user authorizes.
+function oauthClientId() {
+  return process.env.SKILLMETER_OAUTH_CLIENT_ID || OAUTH_CLIENT_ID;
+}
 // `openid` for the ID token /activate verifies, `offline` for the refresh
 // token, `email` for the address /activate records with the license.
 const OAUTH_SCOPE = "openid offline email";
@@ -62,4 +68,4 @@ function trustedEndpoint(value, fallback, label) {
   return fallback;
 }
 
-module.exports = { ENVIRONMENTS, CHANNEL_FILE, readChannel, OAUTH_CLIENT_ID, OAUTH_SCOPE, trustedEndpoint };
+module.exports = { ENVIRONMENTS, CHANNEL_FILE, readChannel, OAUTH_CLIENT_ID, oauthClientId, OAUTH_SCOPE, trustedEndpoint };

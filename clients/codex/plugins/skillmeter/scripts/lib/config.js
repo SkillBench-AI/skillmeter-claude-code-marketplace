@@ -24,6 +24,7 @@ const {
   CHANNEL_FILE,
   readChannel: channel,
   OAUTH_CLIENT_ID,
+  oauthClientId,
   OAUTH_SCOPE,
   trustedEndpoint,
 } = require("./endpoints");
@@ -45,6 +46,7 @@ const activateUrl = () => trustedEndpoint(process.env.SKILLMETER_ACTIVATE_URL, d
 
 module.exports = {
   OAUTH_CLIENT_ID,
+  oauthClientId,
   OAUTH_SCOPE,
   CHANNEL_FILE,
   channel,
