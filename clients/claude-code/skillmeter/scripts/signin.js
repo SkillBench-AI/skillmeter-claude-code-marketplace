@@ -1,54 +1,21 @@
 #!/usr/bin/env node
 /**
- * Start broker device authorization and print the user code and URL. Poll in a
- * detached child so the shell runner can return and display the code immediately.
- * Exchange the broker ID token for a license and keep the broker's refresh
- * token, which renews the license from then on (ADR 005). Persist the result
- * for the FileChanged notifier and the next /skillmeter:signin invocation.
+ * Sign in to SkillMeter for Claude Code: the shared flow in lib/signin-flow.js
+ * (ADR 005). In Claude Code's `!` runner, which buffers output until exit, the
+ * poll runs in the background; the FileChanged notifier and the next
+ * /skillmeter:signin report its result.
  */
 
+const path = require("path");
 const credstore = require("./credstore.js");
 const { signinStatusBanner } = require("./lib/banner.js");
-const { startSpinner } = require("./lib/spinner.js");
-const { getRepoScopeDecision } = require("./lib/repo-scope");
+const { getRepoScopeDecision } = require("./lib/scope-decision");
 const telemetryStore = require("./lib/telemetry-store");
 const { clearLicenseStatus, isSessionEnded, recordSignin } = require("./lib/license-status");
-const { STATE_DIR } = require("./lib/config");
-const { requestDeviceCode, pollDeviceToken } = require("./lib/broker");
-const { exchangeIdToken } = require("./lib/license-exchange");
-const { spawnSync, spawn } = require("child_process");
-const fs = require("fs");
-const path = require("path");
+const { STATE_DIR, SIGNIN_COMMAND } = require("./lib/config");
+const signinFlow = require("./lib/signin-flow");
 
-// On POSIX, stdout/stderr writes to a pipe (e.g. when Claude Code's `!`
-// runner captures us) are async and block-buffered. Forcing the streams
-// to blocking mode keeps the device-code box on screen consistent with
-// what the foreground actually wrote before exiting.
-for (const stream of [process.stdout, process.stderr]) {
-  try {
-    if (stream._handle && typeof stream._handle.setBlocking === "function") {
-      stream._handle.setBlocking(true);
-    }
-  } catch {}
-}
-
-// Broker URL, client id and scope resolve centrally in lib/config
-// (env > settings > dev-bundle > prod default).
-
-const BACKGROUND_LOG = path.join(STATE_DIR, "activate-poll.log");
-// Used when the broker does not say how long its device code lives.
-const DEFAULT_DEVICE_CODE_LIFETIME_S = 15 * 60;
-// Starts over although a sign-in is waiting for approval, which cancels it.
-const RESTART_FLAG = "--restart";
-const SIGNIN_COMMAND = path.join(__dirname, "..", "bin", "signin");
-
-function log(msg) {
-  process.stderr.write(msg + "\n");
-}
-
-function say(msg) {
-  process.stdout.write(msg + "\n");
-}
+const say = (msg) => process.stdout.write(msg + "\n");
 
 function showSigninStatus(cwd = process.cwd()) {
   const org = credstore.getAllowedGitHubOrgs()[0] || "";
@@ -65,210 +32,36 @@ function showSigninStatus(cwd = process.cwd()) {
   }
 }
 
-// copyToClipboard tries platform-native clipboard tools. Returns true on
-// success, false when no tool is available or the copy fails. Never throws.
-function copyToClipboard(text) {
-  const candidates = [];
-  if (process.platform === "darwin") {
-    candidates.push({ cmd: "pbcopy", args: [] });
-  } else if (process.platform === "win32") {
-    candidates.push({ cmd: "clip", args: [] });
-  } else {
-    candidates.push({ cmd: "wl-copy", args: [] });
-    candidates.push({ cmd: "xclip", args: ["-selection", "clipboard"] });
-    candidates.push({ cmd: "xsel", args: ["--clipboard", "--input"] });
-    candidates.push({ cmd: "clip.exe", args: [] });
-  }
-  for (const { cmd, args } of candidates) {
-    const result = spawnSync(cmd, args, {
-      input: text,
-      stdio: ["pipe", "ignore", "ignore"],
-    });
-    if (result.status === 0) return true;
-  }
-  return false;
-}
+// A session the broker or the server ended can leave a license that is still
+// valid for up to one lifetime; that license is not a sign-in to keep. A
+// sign-out keeps the ended session's reason but no license.
+const sessionEnded = () => Boolean(credstore.getLicenseToken()) && isSessionEnded();
 
-async function exchangeForLicense(idToken, deviceId) {
-  const result = await exchangeIdToken(idToken, deviceId);
-  if (result.outcome === "issued") return result.token;
-  if (result.status === 402) {
-    throw new Error("No active SkillMeter license found for your workspaces.");
-  }
-  throw new Error(`Activation failed (${result.status ? `HTTP ${result.status}` : result.message})`);
-}
-
-// Background phase: invoked when the script is re-spawned with
-// `--background-poll`. Polls the broker for the id token, exchanges it for a
-// license, and persists it. The validated tenant lives in the JWT, so there is
-// no second identity lookup here. Output goes to BACKGROUND_LOG (redirected by
-// the parent's spawn() stdio) so it can be inspected if activation silently
-// fails.
-async function runBackgroundPoll(deviceId, deviceCode, interval, generation) {
-  if (!generation) throw new Error("Sign-in intent missing. Run /skillmeter:signin again.");
-  const expected = { generation, deviceId };
-  log(`[${new Date().toISOString()}] background poll started (device_id=${deviceId})`);
-  try {
-    const { idToken, refreshToken } = await pollDeviceToken(deviceCode, interval);
-    log(`[${new Date().toISOString()}] sign-in approved`);
-
-    const licenseJwt = await exchangeForLicense(idToken, deviceId);
-    log(`[${new Date().toISOString()}] license issued`);
-
-    if (!credstore.commitSignin({ jwt: licenseJwt, refreshToken, expected, onCommit: () => {
+signinFlow.main({
+  script: __filename,
+  signinCommand: SIGNIN_COMMAND,
+  restartCommand: `${path.join(__dirname, "..", "bin", "signin")} --restart`,
+  confirmHint: "confirm",
+  backgroundLog: () => path.join(STATE_DIR, "activate-poll.log"),
+  currentSignin: () => {
+    const token = credstore.getLicenseToken();
+    return token && !sessionEnded() && !credstore.isLicenseTokenExpired(token) ? token : null;
+  },
+  sessionEnded,
+  onEngaged: () => clearLicenseStatus({ source: "signin" }),
+  showSignedIn: () => showSigninStatus(),
+  // The waiting sign-in lives in the sign-in result the FileChanged notifier
+  // reads; a success or failure result replaces it.
+  pending: {
+    isPending: () => credstore.isSigninPending(),
+    mark: (lifetimeMs, expected) => credstore.writeSigninPending(lifetimeMs, expected),
+  },
+  commit: ({ jwt, refreshToken, expected }) => credstore.commitSignin({
+    jwt, refreshToken, expected,
+    onCommit: () => {
       recordSignin({ source: "signin" });
       credstore.writeSigninResult({ status: "success" });
-    } })) {
-      // A newer sign-in or a sign-out took over. Its own result, or the
-      // pending result's expiry, ends the wait.
-      log(`[${new Date().toISOString()}] sign-in discarded: authentication changed during poll`);
-      process.exit(0);
-    }
-    log(`[${new Date().toISOString()}] activation complete`);
-    process.exit(0);
-  } catch (err) {
-    log(`[${new Date().toISOString()}] background poll failed: ${err.message}`);
-    credstore.writeSigninResult({ status: "failure", error: err.message }, expected);
-    process.exit(1);
-  }
-}
-
-function spawnBackgroundPoll(deviceId, deviceCode, interval, generation) {
-  fs.mkdirSync(path.dirname(BACKGROUND_LOG), { recursive: true, mode: 0o700 });
-  const logFd = fs.openSync(BACKGROUND_LOG, "a");
-  const child = spawn(
-    process.execPath,
-    [__filename, "--background-poll", deviceId, deviceCode, String(interval), generation],
-    {
-      detached: true,
-      stdio: ["ignore", logFd, logFd],
-    }
-  );
-  child.unref();
-  fs.closeSync(logFd);
-}
-
-async function main({ restart = false } = {}) {
-  // A sign-in is waiting for approval in the browser, and a new intent would
-  // cancel it. A plain re-run, from shell history or a repeated command,
-  // reports it instead; --restart starts over on purpose.
-  if (!restart && credstore.isSigninPending()) {
-    say("SkillMeter sign-in in progress: a sign-in code is waiting for approval in the browser.");
-    say("Approve it there, then run /skillmeter:signin to confirm.");
-    say(`To cancel it and start over: ${SIGNIN_COMMAND} ${RESTART_FLAG}`);
-    return;
-  }
-
-  // A session the broker or the server ended can leave a license that is
-  // still valid for up to one lifetime; that license is not a sign-in to keep.
-  // A sign-out keeps the ended session's reason but no license, so it is not
-  // an ended session.
-  const sessionEnded = Boolean(credstore.getLicenseToken()) && isSessionEnded();
-
-  // Explicit sign-in starts a new intent. A sign-out stays recorded until the
-  // sign-in commits.
-  const deviceId = credstore.getDeviceId();
-  const generation = credstore.markEngaged();
-  const expected = { generation, deviceId };
-  clearLicenseStatus({ source: "signin" });
-
-  const existingToken = credstore.getLicenseToken();
-  if (existingToken && !sessionEnded && !credstore.isLicenseTokenExpired(existingToken)) {
-    // Already signed in — the license (and its validated org) is current.
-    showSigninStatus();
-    return;
-  }
-  if (sessionEnded) {
-    log("Your session ended — signing in again...");
-  } else if (existingToken) {
-    log("License expired — refreshing...");
-  }
-
-  if (!deviceId) {
-    log("Activation failed: unable to determine device ID.");
-    process.exit(1);
-  }
-
-  // Straight to the device grant.
-  const device = await requestDeviceCode();
-  const lifetimeS = Number(device.expires_in) > 0 ? Number(device.expires_in) : DEFAULT_DEVICE_CODE_LIFETIME_S;
-  credstore.writeSigninPending(lifetimeS * 1000, expected);
-
-  const expiresMin = Math.round(lifetimeS / 60);
-  const clipboardCopied = copyToClipboard(device.user_code);
-
-  // verification_uri_complete already carries the code, so the page can fill
-  // the box in and the person only has to confirm. It is optional in RFC 8628,
-  // hence the fallback to the bare URL and the copy that suits each.
-  const verifyUrl = device.verification_uri_complete || device.verification_uri;
-  const prefilled = Boolean(device.verification_uri_complete);
-
-  say("");
-  say("============================================================");
-  say(" SkillBench sign-in required");
-  say("============================================================");
-  say("");
-  say(`  1. Copy this code:`);
-  say(`       ${device.user_code}`);
-  if (clipboardCopied) {
-    say("       (already copied to your clipboard)");
-  }
-  say("");
-  say(prefilled ? `  2. Open in your browser and confirm:` : `  2. Open in your browser and paste it:`);
-  say(`       ${verifyUrl}`);
-  say("");
-  say(`  Code expires in ${expiresMin} minutes.`);
-  say("============================================================");
-  say("");
-
-  // In a real terminal, poll inline with a live spinner so the user sees
-  // progress while they're approving in the browser. In a non-TTY runner
-  // (Claude Code's `!`-prefix buffers output until exit), fall back to a
-  // detached background poll and let the user re-invoke /skillmeter:signin
-  // to confirm.
-  if (process.stdout.isTTY) {
-    await runForegroundPoll(deviceId, device, expected);
-  } else {
-    spawnBackgroundPoll(deviceId, device.device_code, device.interval || 5, generation);
-    say("Polling for approval in the background.");
-    say("After approving in your browser, run /skillmeter:signin again to confirm.");
-    say(`(background log: ${BACKGROUND_LOG})`);
-  }
-}
-
-async function runForegroundPoll(deviceId, device, expected) {
-  const stop = startSpinner("Waiting for approval");
-  try {
-    const { idToken, refreshToken } = await pollDeviceToken(device.device_code, device.interval || 5);
-    const licenseJwt = await exchangeForLicense(idToken, deviceId);
-    stop();
-    if (!credstore.commitSignin({ jwt: licenseJwt, refreshToken, expected, onCommit: () => {
-      recordSignin({ source: "signin" });
-      credstore.writeSigninResult({ status: "success" });
-    } })) {
-      say("Sign-in discarded: authentication changed during issuance.");
-      process.exit(0);
-    }
-    showSigninStatus();
-  } catch (err) {
-    stop();
-    credstore.writeSigninResult({ status: "failure", error: err.message }, expected);
-    say(`Sign-in failed: ${err.message}`);
-    process.exit(1);
-  }
-}
-
-if (process.argv[2] === "--background-poll") {
-  const deviceId = process.argv[3];
-  const deviceCode = process.argv[4];
-  const interval = Number(process.argv[5]) || 5;
-  runBackgroundPoll(deviceId, deviceCode, interval, process.argv[6]).catch((err) => {
-    say(err.message);
-    process.exitCode = 1;
-  });
-} else {
-  main({ restart: process.argv.includes(RESTART_FLAG) }).catch((err) => {
-    say(`Activation failed: ${err.message}`);
-    process.exit(1);
-  });
-}
+    },
+  }),
+  recordFailure: (message, expected) => credstore.writeSigninResult({ status: "failure", error: message }, expected),
+});

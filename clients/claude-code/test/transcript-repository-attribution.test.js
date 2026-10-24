@@ -59,6 +59,27 @@ test("a turn in another enabled repository is sent once, for that repository", a
   assert.deepEqual(c.sentFor(REPO_KEY), ["in-u", "in-a"]);
 });
 
+// The collector keeps one object, with one seq sequence, per transcript id.
+test("each repository sends a transcript under its own id; the first keeps the plain one", async (t) => {
+  const { c, s } = await start(t, { policy: BOTH, dir: "other" });
+  await s.turn("gadgets");
+  await s.drained(() => c.transcript().includes("gadgets-a"));
+  s.cd("repo");
+  await s.turn("in");
+  await s.drained(() => c.transcript().includes("in-a"));
+  s.cd("other");
+  await s.turn("back");
+  await s.drained(() => c.transcript().includes("back-a"));
+
+  const first = [...new Set(c.transcriptIdsFor(OTHER_KEY))];
+  const second = [...new Set(c.transcriptIdsFor(REPO_KEY))];
+  assert.equal(first.length, 1);
+  assert.equal(second.length, 1);
+  assert.match(first[0], /^[^.]+\.jsonl$/);
+  assert.match(second[0], /\.[0-9a-f]{12}\.jsonl$/);
+  assert.equal(second[0].replace(/\.[0-9a-f]{12}\.jsonl$/, ".jsonl"), first[0]);
+});
+
 test("a turn in a repository turned off is not sent for another", async (t) => {
   const { c, s } = await start(t, { policy: OTHER_OFF, dir: "other" });
   await s.turn("off");

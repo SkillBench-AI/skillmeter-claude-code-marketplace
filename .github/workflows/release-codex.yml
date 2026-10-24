@@ -37,6 +37,9 @@ jobs:
         run: node .github/scripts/check-version.mjs --tag "${GITHUB_REF_NAME}"
       - name: Validate marketplace & plugin manifests
         run: node .github/scripts/validate-manifests.mjs
+      - name: Run shared tests
+        working-directory: shared
+        run: node --test
       - name: Run unit tests
         run: node --test
       # The Codex client and the marketplace that points at it, nothing of the
@@ -46,16 +49,19 @@ jobs:
         run: |
           mkdir -p dist
           git archive --format=tar.gz \
-            --prefix="skillmeter-codex-${GITHUB_REF_NAME}/" \
-            -o "dist/skillmeter-codex-${GITHUB_REF_NAME}.tar.gz" \
+            --prefix="skillmeter-${GITHUB_REF_NAME}/" \
+            -o "dist/skillmeter-${GITHUB_REF_NAME}.tar.gz" \
             "${GITHUB_REF_NAME}" -- .agents clients/codex
+      # Not marked Latest: the repository's Latest release is always the
+      # Claude Code plugin's, which /releases/latest links rely on.
       - name: Create GitHub Release
         working-directory: .
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${GITHUB_REF_NAME}" \
-            --title "Codex ${GITHUB_REF_NAME#codex-}" \
+            --title "SkillMeter for Codex ${GITHUB_REF_NAME#codex-v}" \
             --generate-notes \
+            --latest=false \
             --verify-tag \
-            "dist/skillmeter-codex-${GITHUB_REF_NAME}.tar.gz"
+            "dist/skillmeter-${GITHUB_REF_NAME}.tar.gz"

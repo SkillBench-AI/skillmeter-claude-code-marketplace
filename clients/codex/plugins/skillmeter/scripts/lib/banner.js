@@ -3,29 +3,17 @@
  * the checkmark and the arrow are assumed to occupy one terminal column each.
  */
 const path = require("path");
+const { renderCard, cardRow } = require("./card");
 
 let version = "";
 try { version = require(path.join(__dirname, "..", "..", ".codex-plugin", "plugin.json")).version || ""; }
 catch { /* An unreadable manifest only drops the version from the title. */ }
 
-// Names a non-stable channel and its environment so the destination is visible.
-function channelLabel() {
-  const { channel, env } = require("./config").channel();
-  return channel === "stable" ? "" : ` · ${channel} (${env})`;
-}
+// The shared renderer (shared/lib/card.js) draws the box; this client decides
+// the lines and, writing cards straight to the terminal, ends them with a newline.
+const card = lines => renderCard(lines, { version, ...require("./config").channel() }) + "\n";
 
-// Content-sized card with a titled top border, as in the Claude plugin.
-function card(lines) {
-  const title = `${version ? `SkillMeter v${version}` : "SkillMeter"}${channelLabel()}`;
-  const bodyWidth = Math.max([...title].length, ...lines.map(line => [...line].length));
-  const innerWidth = bodyWidth + 4;
-  const titleRule = `─ ${title} `;
-  const top = `╭${titleRule}${"─".repeat(innerWidth - [...titleRule].length)}╮`;
-  const body = lines.map(line => `│  ${line}${" ".repeat(bodyWidth - [...line].length)}  │`);
-  return ["", top, ...body, `╰${"─".repeat(innerWidth)}╯`, ""].join("\n");
-}
-
-const row = (label, value) => `${label.padEnd(14)}${value}`;
+const row = cardRow;
 
 const SIGNED_IN = row("Sign-in", "✓ signed in");
 

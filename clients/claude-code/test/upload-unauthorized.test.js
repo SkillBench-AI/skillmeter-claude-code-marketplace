@@ -22,9 +22,9 @@ const STATE_DIR = makeTempDir("skm-unauth-state-");
 const DATA_DIR = makeTempDir("skm-unauth-data-");
 setTestEnv("SKILLMETER_STATE_DIR", STATE_DIR);
 setTestEnv("CLAUDE_PLUGIN_DATA", DATA_DIR);
-setTestEnv("SKILLMETER_ACTIVATE_URL", "https://activation.test/activate");
-setTestEnv("SKILLMETER_BROKER_URL", "https://id.test");
-setTestEnv("SKILLMETER_BACKEND_URL", "https://collector.skillbench.example");
+setTestEnv("SKILLMETER_ACTIVATE_URL", "http://127.0.0.1:9/activation/activate");
+setTestEnv("SKILLMETER_BROKER_URL", "http://127.0.0.1:9/id");
+setTestEnv("SKILLMETER_BACKEND_URL", "http://127.0.0.1:9/collector");
 
 const ORG = "skillbench-ai";
 const REPO = { repoKey: `github.com/${ORG}/unauthorized`, org: ORG };
@@ -65,7 +65,7 @@ beforeEach(() => {
 
 // Transcript POSTs answer from `uploads`; the broker grant and /activate
 // renew the license.
-const TOKEN_URL = "https://id.test/oauth2/token";
+const TOKEN_URL = "http://127.0.0.1:9/id/oauth2/token";
 const renewals = () => calls.filter((u) => u === TOKEN_URL).length;
 function stubFetch(uploads) {
   global.fetch = async (url) => {
@@ -74,7 +74,7 @@ function stubFetch(uploads) {
       const body = JSON.stringify({ id_token: "id-token", refresh_token: "ory_rt_fixture" });
       return { ok: true, status: 200, json: async () => JSON.parse(body), text: async () => body };
     }
-    if (String(url) === "https://activation.test/activate") {
+    if (String(url) === "http://127.0.0.1:9/activation/activate") {
       return { ok: true, status: 200, json: async () => ({ token: license() }), text: async () => "" };
     }
     const status = uploads.shift() ?? 500;

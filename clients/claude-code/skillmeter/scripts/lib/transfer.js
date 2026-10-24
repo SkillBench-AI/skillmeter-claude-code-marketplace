@@ -20,7 +20,7 @@ const { spawn } = require("child_process");
 const credstore = require("../credstore");
 const { getEndpointFromTokenAllowExpired, isJwtExpired } = require("./jwt");
 const { ensureFreshLicense } = require("./license-activation");
-const { getEventTimeoutMs, getTranscriptChunkMaxBytes } = require("./config");
+const { getBackendUrlOverride, getEventTimeoutMs, getTranscriptChunkMaxBytes } = require("./config");
 const { atomicWriteJson, safeReadJson } = require("./io");
 const { appendBackfillLog } = require("./backfill-log");
 const { settleBackfillDelivery } = require("./backfill-delivery");
@@ -30,6 +30,7 @@ const {
   isChunkEligible,
   isChunkExhausted,
   quarantinePathFor,
+  recordUploadDeferral,
   recordUploadFailure,
 } = require("./chunk-retry");
 const {
@@ -39,7 +40,7 @@ const {
   turnDestinations,
   buildChunkPlan,
 } = require("./transcript-delta");
-const { getRepoScopeDecision } = require("./repo-scope");
+const { getRepoScopeDecision } = require("./scope-decision");
 const { hashHmac } = require("./sanitize");
 const {
   PLUGIN_ROOT,
@@ -76,6 +77,12 @@ const {
 } = require("./backfill-state");
 const { listBackfillEvents, readBackfillEvent } = require("./backfill-event");
 const { currentTenantFingerprint, tenantFingerprint } = require("./tenant");
+
+// Where telemetry goes: an explicit SKILLMETER_BACKEND_URL, else the license's
+// HTTPS audience. Routing only; senders still require an unexpired license.
+function telemetryEndpoint(token) {
+  return getBackendUrlOverride() || getEndpointFromTokenAllowExpired(token);
+}
 
 // Async gzip for transcript uploads — keeps the hook's event loop responsive
 // while compressing multi-MB transcripts. Sync variants are still used for
@@ -219,7 +226,7 @@ async function transferEventLog(logFile, timeoutMs = EVENT_TIMEOUT) {
     return { ok: false };
   }
 
-  const endpoint = getEndpointFromTokenAllowExpired(token);
+  const endpoint = telemetryEndpoint(token);
   if (!endpoint) {
     console.error(`[skillmeter] Event log: no telemetry endpoint resolvable from license JWT — leaving for retry`);
     return { ok: false };
@@ -419,11 +426,35 @@ function readCursor(transcriptId, repository) {
   return safeReadJson(cursorPath(transcriptId, repository), null);
 }
 
+// The collector keeps one object per device and transcript id, with a single
+// seq and baseline sequence. Each repository staging a transcript keeps its
+// own sequence, so only the first keeps the plain id and any other sends under
+// an id of its own. The choice is fixed in the cursor; a cursor written before
+// it was recorded keeps the plain id.
+function wireTranscriptId(transcriptId, repository, cursor = readCursor(transcriptId, repository)) {
+  if (cursor) return cursor.wireId || transcriptId;
+  const repoKey = telemetryStore.normalizeRepoKey(repository.repoKey);
+  const plainTaken = listRepositoryQueueContexts().some((context) => {
+    if (context.repoKey === repoKey) return false;
+    const other = safeReadJson(path.join(context.cursors, `${transcriptId}.json`), null);
+    return !!other && (other.wireId || transcriptId) === transcriptId;
+  });
+  if (!plainTaken) return transcriptId;
+  const storageId = repositoryStorageId(repoKey, credstore.getOrCreateHashSalt());
+  return `${transcriptId.replace(/\.jsonl$/, "")}.${storageId}.jsonl`;
+}
+
 // Persist the delta cursor atomically. Best-effort: a failed write just means
 // the next Stop recomputes from the old cursor (chunks are idempotent by uuid).
+// The wire id and generation baseline carry over unless the caller sets them.
 function writeCursor(cursor, repository) {
   try {
-    atomicWriteJson(cursorPath(cursor.transcriptId, repository), cursor);
+    const previous = readCursor(cursor.transcriptId, repository);
+    atomicWriteJson(cursorPath(cursor.transcriptId, repository), {
+      ...cursor,
+      wireId: cursor.wireId || wireTranscriptId(cursor.transcriptId, repository, previous),
+      baseline: cursor.baseline ?? previous?.baseline ?? 0,
+    });
     return true;
   } catch (err) {
     console.error(`[skillmeter] Transcript cursor write failed: ${err.message}`);
@@ -517,11 +548,11 @@ function buildChunkHeaders(meta, deviceId, token, rawBody = null) {
     "Content-Type": "application/x-ndjson",
     "Content-Encoding": "gzip",
     "X-Device-ID": deviceId,
-    "X-Transcript-ID": meta.transcriptId,
+    "X-Transcript-ID": meta.wireTranscriptId || meta.transcriptId,
     "X-Chunk-Seq": String(meta.seq),
-    // >0 => server truncates rows with seq < baseline for this transcript
-    // (order-independent under parallel drain); "0" => plain append.
-    "X-Chunk-Reset": String(meta.reset ? meta.resetBaselineSeq : 0),
+    // The chunk's generation baseline (transcript-delta.js buildChunkPlan);
+    // "0" before the transcript's first reset.
+    "X-Chunk-Reset": String(meta.resetBaselineSeq || 0),
     "X-Plugin-Version": PLUGIN_VERSION,
     "Authorization": `Bearer ${token}`,
   };
@@ -625,6 +656,17 @@ function noteChunkUploadFailure(bodyPath, metaPath, meta, error) {
   return { abandoned: true, attempts: updated.uploadAttempts };
 }
 
+function noteChunkUploadDeferral(metaPath, meta, error) {
+  try {
+    atomicWriteJson(metaPath, recordUploadDeferral(meta, { now: Date.now(), error }));
+  } catch {}
+}
+
+// Responses that say nothing about the chunk itself: the license or workspace
+// (402, 403), throttling and timeouts, or a collector that is unavailable.
+// They back off without spending the chunk's retry budget.
+const DEFERRED_CHUNK_STATUSES = new Set([402, 403, 408, 429, 502, 503, 504]);
+
 // Upload one delta chunk. On 2xx, deletes the body then the meta; otherwise
 // leaves both for retry. Result shape matches drainFailedLogs entries.
 async function uploadDeltaChunk(bodyPath, deviceId, timeoutMs = TRANSCRIPT_TIMEOUT) {
@@ -682,7 +724,7 @@ async function uploadDeltaChunk(bodyPath, deviceId, timeoutMs = TRANSCRIPT_TIMEO
     });
     return { ok: false, deferred: true };
   }
-  const endpoint = getEndpointFromTokenAllowExpired(token);
+  const endpoint = telemetryEndpoint(token);
   if (!endpoint) {
     console.error(`[skillmeter] Transcript chunk: no telemetry endpoint resolvable — kept for retry`);
     logBackfillChunk(meta, "upload_deferred", {
@@ -757,6 +799,16 @@ async function uploadDeltaChunk(bodyPath, deviceId, timeoutMs = TRANSCRIPT_TIMEO
       logBackfillChunk(meta, "upload_deferred", { reason: "license_rejected", httpStatus: 401 });
       return { ok: false, unauthorized: true, error: "HTTP 401" };
     }
+    if (DEFERRED_CHUNK_STATUSES.has(res.status)) {
+      noteChunkUploadDeferral(metaPath, meta, `HTTP ${res.status}`);
+      console.error(`[skillmeter] Transcript chunk not accepted now: HTTP ${res.status} — kept for retry`);
+      logBackfillChunk(meta, "upload_deferred", {
+        reason: "collector_unavailable",
+        httpStatus: res.status,
+        durationMs: Date.now() - startedAt,
+      });
+      return { ok: false, deferred: true, error: `HTTP ${res.status}` };
+    }
     const budget = noteChunkUploadFailure(
       bodyPath,
       metaPath,
@@ -781,25 +833,76 @@ async function uploadDeltaChunk(bodyPath, deviceId, timeoutMs = TRANSCRIPT_TIMEO
       abandoned: budget.abandoned,
     };
   } catch (err) {
-    const budget = noteChunkUploadFailure(
-      bodyPath,
-      metaPath,
-      meta,
-      String(err?.message || err)
-    );
-    console.error(
-      `[skillmeter] Transcript chunk transfer error: ${err.message} — ` +
-        (budget.abandoned
-          ? "retry budget spent, set aside"
-          : `kept for retry (attempt ${budget.attempts}/${MAX_UPLOAD_ATTEMPTS})`)
-    );
-    logBackfillChunk(meta, "upload_failed", {
+    // No response: offline, DNS, or a timeout. Nothing is known about the chunk.
+    noteChunkUploadDeferral(metaPath, meta, String(err?.message || err));
+    console.error(`[skillmeter] Transcript chunk transfer error: ${err.message} — kept for retry`);
+    logBackfillChunk(meta, "upload_deferred", {
+      reason: "network_error",
       durationMs: Date.now() - startedAt,
       error: String(err?.message || err),
-      attempts: budget.attempts,
     });
-    return { ok: false, error: err.message, abandoned: budget.abandoned };
+    return { ok: false, deferred: true, error: err.message };
   }
+}
+
+// Chunks of one transcript in one queue go in seq order, one at a time, and a
+// chunk that is not delivered holds back the ones after it. Sent out of order,
+// a chunk of an older generation could land after a newer one and put stale
+// lines into the collector's object.
+function transcriptChunkKey(file, meta) {
+  return `${path.dirname(file)}\0${meta?.transcriptId || path.basename(file)}`;
+}
+
+// The chunks a drain may try now: each transcript's chunks in seq order, up to
+// the first one still waiting out its backoff.
+function eligibleChunksInOrder(entries, now) {
+  const groups = new Map();
+  for (const entry of entries) {
+    const key = transcriptChunkKey(entry.file, entry.meta);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(entry);
+  }
+  const eligible = [];
+  for (const group of groups.values()) {
+    group.sort((a, b) =>
+      (a.meta?.seq || 0) - (b.meta?.seq || 0) || a.file.localeCompare(b.file)
+    );
+    for (const entry of group) {
+      if (!isChunkEligible(entry.meta, now)) break;
+      eligible.push(entry);
+    }
+  }
+  return eligible;
+}
+
+// Upload `files` (already in seq order per transcript) with transcripts in
+// parallel and each transcript's chunks in turn. A chunk held back by an
+// earlier one gets { ok: false, held: true }. Results keep input order.
+async function uploadInTranscriptOrder(files, keyOf, upload, onEach) {
+  const groups = new Map();
+  files.forEach((file, index) => {
+    const key = keyOf(file);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(index);
+  });
+  const results = new Array(files.length);
+  await settleWithLimit([...groups.values()], DRAIN_CONCURRENCY, async (indices) => {
+    let held = false;
+    for (const index of indices) {
+      if (held) {
+        results[index] = { status: "fulfilled", value: { ok: false, held: true } };
+        continue;
+      }
+      try {
+        results[index] = { status: "fulfilled", value: await upload(files[index]) };
+      } catch (reason) {
+        results[index] = { status: "rejected", reason };
+      }
+      onEach();
+      held = !results[index].value?.ok;
+    }
+  });
+  return results;
 }
 
 // Returns { ok: <#uploaded>, errors: [...] } for this batch.
@@ -814,20 +917,19 @@ async function drainDeltaChunks(timeoutMs) {
     // Skipping them here is what bounds the retry rate: the Stop hook spawns a
     // drain at the end of every turn, so without this a chunk the backend
     // always rejects is re-sent at whatever rate turns end.
-    const now = Date.now();
-    const files = queued.filter((file) =>
-      isChunkEligible(
-        safeReadJson(file.replace(/\.jsonl$/, ".meta.json"), null),
-        now
-      )
+    const entries = eligibleChunksInOrder(
+      queued.map((file) => ({
+        file,
+        meta: safeReadJson(file.replace(/\.jsonl$/, ".meta.json"), null),
+      })),
+      Date.now()
     );
+    const files = entries.map((entry) => entry.file);
     // Nothing eligible: return before the batch log, so a backed-off queue
     // stays quiet instead of announcing an empty pass on every drain.
     if (files.length === 0) return { ok: 0, errors: [] };
-    const backfillEntries = files.flatMap((file) => {
-      const meta = safeReadJson(file.replace(/\.jsonl$/, ".meta.json"), null);
-      return meta?.promptId === "backfill" ? [{ file, meta }] : [];
-    });
+    const keys = new Map(entries.map((entry) => [entry.file, transcriptChunkKey(entry.file, entry.meta)]));
+    const backfillEntries = entries.filter((entry) => entry.meta?.promptId === "backfill");
     if (telemetryStore.getGlobalDisabled()) {
       if (backfillEntries.length > 0) {
         appendBackfillLog("upload_batch_completed", {
@@ -855,9 +957,9 @@ async function drainDeltaChunks(timeoutMs) {
     console.error(`[skillmeter] Draining ${files.length} transcript chunk(s)`);
     // Best-effort, single-flight refresh once per batch (see drainFailedLogs).
     await ensureFreshLicense(deviceId);
-    const upload = (batch) => settleWithLimit(
+    const upload = (batch) => uploadInTranscriptOrder(
       batch,
-      DRAIN_CONCURRENCY,
+      (file) => keys.get(file),
       (file) => uploadDeltaChunk(file, deviceId, timeoutMs),
       () => touchQueueDrainLock(lock)
     );
@@ -982,10 +1084,13 @@ function stageRepositoryTurns(objs, destinations, transcriptId, promptId, reposi
   });
 
   if (!plan.newCursor) return 0; // empty delta — cursor untouched
+  logOversizedRecords(plan);
 
+  const wireId = wireTranscriptId(transcriptId, repository, cursor);
   let sealed = 0;
   for (const chunk of plan.chunks) {
     const bodyPath = sealDeltaChunk(transcriptId, chunk.lines, {
+      wireTranscriptId: wireId,
       seq: chunk.seq,
       reset: chunk.reset,
       resetBaselineSeq: chunk.resetBaselineSeq,
@@ -999,12 +1104,22 @@ function stageRepositoryTurns(objs, destinations, transcriptId, promptId, reposi
   if (sealed === plan.chunks.length) {
     writeCursor({
       transcriptId,
+      wireId,
       lastUuid: plan.newCursor.lastUuid,
       seq: plan.newCursor.seq,
+      baseline: plan.newCursor.baseline,
       updatedAt: Date.now(),
     }, repository);
   }
   return sealed;
+}
+
+function logOversizedRecords(plan) {
+  if (plan.oversized > 0) {
+    console.error(
+      `[skillmeter] Transcript delta: ${plan.oversized} record(s) larger than an upload can carry — left out`
+    );
+  }
 }
 
 // Working directories as transcript staging sees them, each resolved once:
@@ -1100,10 +1215,13 @@ function stageTranscriptSnapshot(transcriptPath, repository, {
   if (!plan.newCursor?.lastUuid || plan.chunks.length === 0) {
     return { chunks: 0, skipped: true, reason: "empty_snapshot" };
   }
+  logOversizedRecords(plan);
 
+  const wireId = wireTranscriptId(transcriptId, repository, cursor);
   let sealed = 0;
   for (const chunk of plan.chunks) {
     const bodyPath = sealDeltaChunk(transcriptId, chunk.lines, {
+      wireTranscriptId: wireId,
       seq: chunk.seq,
       reset: chunk.reset,
       resetBaselineSeq: chunk.resetBaselineSeq,
@@ -1118,6 +1236,7 @@ function stageTranscriptSnapshot(transcriptPath, repository, {
 
   const cursorWritten = writeCursor({
     transcriptId,
+    wireId,
     lastUuid: plan.newCursor.lastUuid,
     seq: plan.newCursor.seq,
     updatedAt: Date.now(),
@@ -1637,7 +1756,7 @@ async function drainBackfillEvents(timeoutMs = EVENT_TIMEOUT) {
       if (!token || isJwtExpired(token)) continue;
       // The token this request carries, not a later re-read of it.
       if (tenantFingerprint(token, credstore.getHashSalt()) !== expectedTenant) continue;
-      const endpoint = getEndpointFromTokenAllowExpired(token);
+      const endpoint = telemetryEndpoint(token);
       if (!endpoint) continue;
 
       const body = Buffer.from(JSON.stringify(entry.event) + "\n");

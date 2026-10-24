@@ -6,40 +6,20 @@
 const { PLUGIN_VERSION } = require("./paths");
 const { CHANNEL } = require("./config");
 const { ADMINISTRATOR, REASONS } = require("./collection-wording");
+const { renderCard, cardRow } = require("./card");
 
-// Names a non-stable channel and its environment so the destination is visible.
-function channelLabel() {
-  return CHANNEL.channel === "stable" ? "" : ` · ${CHANNEL.channel} (${CHANNEL.env})`;
-}
-
-// Content-sized card (2-space body padding). All glyphs used here are
-// single-column, so [...value].length measures the visible width correctly.
-//
-// Every card starts with a newline: the renderers that show these prefix the
-// first line ("SessionStart:startup says: ", "FileChanged says: "), which would
-// otherwise indent the top border past the rest of the box.
+// The shared renderer (shared/lib/card.js) draws the box; this client decides
+// the lines.
 function card(lines) {
-  const title = `SkillMeter v${PLUGIN_VERSION}${channelLabel()}`;
-  const bodyWidth = Math.max(
-    [...title].length,
-    ...lines.map((line) => [...line].length)
-  );
-  const innerWidth = bodyWidth + 4;
-  const titleRule = `─ ${title} `;
-  const top = `╭${titleRule}${"─".repeat(innerWidth - [...titleRule].length)}╮`;
-  const body = lines.map((line) => {
-    const padding = " ".repeat(bodyWidth - [...line].length);
-    return `│  ${line}${padding}  │`;
-  });
-  return ["", top, ...body, `╰${"─".repeat(innerWidth)}╯`].join("\n");
+  return renderCard(lines, { version: PLUGIN_VERSION, ...CHANNEL });
 }
 
 function orgLine(org) {
-  return `Organization  @${org}`;
+  return cardRow("Organization", `@${org}`);
 }
 
 function manageLine(command) {
-  return `Manage        ${command}`;
+  return cardRow("Manage", command);
 }
 
 function telemetryConsentRequiredBanner(org) {

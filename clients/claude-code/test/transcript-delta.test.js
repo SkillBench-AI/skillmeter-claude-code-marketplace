@@ -168,11 +168,11 @@ test("buildChunkPlan: keep sends only the selected records, and the cursor passe
   const objs = [content("a"), content("b"), content("c")];
   const plan = d.buildChunkPlan(objs, { lastUuid: "a", seq: 2 }, SALT, { keep: (i) => i === 2 });
   assert.deepEqual(plan.chunks.map((c) => c.lines.map((l) => JSON.parse(l).uuid)), [["c"]]);
-  assert.deepEqual(plan.newCursor, { lastUuid: "c", seq: 3 });
+  assert.deepEqual(plan.newCursor, { lastUuid: "c", seq: 3, baseline: 0 });
 
   const none = d.buildChunkPlan(objs, { lastUuid: "a", seq: 2 }, SALT, { keep: () => false });
   assert.deepEqual(none.chunks, []);
-  assert.deepEqual(none.newCursor, { lastUuid: "c", seq: 2 });
+  assert.deepEqual(none.newCursor, { lastUuid: "c", seq: 2, baseline: 0 });
 });
 
 test("splitLinesByBudget: groups within budget, no line loss", () => {
@@ -200,7 +200,7 @@ test("buildChunkPlan: fresh (no cursor) -> one chunk, all lines, anchor=last uui
   assert.equal(plan.chunks[0].lines.length, 2);
   assert.equal(plan.chunks[0].seq, 1);
   assert.equal(plan.chunks[0].reset, false);
-  assert.deepEqual(plan.newCursor, { lastUuid: "b", seq: 1 });
+  assert.deepEqual(plan.newCursor, { lastUuid: "b", seq: 1, baseline: 0 });
 });
 
 test("buildChunkPlan: continuation sends only new lines with continued seq", () => {
@@ -209,7 +209,7 @@ test("buildChunkPlan: continuation sends only new lines with continued seq", () 
   assert.equal(plan.chunks.length, 1);
   assert.equal(plan.chunks[0].lines.length, 2); // b, c
   assert.equal(plan.chunks[0].seq, 2);
-  assert.deepEqual(plan.newCursor, { lastUuid: "c", seq: 2 });
+  assert.deepEqual(plan.newCursor, { lastUuid: "c", seq: 2, baseline: 0 });
 });
 
 test("buildChunkPlan: empty delta -> no chunks, null cursor (no-op)", () => {
@@ -255,7 +255,65 @@ test("buildChunkPlan: split produces consecutive seqs sharing reset baseline", (
   assert.equal(plan.newCursor.seq, 3);
 });
 
+test("buildChunkPlan: chunks after a reset carry the generation's baseline", () => {
+  const reset = d.buildChunkPlan([content("a"), content("b")], { lastUuid: "gone", seq: 5 }, SALT);
+  assert.equal(reset.newCursor.baseline, 6);
+
+  const next = d.buildChunkPlan([content("a"), content("b"), content("c")], reset.newCursor, SALT);
+  assert.equal(next.chunks[0].reset, false);
+  assert.equal(next.chunks[0].seq, 7);
+  assert.equal(next.chunks[0].resetBaselineSeq, 6);
+  assert.equal(next.newCursor.baseline, 6);
+});
+
+test("buildChunkPlan: before any reset the baseline is 0", () => {
+  const plan = d.buildChunkPlan([content("a"), content("b")], { lastUuid: "a", seq: 3 }, SALT);
+  assert.equal(plan.chunks[0].resetBaselineSeq, null);
+  assert.equal(plan.newCursor.baseline, 0);
+});
+
+// Random bytes in base64 barely compress, so gzip cannot rescue an oversized group.
+function incompressible(bytes) {
+  return require("crypto").randomBytes(Math.ceil(bytes * 3 / 4)).toString("base64").slice(0, bytes);
+}
+const SMALL_ENVELOPE = 128 * 1024 + 8 * 1024; // the 128 KiB reserve plus 6 KiB of gzip
+
+test("splitByEnvelope: splits until each part's encoded body fits", () => {
+  const lines = Array.from({ length: 8 }, () => JSON.stringify({ blob: incompressible(2000) }));
+  const { groups, oversized } = d.splitByEnvelope(lines, SMALL_ENVELOPE);
+  assert.equal(oversized, 0);
+  assert.ok(groups.length > 1);
+  assert.deepEqual(groups.flat(), lines, "no line lost or reordered");
+  for (const group of groups) {
+    const gz = require("zlib").gzipSync(group.join("\n") + "\n").length;
+    assert.ok(4 * Math.ceil(gz / 3) + 128 * 1024 <= SMALL_ENVELOPE);
+  }
+});
+
+test("splitByEnvelope: compressible text stays in one group without a split", () => {
+  const lines = Array.from({ length: 50 }, () => JSON.stringify({ text: "a".repeat(2000) }));
+  assert.deepEqual(d.splitByEnvelope(lines, SMALL_ENVELOPE), { groups: [lines], oversized: 0 });
+});
+
+test("buildChunkPlan: a record no upload can carry is left out and counted", () => {
+  const huge = { ...content("big"), message: { content: incompressible(20000) } };
+  const plan = d.buildChunkPlan([content("a"), huge, content("c")], null, SALT, { maxEnvelope: SMALL_ENVELOPE });
+  assert.equal(plan.oversized, 1);
+  assert.deepEqual(plan.chunks.flatMap((c) => c.lines.map((l) => JSON.parse(l).uuid)), ["a", "c"]);
+  assert.equal(plan.newCursor.lastUuid, "c", "the cursor still moves past it");
+});
+
 // ---- transfer.buildChunkHeaders (pure) -------------------------------------
+test("buildChunkHeaders: a continuation chunk sends its generation baseline and wire id", () => {
+  const headers = transfer.buildChunkHeaders(
+    { transcriptId: "s.jsonl", wireTranscriptId: "s.abc.jsonl", seq: 7, reset: false, resetBaselineSeq: 6 },
+    "dev1",
+    "tok"
+  );
+  assert.equal(headers["X-Chunk-Reset"], "6");
+  assert.equal(headers["X-Transcript-ID"], "s.abc.jsonl");
+});
+
 test("buildChunkHeaders: reset carries baseline; non-reset sends 0", () => {
   const reset = transfer.buildChunkHeaders(
     { transcriptId: "s.jsonl", seq: 6, reset: true, resetBaselineSeq: 6, promptId: "p1" },
@@ -293,7 +351,7 @@ test("buildChunkHeaders: reset carries baseline; non-reset sends 0", () => {
 test("writeCursor/readCursor round-trip", () => {
   const c = { transcriptId: "round.jsonl", lastUuid: "u9", seq: 4, updatedAt: 123 };
   transfer.writeCursor(c, TEST_REPOSITORY);
-  assert.deepEqual(transfer.readCursor("round.jsonl", TEST_REPOSITORY), c);
+  assert.deepEqual(transfer.readCursor("round.jsonl", TEST_REPOSITORY), { ...c, wireId: "round.jsonl", baseline: 0 });
   assert.equal(transfer.readCursor("missing.jsonl", TEST_REPOSITORY), null);
 });
 

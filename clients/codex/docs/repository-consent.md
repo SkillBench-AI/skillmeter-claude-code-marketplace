@@ -2,7 +2,7 @@
 
 Codex keeps its own consent record,
 `<state>/clients/codex/telemetry-policy.json`, as decided in
-[ADR 006](../../claude-code/docs/adr/006-per-client-consent.md).
+[ADR 006](../../../docs/adr/006-per-client-consent.md).
 It never reads the Claude plugin's record. An allowed GitHub owner makes a
 repository eligible; consent remains separate. Capture needs organization and
 repository ON in the Codex record, both at `consent_version: 2` (recorded with

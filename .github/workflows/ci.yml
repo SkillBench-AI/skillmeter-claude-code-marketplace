@@ -28,7 +28,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [22, 24]
+        node-version: [22, 24, 26]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -38,9 +38,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-      # Runs test/*.test.js, including the shared secret-fixture
-      # parity suite (sanitize.test.js) fed by test/fixtures/secret-corpus.json.
-      # A Tier-1 corpus miss fails here and blocks merge.
       - name: Run unit tests
         run: node --test
 
@@ -67,6 +64,44 @@ jobs:
       # The marketplace Claude Code reads, at the repository root.
       - name: claude marketplace validate
         run: npx -y "@anthropic-ai/claude-code@${{ matrix.claude-code }}" plugin validate .
+
+  shared-test:
+    name: Shared tests (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: shared
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22, 24, 26]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      # shared/lib tested once, against the source both plugins copy,
+      # including the secret corpus (sanitize.test.js, fed by
+      # shared/fixtures/secret-corpus.json): a Tier-1 corpus miss fails here
+      # and blocks merge.
+      - name: Run shared tests
+        run: node --test
+
+  shared:
+    name: Shared modules in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # shared/lib is the source; each plugin carries a generated copy.
+      - name: Check shared/lib copies
+        run: node scripts/sync-shared.mjs --check
 
   codex-validate:
     name: "Codex: validate manifests & version"
@@ -97,7 +132,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [22, 24]
+        node-version: [22, 24, 26]
     steps:
       - uses: actions/checkout@v4
         with:

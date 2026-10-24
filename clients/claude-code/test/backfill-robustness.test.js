@@ -27,7 +27,7 @@ const DATA_DIR = makeTempDir("skm-bf-robust-data-");
 setTestEnv("SKILLMETER_STATE_DIR", STATE_DIR);
 setTestEnv("CLAUDE_PLUGIN_DATA", DATA_DIR);
 // Uploads go to the stubbed fetch below, never to an ambient endpoint.
-setTestEnv("SKILLMETER_BACKEND_URL", "https://collector.skillbench.example");
+setTestEnv("SKILLMETER_BACKEND_URL", "http://127.0.0.1:9/collector");
 
 const ORG = "skillbench-ai";
 const REPO = { repoKey: "github.com/skillbench-ai/robust", org: ORG };

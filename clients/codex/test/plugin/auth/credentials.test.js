@@ -63,45 +63,10 @@ function tmpLogFile(contents) {
   return p;
 }
 
-test("decodeJwtPayload returns claims for a well-formed token", () => {
-  const payload = jwt.decodeJwtPayload(makeJwt({ sub: "u1", exp: FUTURE }));
-  assert.equal(payload.sub, "u1");
-  assert.equal(payload.exp, FUTURE);
-});
-
-test("decodeJwtPayload returns null for garbage", () => {
-  assert.equal(jwt.decodeJwtPayload("not-a-jwt"), null);
-  assert.equal(jwt.decodeJwtPayload("a.b"), null);
-});
-
-test("isJwtExpired and isLicenseTokenExpired reflect the exp claim; an absent token is expired", () => {
-  assert.equal(jwt.isJwtExpired(makeJwt({ exp: FUTURE })), false);
-  assert.equal(jwt.isJwtExpired(makeJwt({ exp: PAST })), true);
+test("isLicenseTokenExpired reflects the exp claim; an absent token is expired", () => {
   assert.equal(credstore.isLicenseTokenExpired(null), true);
   assert.equal(credstore.isLicenseTokenExpired(makeJwt({ exp: PAST })), true);
   assert.equal(credstore.isLicenseTokenExpired(makeJwt({ exp: FUTURE })), false);
-});
-
-test("getEndpointFromToken returns the `aud` endpoint of a valid token", () => {
-  const token = makeJwt({ exp: FUTURE, aud: "https://acme.meter.skillbench.com/" });
-  assert.equal(jwt.getEndpointFromToken(token), "https://acme.meter.skillbench.com");
-});
-
-test("getEndpointFromToken reads an array `aud`, taking the first https origin", () => {
-  const token = makeJwt({ exp: FUTURE, aud: ["skillbench", "https://acme.meter.skillbench.com"] });
-  assert.equal(jwt.getEndpointFromToken(token), "https://acme.meter.skillbench.com");
-});
-
-test("getEndpointFromToken ignores the legacy telemetry_endpoint claim — `aud` only", () => {
-  const token = makeJwt({ exp: FUTURE, aud: "just-an-audience", telemetry_endpoint: "https://legacy.meter.skillbench.com" });
-  assert.equal(jwt.getEndpointFromToken(token), null);
-});
-
-test("getEndpointFromToken rejects expired tokens, missing/non-https claims", () => {
-  assert.equal(jwt.getEndpointFromToken(makeJwt({ exp: PAST, aud: "https://acme.meter.skillbench.com" })), null);
-  assert.equal(jwt.getEndpointFromToken(makeJwt({ exp: FUTURE })), null);
-  assert.equal(jwt.getEndpointFromToken(makeJwt({ exp: FUTURE, aud: "http://insecure.example.com" })), null);
-  assert.equal(jwt.getEndpointFromToken(null), null);
 });
 
 test("commitSignin stores the session in this plugin's own file; signOut ends it", () => {
@@ -198,8 +163,8 @@ test("getBackendUrl: a trusted env override wins, then the JWT tenant, then the 
 
 test("sign-in and renewal default to the prod skillbench.ai services", () => {
   assert.equal(config.brokerUrl(), "https://id.skillbench.ai");
-  assert.equal(config.tokenUrl(), "https://id.skillbench.ai/oauth2/token");
-  assert.equal(config.revokeUrl(), "https://id.skillbench.ai/oauth2/revoke");
+  assert.equal(config.getTokenUrl(), "https://id.skillbench.ai/oauth2/token");
+  assert.equal(config.getRevokeUrl(), "https://id.skillbench.ai/oauth2/revoke");
   assert.equal(config.activateUrl(), "https://api.skillbench.ai/activate");
   assert.equal(config.stateDir(), path.join(tmpHome, ".skillbench"));
 });

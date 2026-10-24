@@ -22,7 +22,20 @@ The script prints a device code and a verification URL. Relay both verbatim,
 tell the user to approve in their browser (choosing the workspace there when
 asked) and to tell you when the browser shows success. Then run the script
 again: it confirms the sign-in and prints the state for the next flow. If it
-prints a new code instead, the approval did not complete; relay that code.
+reports a sign-in in progress instead, the approval has not completed yet;
+follow that flow.
+
+## Sign-in in progress
+
+The script prints `SkillMeter sign-in in progress`: a code is already waiting
+for the user to approve it in the browser, and running the script again does
+not cancel it. Tell the user to approve that code in the browser, then run the
+script again to confirm.
+
+To start over, for a user who closed the browser page, whose code expired, or
+who already approved and keeps getting this message, run the restart command
+the script printed (`signin.js --restart`). Say that it cancels the sign-in in
+progress, then relay the new code as in Sign-in required.
 
 ## Signed in
 

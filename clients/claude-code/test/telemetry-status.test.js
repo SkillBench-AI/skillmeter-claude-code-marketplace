@@ -34,7 +34,7 @@ const CASES = [
     effective: "enabled · telemetry enabled for this repository",
     shown: (f, reason) => assert.ok(f.sessionStart().includes(`${sentence(reason)}. Uploads are paused`)) },
   { state: "paused", policy: { enabled: false, orgs: { [ORG]: true }, repositories: { [REPO_KEY]: true } }, setup: signedIn,
-    reason: "paused for every repository", next: "/skillmeter:telemetry enable-global", effective: "disabled · telemetry globally disabled",
+    reason: "paused for Claude Code on this machine", next: "/skillmeter:telemetry enable-global", effective: "disabled · telemetry globally disabled",
     shown: (f, reason) => assert.ok(f.sessionStart().includes(`OFF — ${reason}`)) },
   { state: "unconfigured", policy: { orgs: { [ORG]: true } }, setup: signedIn,
     reason: "repository telemetry choice required", next: "/skillmeter:telemetry list",

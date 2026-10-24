@@ -22,7 +22,7 @@ const STATE_DIR = makeTempDir("skm-bf-event-state-");
 const DATA_DIR = makeTempDir("skm-bf-event-data-");
 setTestEnv("SKILLMETER_STATE_DIR", STATE_DIR);
 setTestEnv("CLAUDE_PLUGIN_DATA", DATA_DIR);
-setTestEnv("SKILLMETER_BACKEND_URL", "https://collector.skillbench.example");
+setTestEnv("SKILLMETER_BACKEND_URL", "http://127.0.0.1:9/collector");
 
 const ORG = "skillbench-ai";
 const REPO_KEY = "github.com/skillbench-ai/events";
@@ -201,7 +201,7 @@ test("the drain sends the event once, to the accepting tenant", async () => {
   settleBackfillDelivery();
   assert.equal(await transfer.drainBackfillEvents(), 1);
   assert.equal(posted.length, 1);
-  assert.equal(posted[0].url, "https://collector.skillbench.example/logs/claude");
+  assert.equal(posted[0].url, "http://127.0.0.1:9/collector/logs/claude");
   assert.equal(posted[0].headers["X-Idempotency-Key"], `backfill-completed:${OFFER}`);
   assert.equal(posted[0].lines[0].hook_event_name, "BackfillCompleted");
   assert.equal(listBackfillEvents().length, 0);

@@ -41,6 +41,27 @@ function recordUploadFailure(meta, { now = Date.now(), error = "" } = {}) {
 }
 
 /**
+ * The meta to persist after a failure that says nothing about the chunk: the
+ * network, an unavailable collector or a license the edge refused. It backs off
+ * like a failure but spends none of the budget, so a chunk is never set aside
+ * for being sent while offline.
+ */
+function recordUploadDeferral(meta, { now = Date.now(), error = "" } = {}) {
+  const previous =
+    Number.isFinite(meta?.uploadDeferrals) && meta.uploadDeferrals > 0
+      ? Math.floor(meta.uploadDeferrals)
+      : 0;
+  const uploadDeferrals = previous + 1;
+  return {
+    ...(meta || {}),
+    uploadDeferrals,
+    lastUploadError: String(error).slice(0, 300),
+    lastAttemptAt: now,
+    nextAttemptAt: now + retryDelayMs(uploadDeferrals),
+  };
+}
+
+/**
  * Whether a drain should try this chunk now. A chunk with no recorded failure
  * is always eligible, as is one whose `nextAttemptAt` is unreadable — a corrupt
  * sidecar must not strand a chunk forever.
@@ -73,6 +94,7 @@ module.exports = {
   isChunkEligible,
   isChunkExhausted,
   quarantinePathFor,
+  recordUploadDeferral,
   recordUploadFailure,
   retryDelayMs,
 };

@@ -10,7 +10,7 @@ const {
   signinRepositoryInventoryBanner,
   signinStatusBanner,
 } = require("./lib/banner.js");
-const { getRepoScopeDecision } = require("./lib/repo-scope");
+const { getRepoScopeDecision } = require("./lib/scope-decision");
 const {
   loadRepositoryTelemetryState,
   publicRepositoryState,

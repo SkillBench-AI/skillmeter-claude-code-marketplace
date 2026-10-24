@@ -1,3 +1,4 @@
+// GENERATED from shared/lib/broker.js by scripts/sync-shared.mjs. Edit that file, not this copy.
 /**
  * The OAuth client for the broker (Ory Hydra): the device grant that signs in,
  * the refresh token grant that renews, and revocation at sign-out (ADR 005).
@@ -7,12 +8,15 @@
  * or a diagnostics file.
  */
 
+// Each client's config supplies the endpoints, the OAuth client and the
+// command its user runs to sign in again.
 const {
   getDeviceCodeUrl,
   getTokenUrl,
   getRevokeUrl,
   getOAuthClientId,
   OAUTH_SCOPE,
+  SIGNIN_COMMAND,
 } = require("./config");
 const { brokerReason } = require("./http");
 
@@ -89,7 +93,7 @@ async function pollDeviceToken(deviceCode, initialInterval) {
       // Keeps its own sentence. The broker does not write this one — Hydra
       // does, and its description says less than the next action does.
       case "expired_token":
-        throw new Error("The code expired. Run /skillmeter:signin again.");
+        throw new Error(`The code expired. Run ${SIGNIN_COMMAND} again.`);
 
       // WHERE THE ONLY EXPLANATION LIVES. Every refusal the broker makes comes
       // back as this one code, and what distinguishes them is the description
@@ -173,6 +177,7 @@ async function revoke(refreshToken, { timeoutMs = 3000 } = {}) {
 }
 
 module.exports = {
+  brokerReason,
   requestDeviceCode,
   pollDeviceToken,
   refreshGrant,

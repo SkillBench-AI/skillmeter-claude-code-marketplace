@@ -17,9 +17,9 @@ value.
 Review these documents before installing:
 
 - [Plugin documentation](skillmeter/README.md)
-- [Privacy notice](PRIVACY.md)
-- [Security policy](SECURITY.md)
-- [Support](SUPPORT.md)
+- [Privacy notice](../../docs/privacy/claude-code.md)
+- [Security policy](../../SECURITY.md)
+- [Support](../../SUPPORT.md)
 
 ## Install from the SkillBench marketplace
 
@@ -42,7 +42,7 @@ claude plugin marketplace update skillbench
 claude plugin update skillmeter@skillbench
 ```
 
-Restart Claude Code or run `/reload-plugins`. See [support](SUPPORT.md) for
+Restart Claude Code or run `/reload-plugins`. See [support](../../SUPPORT.md) for
 troubleshooting and version checks.
 
 ## Internal channel

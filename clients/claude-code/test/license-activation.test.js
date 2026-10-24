@@ -15,21 +15,24 @@ const stateDir = makeTempDir("skm-license-activation-");
 
 setTestEnv("SKILLMETER_STATE_DIR", stateDir);
 setTestEnv("SKILLMETER_RETRY_BASE_MS", "1000");
-setTestEnv("SKILLMETER_ACTIVATE_URL", "https://activation.test/activate");
-setTestEnv("SKILLMETER_BROKER_URL", "https://id.test");
+setTestEnv("SKILLMETER_ACTIVATE_URL", "http://127.0.0.1:9/activation/activate");
+setTestEnv("SKILLMETER_BROKER_URL", "http://127.0.0.1:9/id");
 setTestEnv("SKILLMETER_BACKEND_URL", undefined);
 
 const credstore = require("../skillmeter/scripts/credstore");
 const licenseStatus = require("../skillmeter/scripts/lib/license-status");
-const { refreshLicense, ensureFreshLicense, _acquireRefreshLock: acquireRefreshLock } = require("../skillmeter/scripts/lib/license-activation");
-const { LOG_DIR } = require("../skillmeter/scripts/lib/paths");
+const { refreshLicense, ensureFreshLicense } = require("../skillmeter/scripts/lib/license-activation");
+const { LOG_DIR, ACCOUNT_DIR } = require("../skillmeter/scripts/lib/paths");
 
 const DEVICE_ID = "11111111-2222-4333-8444-555555555555";
-const LOCK_FILE = path.join(LOG_DIR, ".license-refresh.lock");
+// The renewal lock (shared/lib/license-renewal.js) and the cooldown lock that
+// versions up to 0.45.1 left in place.
+const LOCK_FILE = path.join(ACCOUNT_DIR, ".renew.lock");
+const LEGACY_LOCK_FILE = path.join(LOG_DIR, ".license-refresh.lock");
 const REFRESH_TOKEN = "ory_rt_fixture";
-const TOKEN_URL = "https://id.test/oauth2/token";
-const ACTIVATE_URL = "https://activation.test/activate";
-const REVOKE_URL = "https://id.test/oauth2/revoke";
+const TOKEN_URL = "http://127.0.0.1:9/id/oauth2/token";
+const ACTIVATE_URL = "http://127.0.0.1:9/activation/activate";
+const REVOKE_URL = "http://127.0.0.1:9/id/oauth2/revoke";
 
 function jwt({ expiresInSec }) {
   return makeJwt({
@@ -88,6 +91,7 @@ beforeEach(() => {
   writeCreds(EXPIRED());
   licenseStatus.clearLicenseStatus({ source: "test" });
   try { fs.unlinkSync(LOCK_FILE); } catch {}
+  try { fs.unlinkSync(LEGACY_LOCK_FILE); } catch {}
   process.env.PATH = realPath;
 });
 
@@ -159,27 +163,19 @@ for (const [label, token] of [
   });
 }
 
-test("a refresh lock dated well into the future blocks for one cooldown, not until the clock catches up", async () => {
-  // The clock moved back after another process wrote the lock.
-  fs.mkdirSync(path.dirname(LOCK_FILE), { recursive: true });
-  fs.writeFileSync(LOCK_FILE, "999 0\n");
+test("a cooldown lock left by version 0.45.1 or earlier never blocks renewal, and is removed", async () => {
+  // Older versions left this file in place on purpose; read as a dead-owner
+  // lock its format would be held forever.
+  fs.mkdirSync(path.dirname(LEGACY_LOCK_FILE), { recursive: true });
+  fs.writeFileSync(LEGACY_LOCK_FILE, "999 0\n");
   const future = new Date(Date.now() + 3 * 60 * 60_000);
-  fs.utimesSync(LOCK_FILE, future, future);
+  fs.utimesSync(LEGACY_LOCK_FILE, future, future);
 
-  // First look: the lock is re-dated to now, not reclaimed, so a refresh that
-  // may still be in flight under it is not duplicated.
-  const current = credstore.getLicenseTokenUncached();
-  assert.equal(await ensureFreshLicense(DEVICE_ID, { source: "daemon" }), current);
-  assert.equal(calls.length, 0);
-  assert.ok(Math.abs(Date.now() - fs.statSync(LOCK_FILE).mtimeMs) < 60_000, "lock re-dated to now");
-
-  // One cooldown later the refresh proceeds as usual.
-  const aged = new Date(Date.now() - 120_000);
-  fs.utimesSync(LOCK_FILE, aged, aged);
   const next = FRESH();
   responses = renewal(200, { token: next });
   assert.equal(await ensureFreshLicense(DEVICE_ID, { source: "daemon" }), next);
   assert.deepEqual(calls.map((c) => c.url), [TOKEN_URL, ACTIVATE_URL]);
+  assert.equal(fs.existsSync(LEGACY_LOCK_FILE), false, "the old lock is removed");
 });
 
 test("network error is transient too, and failures accumulate", async () => {
@@ -263,19 +259,19 @@ test("ensureFreshLicense skips the network while the record says terminal or bac
   assert.equal(calls.length, 0);
 });
 
-test("ensureFreshLicense refreshes once the record is clear, and honours the lock cooldown", async () => {
+test("ensureFreshLicense renews once the record is clear, and releases the lock when done", async () => {
   const next = FRESH();
   responses = renewal(200, { token: next });
   assert.equal(await ensureFreshLicense(DEVICE_ID, { source: "daemon" }), next);
   assert.equal(calls.length, 2);
-  assert.ok(fs.existsSync(LOCK_FILE));
+  assert.equal(fs.existsSync(LOCK_FILE), false, "released after the renewal");
 
-  // Expired again right away: the lock is younger than the cooldown, so the
-  // second caller returns what it has without a network call.
+  // Expired again right away: no cooldown, the next caller renews.
   writeCreds(EXPIRED());
-  const current = credstore.getLicenseTokenUncached();
-  assert.equal(await ensureFreshLicense(DEVICE_ID, { source: "drain" }), current);
-  assert.equal(calls.length, 2);
+  const again = FRESH();
+  responses = renewal(200, { token: again });
+  assert.equal(await ensureFreshLicense(DEVICE_ID, { source: "drain" }), again);
+  assert.equal(calls.length, 4);
 });
 
 test("signed out: neither path makes a network call", async () => {
@@ -290,21 +286,19 @@ test("signed out: neither path makes a network call", async () => {
   assert.equal(calls.length, 0);
 });
 
-test("refresh lock: exclusive create, live lock refused, stale lock claimed and replaced, replaced-by-live lock refused", () => {
-  const now = Date.now();
-  try { fs.unlinkSync(LOCK_FILE); } catch {}
-  assert.equal(acquireRefreshLock(false, 60_000, now), true, "no lock: acquired");
-  assert.match(fs.readFileSync(LOCK_FILE, "utf8"), new RegExp(`^${process.pid} `));
-
-  assert.equal(acquireRefreshLock(false, 60_000, now), false, "live lock, not judged stale: refused");
-  assert.equal(acquireRefreshLock(true, 60_000, now), false, "judged stale by the caller, but the re-check sees a live lock: refused");
-
-  // Age the lock past the cooldown: the takeover claims and replaces it.
-  const old = new Date(now - 120_000);
+test("a renewal lock held by a live process is never taken over, however old", async () => {
+  // The broker revokes the whole refresh chain if a spent refresh token is
+  // used twice, so a second renewal must never start beside a live one.
+  fs.mkdirSync(path.dirname(LOCK_FILE), { recursive: true });
+  fs.writeFileSync(LOCK_FILE, JSON.stringify({ version: 2, pid: process.pid, token: "00000000-0000-4000-8000-000000000000" }));
+  const old = new Date(Date.now() - 2 * 60 * 60_000);
   fs.utimesSync(LOCK_FILE, old, old);
-  assert.equal(acquireRefreshLock(true, 60_000, now), true, "stale lock: claimed and replaced");
-  assert.ok(now - fs.statSync(LOCK_FILE).mtimeMs < 60_000, "the replacement lock is fresh");
-  assert.equal(fs.readdirSync(LOG_DIR).filter((f) => f.endsWith(".stale")).length, 0, "claim file cleaned up");
+
+  const current = credstore.getLicenseTokenUncached();
+  assert.equal(await ensureFreshLicense(DEVICE_ID, { source: "drain" }), current);
+  assert.equal(calls.length, 0, "no renewal beside a live one");
+  assert.ok(fs.existsSync(LOCK_FILE), "the live owner's lock is untouched");
+  fs.unlinkSync(LOCK_FILE);
 });
 
 for (const status of [200, 401, 402, 500]) {

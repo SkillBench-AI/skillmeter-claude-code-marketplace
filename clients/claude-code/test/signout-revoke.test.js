@@ -38,7 +38,7 @@ function fixture({ online }) {
     env: isolatedEnv({
       SKILLMETER_STATE_DIR: state,
       CLAUDE_PLUGIN_DATA: data,
-      SKILLMETER_BROKER_URL: "https://id.test",
+      SKILLMETER_BROKER_URL: "http://127.0.0.1:9/id",
       NODE_OPTIONS: `--require=${preload}`,
     }),
   });
@@ -55,7 +55,7 @@ test("sign-out clears the session locally and revokes the refresh token at the b
   assert.equal(session.signed_out, true);
   assert.equal(session.license_jwt, undefined);
   assert.equal(session.refresh_token, undefined);
-  assert.deepEqual(recorded.map((c) => c.url), ["https://id.test/oauth2/revoke"]);
+  assert.deepEqual(recorded.map((c) => c.url), ["http://127.0.0.1:9/id/oauth2/revoke"]);
   assert.equal(recorded[0].form.token, "ory_rt_fixture-signout");
   assert.equal(recorded[0].form.token_type_hint, "refresh_token");
   assert.doesNotMatch(result.stdout + result.stderr, /ory_rt_fixture-signout/);

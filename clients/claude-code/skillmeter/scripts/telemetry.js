@@ -14,7 +14,7 @@ const telemetryStore = require("./lib/telemetry-store");
 const { purgeRepositoryQueue } = require("./lib/repository-queue");
 const credstore = require("./credstore.js");
 const { getAllowedGitHubOrgs } = credstore;
-const { getRepoScopeDecision } = require("./lib/repo-scope");
+const { getRepoScopeDecision } = require("./lib/scope-decision");
 const { resolveTelemetryGate } = require("./lib/telemetry-policy");
 const { readCollectionState } = require("./lib/collection-state");
 const { ADMINISTRATOR, gateReason, needsAdministrator, nextCommand, reasonText } = require("./lib/collection-wording");
@@ -129,7 +129,7 @@ switch (action) {
     break;
   case "enable-global":
     telemetryStore.setGlobalEnabled(true);
-    process.stderr.write("SkillMeter: global telemetry kill-switch cleared.\n");
+    process.stderr.write("SkillMeter: telemetry resumed for Claude Code on this machine.\n");
     if (!credstore.isTelemetryTransmissionAllowed()) {
       process.stderr.write(
         "Note: organization telemetry is still disabled or awaiting a choice. " +
@@ -141,9 +141,10 @@ switch (action) {
   case "disable-global":
     telemetryStore.setGlobalEnabled(false);
     process.stderr.write(
-      "SkillMeter: global telemetry kill-switch ON. " +
+      "SkillMeter: telemetry paused for Claude Code on this machine. " +
       "No events will be transmitted from any project until you run " +
-      "`/skillmeter:telemetry enable-global`.\n"
+      "`/skillmeter:telemetry enable-global`. " +
+      "SkillMeter for Codex has its own setting and is not paused.\n"
     );
     printStatus();
     break;

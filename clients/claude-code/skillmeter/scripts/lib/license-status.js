@@ -201,9 +201,8 @@ function writeLicenseStatus(status) {
  * base, 2*base, 4*base, ... capped. Pure.
  */
 function backoffDelayMs(consecutiveFailures, baseMs = getRetryBaseMs(), capMs = BACKOFF_CAP_MS) {
-  if (consecutiveFailures <= 0) return 0;
-  const raw = baseMs * 2 ** (consecutiveFailures - 1);
-  return Math.min(raw, capMs);
+  // The schedule both clients use (shared/lib/license-renewal.js).
+  return require("./license-renewal").backoffDelayMs(consecutiveFailures, baseMs, capMs);
 }
 
 /**

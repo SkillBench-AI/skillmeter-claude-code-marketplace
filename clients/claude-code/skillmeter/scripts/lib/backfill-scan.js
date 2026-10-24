@@ -9,7 +9,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const { getRepoScopeDecision } = require("./repo-scope");
+const { getRepoScopeDecision } = require("./scope-decision");
 
 const CLAUDE_PROJECTS_DIR = path.join(
   process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude"),

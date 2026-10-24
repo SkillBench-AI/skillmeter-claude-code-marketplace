@@ -1,3 +1,4 @@
+// GENERATED from shared/lib/rules.js by scripts/sync-shared.mjs. Edit that file, not this copy.
 /**
  * Secret / PII detection rules.
  *

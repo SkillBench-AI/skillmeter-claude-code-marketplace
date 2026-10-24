@@ -35,7 +35,7 @@ function fixture() {
   const license = makeJwt({ exp: Math.floor(Date.now() / 1000) + 900, org: { login: "acme" }, orgs: ["acme"] });
   const env = { PATH: process.env.PATH, TMPDIR: os.tmpdir(), HOME: root, SKILLMETER_STATE_DIR: state, CLAUDE_PLUGIN_DATA: data };
 
-  const signinEnv = { ...env, SKILLMETER_BROKER_URL: "https://id.test", SKILLMETER_ACTIVATE_URL: "https://activation.test/activate" };
+  const signinEnv = { ...env, SKILLMETER_BROKER_URL: "http://127.0.0.1:9/id", SKILLMETER_ACTIVATE_URL: "http://127.0.0.1:9/activation/activate" };
   const preloadFor = ({ tty, activateStatus = 200, overtakenAt = "", expiresIn = 600 }, name) => {
     const preload = path.join(root, name);
     const other = overtakenAt ? preloadFor({ tty: false }, "preload-other.cjs") : "";

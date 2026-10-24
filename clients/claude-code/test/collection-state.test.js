@@ -246,7 +246,7 @@ function signinAnswered(activateStatus) {
     encoding: "utf8",
     timeout: 10_000,
     cwd: home,
-    env: { ...process.env, SKILLMETER_BROKER_URL: "https://id.test", SKILLMETER_ACTIVATE_URL: "https://activation.test/activate" },
+    env: { ...process.env, SKILLMETER_BROKER_URL: "http://127.0.0.1:9/id", SKILLMETER_ACTIVATE_URL: "http://127.0.0.1:9/activation/activate" },
   });
 }
 

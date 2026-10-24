@@ -1,0 +1,65 @@
+name: Release (Claude Code)
+
+# Tag strategy: Claude Code releases are cut by pushing an annotated tag
+# "vMAJOR.MINOR.PATCH" on the merge of `next` into `main`, matching the plugin
+# version in clients/claude-code/skillmeter/.claude-plugin/plugin.json.
+# Pushing such a tag runs the full gate (version match, shared modules, tests,
+# plugin validation) and, only if everything passes, publishes the release
+# "SkillMeter X.Y.Z" as the repository's Latest. Replace its generated body with
+# the approved notes afterwards (clients/claude-code/AGENTS.md).
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+# Releasing requires writing the GitHub Release.
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Validate & publish release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Upgrade fixtures load actual pinned releases from local Git objects.
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Verify tag matches plugin version (clean SemVer)
+        run: |
+          version="$(node -p "require('./clients/claude-code/skillmeter/.claude-plugin/plugin.json').version")"
+          if ! [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::plugin.json version \"$version\" is not clean SemVer"; exit 1
+          fi
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match plugin version (expected v$version)"; exit 1
+          fi
+      - name: Check shared/lib copies
+        run: node scripts/sync-shared.mjs --check
+      - name: Run shared tests
+        working-directory: shared
+        run: node --test
+      - name: Run unit tests
+        working-directory: clients/claude-code
+        run: node --test
+      - name: claude plugin validate
+        run: |
+          npx -y "@anthropic-ai/claude-code@2.1.296" plugin validate clients/claude-code/skillmeter
+          npx -y "@anthropic-ai/claude-code@2.1.296" plugin validate .
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "SkillMeter ${GITHUB_REF_NAME#v}" \
+            --generate-notes \
+            --latest \
+            --verify-tag

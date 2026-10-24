@@ -10,112 +10,14 @@ const { getLicenseOrgs } = require("./lib/jwt");
 // there are preserved and never read. The session is this plugin's alone: its
 // license, broker refresh token, sign-in intent and sign-out.
 
-function readObject(file) {
-  try {
-    const value = JSON.parse(fs.readFileSync(file, "utf8"));
-    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
-  } catch {
-    return {};
-  }
-}
+// Locked store I/O and the device identity, shared with the Claude Code client
+// (shared/lib/store-file.js, shared/lib/device-identity.js): both clients write
+// credentials.json, under the same dead-owner lock.
+const { readObject, mutateFile: mutate } = require("./lib/store-file");
+const deviceIdentity = require("./lib/device-identity");
 
-// Null when absent or unreadable, for detecting an interleaved write.
-function readRaw(file) {
-  try { return fs.readFileSync(file, "utf8"); }
-  catch { return null; }
-}
-
-// Write and fsync a sibling file before renaming it over the store, so readers
-// see a complete old or new file.
-function writeObject(file, data) {
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const tempPath = `${file}.tmp.${process.pid}.${Date.now()}`;
-  let fd;
-  try {
-    fd = fs.openSync(tempPath, "w", 0o600);
-    fs.writeSync(fd, JSON.stringify(data, null, 2) + "\n");
-    fs.fsyncSync(fd);
-    fs.closeSync(fd);
-    fd = undefined;
-    fs.renameSync(tempPath, file);
-  } catch (err) {
-    if (fd !== undefined) {
-      try { fs.closeSync(fd); } catch {}
-    }
-    try { fs.unlinkSync(tempPath); } catch {}
-    throw err;
-  }
-}
-
-const PREEMPTED = Symbol("credential-store-preempted");
-
-// One locked read/modify/write attempt. PREEMPTED means a changed file or a
-// lost lock was detected; the checks are not atomic with the rename.
-function mutateOnce(file, fn, afterCommit) {
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const { acquireLock } = require("./lib/credential-lock");
-  const deadline = Date.now() + 1000;
-  let release;
-  while (!(release = acquireLock(`${file}.lock`))) {
-    if (Date.now() >= deadline) throw new Error("credential-store-busy");
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-  }
-  try {
-    const baseline = readRaw(file);
-    const store = readObject(file);
-    const result = fn(store);
-    if (result === false) return false;
-    if (!release.stillHeld() || readRaw(file) !== baseline) return PREEMPTED;
-    writeObject(file, store);
-    if (afterCommit) afterCommit();
-    return result === undefined ? true : result;
-  } finally { release(); }
-}
-
-function mutate(file, fn, afterCommit) {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const outcome = mutateOnce(file, fn, afterCommit);
-    if (outcome !== PREEMPTED) return outcome;
-  }
-  throw new Error("credential-store-busy");
-}
-
-// ---------------------------------------------------------------------------
-// Shared identity
-// ---------------------------------------------------------------------------
-
-let identityCache = null;
-
-function readIdentity() {
-  if (!identityCache) identityCache = readObject(config.credentialsFile());
-  return identityCache;
-}
-
-// Create a missing identity field under the lock. On lock timeout, re-read: a
-// concurrent hook may have created it.
-function ensureIdentityField(key, create) {
-  const existing = readIdentity()[key];
-  if (existing) return existing;
-  let value;
-  try {
-    mutate(config.credentialsFile(), store => {
-      if (!store[key]) store[key] = create();
-      value = store[key];
-    });
-  } catch (err) {
-    if (err && err.message === "credential-store-busy") {
-      identityCache = null;
-      const fresh = readIdentity()[key];
-      if (fresh) return fresh;
-    }
-    throw err;
-  }
-  identityCache = null;
-  return value;
-}
-
-const getDeviceId = () => ensureIdentityField("device_id", () => crypto.randomUUID().toUpperCase());
-const getOrCreateHashSalt = () => ensureIdentityField("hash_salt", () => crypto.randomBytes(16).toString("hex"));
+const getDeviceId = deviceIdentity.getDeviceId;
+const getOrCreateHashSalt = deviceIdentity.getOrCreateHashSalt;
 
 // ---------------------------------------------------------------------------
 // This plugin's session
@@ -278,8 +180,9 @@ function getAllowedGitHubOrgs() {
   return token ? getLicenseOrgs(token) : [];
 }
 
-// Long-running processes re-read identity after another process changed it.
-function refreshFromDisk() { identityCache = null; }
+// Kept for callers: identity is read from disk on every call
+// (shared/lib/device-identity.js), so there is nothing to refresh.
+function refreshFromDisk() {}
 
 module.exports = {
   refreshFromDisk,

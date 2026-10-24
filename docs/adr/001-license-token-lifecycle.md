@@ -1,0 +1,507 @@
+# License Token Lifecycle: Lifetime, Refresh, and Recovery
+
+**Date:** 2026-09-10
+**Status:** Accepted (PR #104, merged 2026-09-10). Amended 2026-09-16: sign-in
+moved off GitHub, which retires decision 4; see the
+[amendment](#amendment-2026-09-16-sign-in-moves-to-the-broker-and-decision-4-is-retired)
+at the end. Amended 2026-10-24: both clients renew through one shared flow, and
+a dead-owner lock replaces the cooldown lock; see the
+[amendment](#amendment-2026-10-24-one-renewal-flow-and-a-dead-owner-lock).
+Shared consent across clients is decided in
+[ADR 004](004-shared-consent.md), not here; see the
+[2026-09-25 note](#amendment-2026-09-25-shared-consent-is-decided-in-adr-004)
+at the end.
+[ADR 005](005-per-client-session.md) (proposed 2026-09-27) would supersede
+decision 1, decision 5 as far as it shares the license, and the session parts
+of the "authentication intent across shared clients" amendment.
+**Related:** `skillmeter-license-activation` (server-side counterpart for decision 1), `skillmeter-codex-marketplace`, `skillmeter-vscode-extension`
+
+## Context
+
+SkillMeter clients authenticate telemetry uploads with a license JWT minted
+by the activation Lambda. The token carries the tenant meter URL in `aud`;
+the tenant's API Gateway JWT authorizer validates signature, issuer,
+audience, and expiry before the collector Lambda sees a request. There is no
+revocation list, so `exp` is the only revocation mechanism.
+
+### Behaviour at the original decision (2026-09-10)
+
+Server (`skillmeter-license-activation`):
+
+- `POST /activate` exchanges a GitHub token for a license JWT. The TTL is
+  15 minutes, hard-coded in `jwt.go`.
+- `POST /refresh` rotates an existing token without a GitHub round-trip; an
+  expired token is acceptable input. It re-checks that the organization is
+  still licensed and enforces a 7-day sliding window from `original_iat`.
+  Past the window it returns 410 and the client must re-activate. The window
+  is configurable through an environment variable; the TTL is not.
+
+Claude Code plugin (this repository):
+
+- The client treats a token as expired 5 minutes before `exp`
+  (`LICENSE_EXPIRY_SKEW_SECONDS`), so a 15-minute token is usable for about
+  10 minutes.
+- Refresh is attempted in exactly three places: `prepareSession` in the
+  SessionStart hook, and the two queue drains (`drainFailedLogs`,
+  `drainDeltaChunks`). Both drains return before refreshing when their queue
+  is empty.
+- The retry-daemon monitor (`scripts/monitors/retry_daemon.js`) runs for the
+  life of the session and sweeps every 2 minutes, backing off to 30 minutes
+  when the queue does not shrink. It only calls the drains, so it never
+  refreshes on an empty queue.
+- Every hook checks `hasValidLicense()` first. When the token is expired the
+  hook records nothing and writes `skipped (not signed in)` to stderr.
+- `refreshLicense` returns without a network call when no token is stored or
+  when `signed_out` is set. A brand-new sign-in is created only by
+  `/skillmeter:signin`.
+- On 410 or any other refresh failure the client falls back to a silent
+  `gh auth token` → `/activate` re-activation (`trySilentGhActivate`).
+- Single-flight is a lock file (`.license-refresh.lock`) with a 60-second
+  cooldown. There is no forced refresh path.
+
+### Observed effect
+
+The refresh trigger depends on queued data, and queued data depends on a
+fresh token. Once a token expires mid-session nothing is recorded, so nothing
+is drained, so nothing is refreshed. The session stays dark until the next
+SessionStart.
+
+Measured on one opted-in repository session (2026-08-24 to 2026-09-07): 52
+hook events recorded, 728 skipped. Across production, the device behind this
+investigation refreshed 4 times in 30 days while other devices refreshed 500
+to 800 times; those devices stay alive only because per-hook exclusion audit
+events keep their drains non-empty. A device whose stored token disappears
+(observed 2026-09-10 after a sign-out followed by an unfinished sign-in)
+never recovers on its own, and the user is not told.
+
+## Decisions
+
+### 1. Token TTL becomes 1 hour; the 7-day sliding window stays
+
+The activation Lambda reads the TTL from an environment variable (default
+3600 seconds) and applies it to tokens from both `/activate` and `/refresh`.
+The sliding window is unchanged.
+
+Rationale: `exp` is the revocation latency for a cancelled license. Every
+`/refresh` re-checks the organization in the database and returns 402 when
+the license is gone, so a device keeps writing for at most one more hour after
+cancellation instead of fifteen minutes. That is an acceptable blast radius
+into the tenant's own store, and it removes the need to refresh on every Stop.
+
+The TTL does not bound a leaked token. `/refresh` accepts an expired token
+together with any `device_id` string, so a stolen token can be rotated for the
+rest of its 7-day window; that horizon is set by the window, not by `exp`.
+Tightening `/refresh` (for example binding it to a device claim in the token)
+is a server-side change outside this ADR and is listed under open items.
+Longer TTLs were rejected because cancellation latency is the one control the
+TTL does provide. The TTL alone does not fix long sessions; decision 2 does.
+
+### 2. The retry-daemon monitor refreshes the token in the background, independent of queue state
+
+- *The re-activation half of this decision was retired by the 2026-09-16
+  amendment. The cadence, the narrowing to 410/401, the backoff and the
+  terminal rule all stand; what changes is that 410 and 401 now end in a
+  terminal state directly instead of attempting a `gh`-backed re-activation
+  first.*
+
+On every sweep the daemon first runs the refresh path when the token is
+inside the expiry skew window, then drains. The refresh step is not subject
+to the adaptive drain backoff; it has its own failure backoff described
+below. SessionStart keeps its refresh. The existing lock-file cooldown
+remains the single-flight mechanism across concurrent sessions; a
+daemon-owner lock may be added if duplicate refreshes are observed.
+
+Failure handling:
+
+- `/refresh` is the only call made on a routine expiry. The silent `gh`
+  re-activation runs only when there is no usable token to rotate: the stored
+  token is absent (decision 4), or the server rejected the token itself with
+  410 (sliding window exceeded) or 401 (signature no longer valid, for
+  example after a signing-key rotation). Every other refresh failure (network
+  error, 404, 5xx, malformed response) is transient: the daemon keeps the
+  token, backs off, and retries `/refresh`; it does not re-activate. Today
+  `refreshLicense` falls through to re-activation on any failure; A2 narrows
+  it to the cases above. Re-activation reads the gh CLI's stored credential
+  with `gh auth token`; it never opens a browser or a device-code flow, and
+  when gh is not authenticated it fails immediately.
+- Consecutive refresh failures back off exponentially from the sweep interval
+  up to the same 30-minute cap the drain backoff uses, and reset on the first
+  success. This bounds calls to the activation Lambda and to GitHub during an
+  outage.
+- A 402, a gh identity mismatch (decision 4), gh not authenticated, or the
+  backoff cap being reached is a terminal state for the session: the daemon
+  stops retrying, writes the outcome to the local status record, and B1 shows
+  the user what to do. A later SessionStart or `/skillmeter:signin` clears
+  the state.
+
+Rationale: the monitor already exists for the life of the session, and the
+Codex plugin has run this pattern since skillmeter-codex-marketplace
+issue `#28`. A fresh token costs nothing on the hot path; the check is a
+local `exp` comparison. From the user's point of view the token stays valid
+for as long as a session is open, without any action, and the user is asked
+to act only when the client has stopped trying.
+
+### 3. Hooks record while signed in, regardless of expiry; freshness is enforced at transmission
+
+The capture gate uses "a token exists and the user has not signed out"
+instead of "the token is unexpired". Drains refresh before uploading, as
+they do today.
+
+Recorded-but-unsent data is removed in these cases:
+
+- Explicit sign-out. Today `signout.js` drops the token and purges only the
+  organization-audit queue; A3 extends it to every repository queue.
+- Server-reported license revocation: 402 from `/refresh` or `/activate`.
+  Today 402 is handled as a generic failure with no purge; A3 adds the purge.
+- Repository or organization telemetry turned off in policy. This is the
+  existing `purgeDisallowedQueues` path, unchanged.
+- Age. Unsent events and transcript chunks older than the 7-day refresh
+  sliding window are deleted. Today unsent data is never age-deleted, which
+  under this decision would mean indefinite local retention when refresh
+  keeps failing. Seven days matches the point at which the token chain is
+  dead anyway and re-activation is required.
+
+Rationale: authentication is required to send, not to observe. Dropping at
+record time is what turns a transient expiry into permanent data loss. The
+explicit removal list keeps the local footprint bounded now that expiry no
+longer stops recording.
+
+### 4. Silent re-activation is allowed when the device has a prior sign-in and is not signed out
+
+- *Retired by the 2026-09-16 amendment; kept for history. Silent re-activation
+  needed a credential the client could read without a browser, and `gh auth
+  token` was the only one. There is no longer any such credential.*
+
+When no token is stored, the daemon and SessionStart may attempt the `gh`
+re-activation if this device completed a sign-in before and `signed_out` is
+not set. Otherwise the client stops and notifies the user (B1).
+
+The prior sign-in is recorded by `commitSignin` as a marker holding the
+identity the user consented to: `github_id`, the organization (`sub` and
+`org.login`), and the meter audience (`aud`) from the accepted token. Before
+calling `/activate`, the client reads the current gh identity and proceeds
+only when its GitHub id matches the marker; after minting, the new token's
+`github_id`, organization, and `aud` are all checked against the marker
+before it is committed. Any mismatch discards the token, invalidates the
+marker, records the outcome, and notifies the user. Sign-out clears the
+marker. A tenant whose meter hostname changes therefore requires one
+interactive sign-in; that is deliberate, since the destination of the data
+is part of what the user consented to.
+
+Devices that signed in before the marker existed have no marker. On upgrade,
+the marker is created from the claims of the stored token at the next
+successful `/refresh` or SessionStart (the token is proof of a completed
+sign-in on this device). A device that has no stored token at upgrade time
+cannot be recovered silently and is asked to sign in once (B1).
+
+Rationale: the current rule exists so the plugin never signs a user in
+without consent. A completed sign-in on the same device is that consent, and
+an explicit sign-out (`signed_out`) still blocks re-activation, so the rule
+only recovers the accidental case where the stored token is gone. Decision 3
+alone does not cover this case: with no token the capture gate stays closed
+and there is nothing to refresh. The Codex plugin already re-activates without
+a stored token.
+
+### 5. All three clients follow decisions 2 to 4
+
+The Codex plugin already implements decision 2; decisions 3 and 4 are
+checked against it and against the VS Code extension's auth service (A6).
+
+## Consequences
+
+- Revocation latency rises from 15 minutes to 1 hour.
+- Refresh traffic drops from roughly one call per Stop per active device to
+  about one per hour per device.
+- Long-lived sessions keep recording; the recorded-versus-skipped gap
+  disappears and becomes measurable.
+- Events recorded during a stale window are held locally until the next
+  successful token recovery (a `/refresh` rotation or a silent `/activate`),
+  for at most 7 days. This is a new retention surface:
+  today unsent data is never age-deleted, and sign-out and 402 do not purge
+  repository queues; A3 implements all three removals.
+- The daemon becomes a required component for reliability, so its failure
+  has to be visible to the user (B1).
+- The user needs to act only in the terminal states of decision 2: license
+  revoked (402), gh identity mismatch, gh not authenticated, refresh backoff
+  cap reached, a missing token on a device without a marker, or after an
+  explicit sign-out.
+- Rollout order: client changes first (they work with the 15-minute TTL),
+  then the server TTL.
+
+## Implementation mapping
+
+| Decision | Issue |
+| --- | --- |
+| 1 | A5 (server TTL), with a linked ADR in `skillmeter-license-activation` |
+| 2 | A2 (background refresh); superseded, see the 2026-09-27 single-refresh-path amendment |
+| 3 | A3 (recording while the token is expired); implemented, see the 2026-09-27 amendment |
+| 4 | A4 (recovery without a stored token) |
+| 5 | A6 (Codex plugin and VS Code extension) |
+
+## Open items
+
+- The prior-sign-in marker for decision 4 does not exist yet; A4 defines
+  where it is written. Migration for devices signed in before this change is
+  settled in decision 4.
+- `/refresh` accepts any `device_id` with an expired token. Binding refresh to
+  a device claim inside the token is a server-side follow-up for
+  `skillmeter-license-activation`, tracked with A5.
+- Whether a stale token should gate the exclusion-audit path the same way as
+  decision 3. This waits on the decision about the exclusion-audit event's
+  scope and frequency.
+- The status surface hooks use to tell the user about refresh failures is
+  designed in B1; this ADR only requires that refresh outcomes are written
+  where hooks can read them.
+
+## Amendment 2026-09-16: sign-in moves to the broker, and decision 4 is retired
+
+
+Sign-in no longer goes through GitHub. It is the same RFC 8628 device grant,
+run against SkillBench's own identity service at `id.skillbench.ai`, and the
+token handed to `/activate` is an OpenID Connect ID token rather than a GitHub
+access token. The reason: `/activate` resolved a tenant through a
+GitHub App installation, and nobody who onboards normally has one, so that
+route could not see them at all. The broker path resolves the tenant through
+workspace membership instead.
+
+### What this changes here
+
+**Decision 4 is retired, not re-implemented.** It rested on there being a
+credential the client could turn into a licence without a browser — `gh auth
+token`. The device grant has no such credential: approving it *is* opening a
+browser. So the two calls that used to attempt silent re-activation are gone:
+
+- the `/skillmeter:signin` prompt expansion no longer tries `gh` before telling
+  the user how to sign in; and
+- the refresh orchestrator no longer falls back to `/activate` on 410 or 401.
+
+**410 and 401 are now terminal.** A licence that can no longer be rotated ends
+the retry loop with `reactivation_required`, replacing the `gh_unauthenticated`
+terminal reason, and the person runs `/skillmeter:signin`. Decisions 1, 2, 3
+and 5 are unaffected: the TTL, the seven-day sliding window, the background
+refresh cadence, and the record-while-signed-in rule all stand.
+
+**The prior-sign-in marker described in decision 4 was never built** — it was
+already listed under open items — and nothing now needs it. The identity it
+would have pinned (`github_id`, the GitHub organization) is not what a broker
+licence carries: `sub` holds the control-plane tenant id and a new `broker_sub`
+claim holds the person, while `github_id` is absent rather than zero.
+
+### Consequences of the amendment
+
+The cost is concentrated in one place, and it is a real regression: a user with
+`gh` authenticated used to cross the seven-day window without noticing. Now
+that window ends in an interactive sign-in. Nothing else about the lifecycle
+got worse, and everything about who *can* sign in got better.
+
+The obvious repair is the broker's own refresh token. The device flow already
+requests `offline` and the broker already issues one; the plugin discards it.
+Storing it would restore silent recovery without reintroducing GitHub, and
+would make the seven-day window a policy choice rather than a hard wall. That
+is tracked as an open decision of the authentication cutover, not settled
+here.
+
+### Implementation mapping (amendment)
+
+- `scripts/signin.js`, `scripts/lib/config.js` — the device grant and its
+  endpoints (marketplace#112).
+- `scripts/user_prompt_expansion_signin.js` — the silent attempt removed.
+- `scripts/lib/license-activation.js` — `silentGhActivate` and
+  `trySilentGhActivate` removed; the 410/401 branch records a terminal state.
+- `scripts/lib/license-status.js` — `GH_UNAUTHENTICATED` becomes
+  `REACTIVATION_REQUIRED`. Terminal reasons are only ever logged, never
+  branched on, so a record written by an older build stays readable.
+
+### Open items (amendment)
+
+- Whether to store the broker refresh token and what that does to the
+  seven-day window.
+- The VS Code extension still authenticates with GitHub and is on its own
+  track behind the shared-credential ownership decision.
+- `/activate` still accepts GitHub tokens, deliberately, until deployed
+  plugins stop sending them.
+
+
+## Amendment: Stop-triggered recovery without a monitor
+
+Stop requests the existing detached `drain_once.js` worker when its repository
+allows transmission and the token is expired or within the monitor's look-ahead
+window. This request does not depend on queued data. The hook performs no network
+I/O; the worker rechecks sign-out, token presence, consent, terminal state and
+backoff before refreshing, then drains the queues. The existing drain lock and
+refresh single-flight controls apply.
+
+This supplements decision 2 when the session has no running retry monitor.
+Recovery makes later hooks eligible to capture; it does not replay turns skipped
+while the token was expired. It does not create a sign-in, bypass disabled
+telemetry, change token lifetime, or rearm terminal 401/402/410 outcomes.
+
+Implementation: `scripts/lib/hook-license-recovery.js`, `scripts/stop.js` and
+`scripts/drain_once.js`. Run `node --test test/expiry-recovery.test.js`
+from the repository root. The suite covers empty-queue recovery, consent and
+terminal boundaries, and a real detached child that persists a synthetic refresh
+after Stop exits. Its clock and network are substituted; it does not use live
+authentication or production telemetry.
+
+## Amendment 2026-09-25: shared consent is decided in ADR 004
+
+**Status:** Accepted with ADR 004 (PR #129). Replaces the amendment proposed
+here on 2026-09-24 (PR #128).
+
+This ADR is about the license: its lifetime, refresh and recovery, and the
+one credential file every client shares. Consent is not a credential. The
+amendment proposed on 2026-09-24 (shared ON and migration, missing or invalid
+policy, consent changes while data is queued, with acceptance cases A1 to C6)
+moved to ADR 004 as decisions 4 to 6 and its acceptance table, and is
+withdrawn here in its favour. A token change never changes consent, and a
+consent change never mints or revokes a token; anything that touches both is
+decided in ADR 004 and mirrored in each client's ADR set.
+
+## Amendment: authentication intent across shared clients
+
+Credential writers coordinate on `credentials.json.lock`, preserving fields
+owned by other clients. Explicit sign-in, successful issuance, direct token
+replacement and sign-out rotate `auth_generation`. Refresh preserves that
+generation and commits only while the token, generation, device and sign-out
+state match its pre-request snapshot. This rejects delayed responses even when
+a new sign-in reuses the same token. Browser issuance carries the initiating
+generation and device through foreground and detached polling.
+
+Refresh status writes run under the same credential lock and recheck the
+exchange snapshot. New status records contain a hash of that authentication
+context, so a different client's sign-in invalidates stale backoff and terminal
+state without persisting another token copy. Older unbound status records remain
+readable. Refresh callers re-read credentials after an awaited exchange.
+
+The shared owner-token lock never expires a live writer by age. A contender
+reclaims only a valid owner whose PID check reports `ESRCH`. Cleanup takes a
+lock specific to the observed owner token, then rechecks that owner before
+unlinking. Every cleanup process for that incarnation uses the same guard,
+including through directory aliases. Dead cleanup owners use the same bounded
+recovery procedure. Unknown formats, unreadable ownership, permission-denied
+PID checks and potentially reused live PIDs hold the lock.
+
+This is a single-host, cooperating-client protocol on a local filesystem with
+atomic hard-link publication. It prefers a recoverable hold over simultaneous
+credential writers. Repeated crashes beyond the recovery depth also hold;
+`credential-store-busy` does not authorize deleting the lock while clients run.
+
+Both plugins must use the updated protocol, and old processes must exit after
+updating. Released clients that reclaim live locks by age and older Claude
+clients that ignore the lock cannot inherit this guarantee from a shared file.
+The candidate tests for surviving released processes cover their listed auth
+transitions only, not arbitrary overlapping writes. This amendment does not
+authorize telemetry, change consent, or establish a release support window.
+
+## Amendment 2026-09-27: decision 3 implemented
+
+**Status:** Accepted.
+
+The capture gate now uses `credstore.isSignedIn()`: a license is held and the
+user has not signed out. Freshness is enforced only at transmission, as before.
+An expired or unrefreshable token no longer drops events or advances the
+transcript cursor past turns the user chose to record.
+
+The removals decision 3 lists are in place:
+
+- Sign-out purges every repository queue and the organization-audit queue.
+  Chunks of an accepted historical import are kept, as in every other
+  repository purge: backfill consent is separate from repository telemetry,
+  and whether sign-out should also withdraw it is left open.
+- A 402 from `/refresh` purges the repository queues of the license's
+  organizations and the organization-audit queue. It also drops the license
+  token (without setting `signed_out`), so recording stops rather than
+  refilling the queues until the seven-day sweep. The server returns 402 when
+  the organization license is cancelled and when the user leaves or is removed
+  from the workspace, so both stop telemetry at the next refresh. (Amended
+  2026-09-27.)
+- Unsent event logs and transcript chunks older than seven days are deleted.
+  The sweep runs at every SessionStart, including when no usable license is
+  held, so the bound holds for exactly the devices that can no longer sign in.
+
+The SessionStart sign-in banner now appears when the user is signed out or the
+refresh chain needs a new sign-in (401, 410 or 402). A license waiting out an
+outage keeps recording, so it no longer shows that telemetry is off.
+
+## Amendment 2026-09-27: one refresh path
+
+**Status:** Accepted. Supersedes decision 2 and the Stop-triggered recovery
+amendment.
+
+Decision 2 and the Stop recovery existed so that no hook would meet an expired
+token: capture was gated on freshness, so every gap lost data. With decision 3
+implemented, capture no longer depends on the token, and refreshing ahead of
+need buys nothing. The license is now refreshed in one place: the upload drain,
+just before it sends a batch, and once more with the local expiry check
+bypassed when the server answers 401. Removed:
+
+- the retry-daemon's per-sweep refresh and its look-ahead window; the daemon
+  only drains;
+- the SessionStart refresh; SessionStart now spawns a detached drain, so it
+  never waits on the network;
+- the Stop-triggered recovery worker (`lib/hook-license-recovery.js`);
+- the `backoff_exhausted` terminal state. A transient failure keeps retrying
+  at the 30-minute cap, so an outage recovers without a new session. A record
+  written by an older version is ignored.
+
+Kept: the single-flight refresh lock and cooldown, backoff, the 401/410
+(re-activation) and 402 (revoked) terminal states, and SessionStart clearing a
+terminal state to give a new session one attempt. The sign-in banner decides
+from the state the session found, before that clear.
+
+An upload rejected with 401 is not charged against the chunk's retry budget:
+the token, not the chunk, was refused.
+
+
+## Amendment 2026-10-24: one renewal flow and a dead-owner lock
+
+Both clients now renew through `shared/lib/license-renewal.js`: the refresh
+token grant, /activate pinned to the tenant, and the same outcomes, terminal
+states and backoff (2 minutes, doubling, capped at 30). Each client keeps its
+own status record.
+
+Single-flight is now the dead-owner lock of `credential-lock.js`, at the
+session's `.renew.lock`, instead of `.license-refresh.lock` with a 60-second
+cooldown. The broker revokes the whole refresh chain if a spent refresh token
+is used twice, so a live renewal is never taken over, however long it runs; a
+crashed one is recovered at once. A transient failure waits for the backoff,
+not a cooldown. The cooldown lock that earlier versions left in place is
+removed: read as a dead-owner lock, its format would be held forever.
+
+A session without a refresh token records "re-activation required" in both
+clients.
+
+## Codex client
+
+**Codex status:** Adopted by reference to the decisions above
+(Accepted 2026-09-10, amended 2026-09-16: sign-in moved to the broker).
+Decisions 1 and 5 (the refresh path and the shared session) are superseded for
+this plugin by [ADR 005](005-per-client-session.md#codex-client).
+
+### What is the same
+
+The device id and hash salt in `~/.skillbench/credentials.json` are shared with
+the Claude Code plugin; the session is not (ADR 005). The retry daemon
+(`scripts/monitors/retry_daemon.js`) renews the license in the background
+independent of queue state (decision 2). Hooks record while a token exists;
+freshness is enforced at transmission (decision 3, covered by #46). `status`
+separates capture policy from delivery readiness (#47).
+
+### Differences in the Codex plugin
+
+- Sign-out sets `signed_out` and a new `auth_generation` in this plugin's
+  session file and revokes the refresh token; the consent journal reads the
+  generation. It does not pause other clients. Sign-out and a 402 (or a 404 for
+  the pinned tenant) delete unsent event batches; transcripts are held by their
+  queue owner, which names the tenant and user, instead of being deleted.
+- There is no `/refresh` and no re-activation without a stored session: the
+  license is renewed only through the broker refresh token (ADR 005).
+- Same-principal sign-out and sign-in closes a consent-journal interval
+  (`docs/repository-consent.md`); an ordinary refresh does not.
+
+### Open items
+
+- Resolved 2026-09-28: broker sign-in and identity-bound re-activation (ADR 005),
+  and the purge on sign-out and on 402. Unsent data follows the queue limits in
+  `docs/repository-consent.md` (14-day retry age, sealed batches removed after
+  30 days), not a 7-day bound.

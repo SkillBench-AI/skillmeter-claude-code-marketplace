@@ -1,3 +1,4 @@
+// GENERATED from shared/lib/repo-scope.js by scripts/sync-shared.mjs. Edit that file, not this copy.
 /**
  * Decide whether an event originating in `cwd` should be captured, by matching
  * the GitHub org of the repo's remote(s) against the orgs the license
@@ -9,8 +10,8 @@
 
 const fs = require("fs");
 const path = require("path");
-// Adapted from Claude 30659641c0ecd7aa4f1b41d8624ad0620d9eab93.
-// Codex supplies its existing root lookup and narrowed signed-in organization list.
+// Each client passes in its allowed orgs and Git root lookup (see
+// getRepoScopeDecision), so this module depends on nothing client-specific.
 
 let configCache = null;
 
@@ -244,8 +245,8 @@ function getRemoteEntriesForRepo(repoRoot) {
 
   try {
     let configRoot = gitDir;
-    // Preserve Codex's stricter existing behavior: an invalid commondir must
-    // not fall back to a potentially unrelated worktree-local config.
+    // An invalid commondir fails closed: it must not fall back to a
+    // potentially unrelated worktree-local config.
     const commonFile = path.join(gitDir, "commondir");
     if (fs.existsSync(commonFile)) {
       const commonDirText = fs.readFileSync(commonFile, "utf8").trim();
@@ -286,14 +287,15 @@ function getRemoteUrlsForRepo(repoRoot) {
 /**
  * Decide whether an event from `cwd` is in-scope. Telemetry fires only in repos
  * whose GitHub remote org matches an org the license covers (the JWT `orgs`
- * claim, surfaced via credstore.getAllowedGitHubOrgs). Anything
- * outside that — including non-git directories and non-GitHub remotes — is
- * blocked.
+ * claim). Anything outside that — including non-git directories and non-GitHub
+ * remotes — is blocked. The caller passes `allowedOrgs` (lowercase, already
+ * narrowed by any client filter; callers handle the no-license case) and
+ * `findGitRoot(cwd)`.
  *
- * Result always contains `allowed` (boolean) and `classification` (string);
- * other fields (`scope`, `repoRoot`, `remoteOrg`) are included when
- * meaningful so callers / downstream logs have enough context to audit
- * decisions after the fact.
+ * Result always contains `allowed` (boolean), `scope` and `classification`
+ * (strings); other fields (`repoRoot`, `remoteOrg`, `repoKey`, `repoName`)
+ * are included when meaningful so callers / downstream logs have enough
+ * context to audit decisions after the fact.
  */
 function getRepoScopeDecision(cwd, allowedOrgs, findGitRoot) {
   const repoRoot = findGitRoot(cwd);

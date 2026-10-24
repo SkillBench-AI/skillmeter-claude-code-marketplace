@@ -2,7 +2,7 @@
 
 SkillMeter sends opt-in, repository-scoped workflow and conversation telemetry
 to [SkillBench](https://skillbench.com). See the [installation guide](../README.md)
-and [privacy notice](../PRIVACY.md) before enabling collection.
+and [privacy notice](../../../docs/privacy/claude-code.md) before enabling collection.
 
 ## Sign in and controls
 
@@ -129,8 +129,8 @@ Policy 3.1.2 applies before queueing:
 
 HMAC uses a local salt and 12 hexadecimal characters. Sanitization reduces
 exposure; it does not guarantee anonymity or remove every sensitive detail.
-See [ADR002](../docs/adr/002-two-stage-sanitization.md) for the policy and
-[PRIVACY.md](../PRIVACY.md) for the full disclosure, retention and data requests.
+See [ADR002](../../../docs/adr/002-two-stage-sanitization.md) for the policy and
+[PRIVACY.md](../../../docs/privacy/claude-code.md) for the full disclosure, retention and data requests.
 
 ## Uploads and recovery
 
@@ -140,9 +140,13 @@ drain cannot send is retried by the next turn's drain or the next session start.
 gzip and the license's tenant endpoint, with consent checked again before sending.
 
 Successful event batches become `.sent`; acknowledged transcript chunks are
-deleted. Transcript failures share a per-chunk retry budget across all drains:
-waits double from one minute to a 30-minute cap, then the eighth failed attempt
-quarantines the body and metadata. Quarantined files and delivered event logs
+deleted. A transcript's chunks are sent in order, and one that is not
+delivered holds back the rest of that transcript. Chunks are split so each
+request stays under the collector's size limit; a single record too large for
+any request is left out. Waits after a failure double from one minute to a
+30-minute cap. No network, HTTP 402, 403, 408, 429, 502, 503 or 504 only back
+off; other failures spend a per-chunk retry budget, and the eighth such
+failure quarantines the body and metadata. Quarantined files and delivered event logs
 are eligible for cleanup after 30 days. Pending event logs and chunks are
 retained for retry unless an applicable policy change, sign-out or a revoked
 license removes them, and are deleted once they are older than 7 days.
@@ -156,8 +160,8 @@ only; sign-out revokes it. Transient failures back off up to a 30-minute
 interval and keep retrying. A session the sign-in service ended, or a license
 that was revoked because the workspace no longer licenses you (402), requires
 `/skillmeter:signin` and browser approval. See
-[ADR001](../docs/adr/001-license-token-lifecycle.md) and
-[ADR005](../docs/adr/005-per-client-session.md).
+[ADR001](../../../docs/adr/001-license-token-lifecycle.md) and
+[ADR005](../../../docs/adr/005-per-client-session.md).
 
 ## Local state and diagnostics
 
@@ -176,8 +180,8 @@ Backfill diagnostics omit transcript text, local paths, JWTs, device IDs and
 backend endpoints, but include repository/session identifiers. Review them
 before sharing; never post real telemetry or credentials in a public issue.
 
-For problems, see [SUPPORT.md](../SUPPORT.md). Report security
-or privacy issues through [SECURITY.md](../SECURITY.md).
+For problems, see [SUPPORT.md](../../../SUPPORT.md). Report security
+or privacy issues through [SECURITY.md](../../../SECURITY.md).
 
 ## Development
 
@@ -185,7 +189,7 @@ Use CommonJS and run `node --test` from the repository root. Tests isolate plugi
 state through the repository's `testing/bootstrap.js` and `testing/helpers.js`,
 which stay outside the shipped plugin directory. See
 [AGENTS.md](../AGENTS.md) for contribution conventions and the
-[ADRs](../docs/adr/README.md) for shared policy decisions.
+[ADRs](../../../docs/adr/README.md) for shared policy decisions.
 
 The environment is fixed by the installation: the internal channel uses dev
 (`~/.skillbench-dev`), the stable channel prod. No environment variable switches

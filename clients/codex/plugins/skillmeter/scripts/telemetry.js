@@ -237,7 +237,7 @@ function reportConsentError(error) {
 function setGlobal(paused) {
   if (!setGlobalPause(paused)) return;
   if (paused) {
-    process.stderr.write("SkillMeter: Telemetry paused for Codex on this machine\n");
+    process.stderr.write("SkillMeter: Telemetry paused for Codex on this machine (SkillMeter for Claude Code has its own setting and is not paused)\n");
     process.stderr.write("SkillMeter: Pending uploads will remain queued until telemetry is resumed\n");
     return;
   }

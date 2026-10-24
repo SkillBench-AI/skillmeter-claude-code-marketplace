@@ -24,7 +24,7 @@ setTestEnv("CLAUDE_PLUGIN_DATA", DATA_DIR);
 setTestEnv("SKILLMETER_STATE_DIR", STATE_DIR);
 setTestEnv("CLAUDE_CONFIG_DIR", makeTempDir("skm-backfill-drain-claude-"));
 // Reserved domain; every request is answered by the stub below.
-setTestEnv("SKILLMETER_BACKEND_URL", "https://collector.skillbench.example");
+setTestEnv("SKILLMETER_BACKEND_URL", "http://127.0.0.1:9/collector");
 
 writeCredentials(STATE_DIR, {
   device_id: "BACKFILL-DRAIN-DEVICE",
@@ -128,7 +128,7 @@ test("the drain that uploads the last historical chunk announces the import", as
 
   const requests = await drainAcknowledgingEverything();
   assert.deepEqual(requests, [
-    "https://collector.skillbench.example/logs/claude/transcript",
+    "http://127.0.0.1:9/collector/logs/claude/transcript",
   ]);
   const result = readJson(BACKFILL_RESULT_FILE);
   assert.equal(result.status, "delivered");
@@ -158,8 +158,8 @@ test("the same drain pass reports the finished import to the collector", async (
     global.fetch = realFetch;
   }
   assert.deepEqual(posts.map((p) => p.url), [
-    "https://collector.skillbench.example/logs/claude/transcript",
-    "https://collector.skillbench.example/logs/claude",
+    "http://127.0.0.1:9/collector/logs/claude/transcript",
+    "http://127.0.0.1:9/collector/logs/claude",
   ]);
   const event = posts[1].lines[0];
   assert.equal(event.hook_event_name, "BackfillCompleted");

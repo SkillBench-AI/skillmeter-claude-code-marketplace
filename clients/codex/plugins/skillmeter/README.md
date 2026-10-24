@@ -234,7 +234,7 @@ preservation; otherwise, later batches remain content-only.
 | Reinstall still shows an old version | For a local marketplace, update the source checkout first; for a Git marketplace, run `marketplace upgrade`. |
 | Collection is paused or the repository is excluded | Run `status`; for details run `status --details`, and check the license's GitHub organizations with `sk-jwt`. |
 | Uploads fail with 401/403 | Credentials and queued uploads are retained; background recovery requests a refreshed license. Check sign-in status if failures persist. |
-| Transcript delivery needs investigation | Use the [read-only inventory and recovery guide](integration/README.md#queue-and-recovery). |
+| Transcript delivery needs investigation | Use the [read-only inventory and recovery guide](../../integration/README.md#queue-and-recovery). |
 
 Drains and the retry monitor renew the license before they send; session start
 does not. Delivery waits for a valid token. Renewal uses the sign-in service's
@@ -244,7 +244,7 @@ Current limitations:
 
 - Historical transcripts are not automatically replayed.
 - Multi-day transcript continuity depends on the collector's missing-baseline
-  recovery support. See the [transport guide](integration/README.md).
+  recovery support. See the [transport guide](../../integration/README.md).
 - Report availability depends on downstream transcript processing; successful
   event uploads alone do not confirm a complete report.
 
@@ -280,7 +280,7 @@ setting.
 
 For implementation details, see the [hook definitions](hooks/hooks.json),
 [upload code](scripts/logger.js), [sanitizer](scripts/sanitizer.js), and
-[transport and recovery guide](integration/README.md). Run `npm run check` from
+[transport and recovery guide](../../integration/README.md). Run `npm run check` from
 the repository root when changing plugin code.
 
 Tests live under `test/` by purpose (`sanitizer`, `consent`, `hooks`,
