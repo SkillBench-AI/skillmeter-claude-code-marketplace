@@ -9,7 +9,7 @@ import { test } from "node:test";
 // The device identity both clients share (shared/lib/device-identity.js), run
 // in child processes so each client resolves its own configuration from a
 // clean environment.
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CLIENTS = {
   claude: join(repoRoot, "clients/claude-code/skillmeter/scripts"),
   codex: join(repoRoot, "clients/codex/plugins/skillmeter/scripts"),

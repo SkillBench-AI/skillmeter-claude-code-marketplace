@@ -9,8 +9,8 @@ const os = require("os");
 const fs = require("fs");
 const path = require("path");
 
-const s = require("../skillmeter/scripts/lib/sanitize");
-const { RULES } = require("../skillmeter/scripts/lib/rules");
+const s = require("../lib/sanitize");
+const { RULES } = require("../lib/rules");
 
 const SALT = "deadbeefcafe";
 
@@ -182,7 +182,7 @@ test("sanitizeLine does not mutate its input", () => {
 // merge), so Tier-1 recall can't silently diverge from the Codex / session
 // collector sanitizers. See SANITIZATION_EPIC.md Task 5.2.
 const SECRET_CORPUS = JSON.parse(
-  fs.readFileSync(path.join(__dirname, "..", "..", "..", "shared", "fixtures", "secret-corpus.json"), "utf8")
+  fs.readFileSync(path.join(__dirname, "..", "fixtures", "secret-corpus.json"), "utf8")
 );
 const buildCorpusValue = (parts) =>
   parts

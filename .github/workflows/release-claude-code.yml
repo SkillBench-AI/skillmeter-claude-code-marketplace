@@ -44,6 +44,9 @@ jobs:
           fi
       - name: Check shared/lib copies
         run: node scripts/sync-shared.mjs --check
+      - name: Run shared tests
+        working-directory: shared
+        run: node --test
       - name: Run unit tests
         working-directory: clients/claude-code
         run: node --test

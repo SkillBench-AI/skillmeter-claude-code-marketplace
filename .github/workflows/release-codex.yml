@@ -37,6 +37,9 @@ jobs:
         run: node .github/scripts/check-version.mjs --tag "${GITHUB_REF_NAME}"
       - name: Validate marketplace & plugin manifests
         run: node .github/scripts/validate-manifests.mjs
+      - name: Run shared tests
+        working-directory: shared
+        run: node --test
       - name: Run unit tests
         run: node --test
       # The Codex client and the marketplace that points at it, nothing of the

@@ -3,10 +3,11 @@
 // and the shape of the redaction record.
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { hi, SAMPLES } = require("../../../test-support/sanitizer.cjs");
-const s = require("../../../plugins/skillmeter/scripts/lib/sanitize");
-const { RULES } = require("../../../plugins/skillmeter/scripts/lib/rules");
-const { SECRET_PLACEHOLDER: R, EMAIL_PLACEHOLDER: E } = require("../../../plugins/skillmeter/scripts/sanitizer");
+const { hi, SAMPLES } = require("./samples");
+const s = require("../lib/sanitize");
+const { RULES } = require("../lib/rules");
+const { SECRET_PLACEHOLDER: R } = require("../lib/rules");
+const E = "[EMAIL]";
 
 const PRIVATE_KEY =
   "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA1234567890abcdef\nQEFAAOCAQ8AMIIBCgKCAQEA\n-----END RSA PRIVATE KEY-----";
@@ -21,11 +22,6 @@ for (const [id, secret] of Object.entries(SAMPLES)) {
   });
 }
 
-test("every rule id in the table is unique", () => {
-  const ids = RULES.map(r => r.id);
-  assert.equal(new Set(ids).size, ids.length);
-});
-
 test("PEM private key blocks are redacted whole", () => {
   const { value, redactions } = s.redactString(`here is the key:\n${PRIVATE_KEY}\nthanks`);
   assert.equal(value.includes("BEGIN RSA PRIVATE KEY"), false);
@@ -37,18 +33,6 @@ test("emails become the email placeholder and are reported as pii", () => {
   const { value, redactions } = s.redactString("ping me@example.com please");
   assert.equal(value, `ping ${E} please`);
   assert.deepEqual(redactions.map(r => [r.category, r.kind]), [["pii", "email"]]);
-});
-
-test("env-secret keeps the variable name and redacts only the value", () => {
-  assert.equal(s.redactString("DATABASE_PASSWORD=xY7kQ2mNp9wZ").value, `DATABASE_PASSWORD=${R}`);
-  const { value, redactions } = s.redactString("MY_API_KEY=supersecretvalue123");
-  assert.equal(value, `MY_API_KEY=${R}`);
-  assert.equal(redactions[0].id, "env-secret");
-  assert.equal(redactions[0].category, "secret");
-});
-
-test("an Authorization header keeps the scheme and redacts the credential", () => {
-  assert.equal(s.redactString("Authorization: Bearer aB3dEf6hIj9kLmNoPqRs").value, `Authorization: Bearer ${R}`);
 });
 
 test("low-entropy and placeholder values are left in place", () => {

@@ -10,8 +10,8 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
 
-const { makeTempDir, writeFile } = require("../testing/helpers");
-const scope = require("../skillmeter/scripts/lib/repo-scope");
+const { makeTempDir, writeFile } = require("./helpers");
+const scope = require("../lib/repo-scope");
 const {
   extractGitHubOrgFromRemote,
   extractGitHubRepositoryFromRemote,

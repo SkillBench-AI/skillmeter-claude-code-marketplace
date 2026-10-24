@@ -75,6 +75,7 @@ Latest.
 Run each client's checks from its directory:
 
 ```sh
+(cd shared && node --test)
 (cd clients/claude-code && node --test)
 (cd clients/codex && npm run check)
 ```

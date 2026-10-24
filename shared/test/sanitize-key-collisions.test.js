@@ -1,9 +1,8 @@
 "use strict";
-require("../testing/bootstrap");
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const s = require("../skillmeter/scripts/lib/sanitize");
+const s = require("../lib/sanitize");
 const SALT = "synthetic-key-collision-salt";
 
 test("redacted path keys preserve every change and extension without mutating input", () => {

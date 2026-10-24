@@ -12,9 +12,9 @@ const os = require("os");
 const fs = require("fs");
 const path = require("path");
 
-const s = require("../skillmeter/scripts/lib/sanitize");
+const s = require("../lib/sanitize");
 const VOCAB = JSON.parse(
-  fs.readFileSync(path.join(__dirname, "..", "skillmeter", "scripts", "lib", "path-vocabulary.json"), "utf8")
+  fs.readFileSync(path.join(__dirname, "..", "lib", "path-vocabulary.json"), "utf8")
 );
 
 const SALT = "deadbeefcafe";
@@ -183,4 +183,13 @@ test("the home directory itself keeps its trailing separator", HOME_DEPENDENT, (
   assert.equal(s.hashPathSegments(HOME, SALT), homeHash);
   assert.equal(s.hashPathSegments(`${HOME}/`, SALT), `${homeHash}/`);
   assert.match(s.hashPathSegments(`${HOME}/work/`, SALT), new RegExp(`^${homeHash}/work/$`));
+});
+
+const re = (source) => new RegExp(`^${source}$`);
+
+test("home-prefixed file path: home is one unit, names are hashed, structure and extension survive", HOME_DEPENDENT, () => {
+  const out = s.hashPathSegments(`${HOME}/work/acme-portal/src/billing/invoice-acme.ts`, SALT);
+  assert.match(out, re(`${homeHash}/work/${HEX}/src/billing/${HEX}\\.ts`));
+  assert.equal(out.includes("acme"), false);
+  assert.equal(out.includes(HOME), false);
 });

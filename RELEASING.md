@@ -39,6 +39,7 @@ After merging the release PR, for each client whose version changed:
    git checkout main
    git pull --ff-only
    node scripts/sync-shared.mjs --check
+   (cd shared && node --test)
    (cd clients/claude-code && node --test)
    (cd clients/codex && npm run check)
    ```

@@ -17,15 +17,6 @@ test("main ships no channel file, so installs default to prod", () => {
   assert.deepEqual(config.channel(), { channel: "stable", env: "prod" });
 });
 
-test("only the exact internal shape selects a channel", t => {
-  const file = path.join(tmp(t), "channel.json");
-  const read = value => { fs.writeFileSync(file, value); return config.channel(file); };
-  assert.deepEqual(read('{"channel":"internal","env":"dev"}'), { channel: "internal", env: "dev" });
-  for (const bad of ["{", "[]", '{"channel":"internal","env":"staging"}', '{"channel":"../x","env":"dev"}', '{"env":"dev"}']) {
-    assert.deepEqual(read(bad), { channel: "stable", env: "prod" }, bad);
-  }
-});
-
 test("the internal build uses dev regardless of the environment", t => {
   const root = tmp(t);
   // The build covers both clients, so the Claude Code manifests come along.

@@ -7,8 +7,8 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 
-const { makeJwt } = require("../testing/helpers");
-const { getLicenseOrgs, getLicenseTenantSlug } = require("../skillmeter/scripts/lib/jwt");
+const { makeJwt } = require("./helpers");
+const { getLicenseOrgs, getLicenseTenantSlug } = require("../lib/jwt");
 
 test("orgs claim is the repository scope, lowercased and trimmed", () => {
   const token = makeJwt({ org: { login: "acme" }, orgs: [" Acme-GH ", "Other"] });

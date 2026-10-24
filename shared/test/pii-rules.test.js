@@ -9,8 +9,8 @@ const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
 
-const s = require("../skillmeter/scripts/lib/sanitize");
-const rules = require("../skillmeter/scripts/lib/rules");
+const s = require("../lib/sanitize");
+const rules = require("../lib/rules");
 
 const SALT = "deadbeefcafe";
 
@@ -18,7 +18,7 @@ const SALT = "deadbeefcafe";
 // shared/fixtures/pii-corpus.json; the Codex client's tests run the same file.
 
 const CORPUS = JSON.parse(
-  fs.readFileSync(path.join(__dirname, "..", "..", "..", "shared", "fixtures", "pii-corpus.json"), "utf8")
+  fs.readFileSync(path.join(__dirname, "..", "fixtures", "pii-corpus.json"), "utf8")
 );
 
 test("pii corpus: has both positive and negative fixtures for every stage-1 kind", () => {

@@ -18,3 +18,11 @@ contract stays in its client, even when it looks similar: hooks, consent stores
 hand plugins their data directory in different ways. When only part of a
 module is common, share that part: `card.js` draws the status card, and each
 client's `banner.js` decides what the card says.
+
+## Tests
+
+`test/` tests `lib/` once, against the source both plugins copy:
+`(cd shared && node --test)`; CI runs it as "Shared tests". A client's own tests
+cover only that client's code and how it wires the shared modules in (its
+config, its adapters, its hooks), never a shared module's behaviour again.
+`test/shared-identity.test.mjs` runs both clients against one state directory.

@@ -1,12 +1,11 @@
 "use strict";
-require("../testing/bootstrap");
 const { test, after } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const crypto = require("node:crypto");
-const { acquireLock } = require("../skillmeter/scripts/lib/credential-lock");
+const { acquireLock } = require("../lib/credential-lock");
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "credential-lock-safety-"));
 after(() => fs.rmSync(root, { recursive: true, force: true }));
 function aged(file) { fs.utimesSync(file, new Date(0), new Date(0)); }
@@ -72,4 +71,51 @@ test("failed owner persistence cleans temporary files without publishing a lock"
   try { assert.throws(() => acquireLock(file), /synthetic-fsync-failure/); }
   finally { fs.fsyncSync = sync; }
   assert.equal(fs.readdirSync(root).some(name => name.startsWith("failed-publish.lock")), false);
+});
+
+// A lock can still disappear under its holder (removed by hand, or by an
+// older client that reaped by age), so a writer re-checks ownership before it
+// persists.
+test("a holder can tell that its lock was reaped", () => {
+  const lock = path.join(root, "fence.lock");
+  const release = acquireLock(lock);
+  assert.equal(release.stillHeld(), true);
+
+  fs.unlinkSync(lock);
+  assert.equal(release.stillHeld(), false);
+
+  const replacement = acquireLock(lock);
+  assert.equal(release.stillHeld(), false, "the replacement owner is not us");
+  replacement();
+});
+
+// A replacement owner can land on a recycled inode; rewriting the owner file in
+// place reproduces that on any filesystem.
+test("a replacement owner is not mistaken for us when the inode is recycled", () => {
+  const lock = path.join(root, "recycled.lock");
+  const release = acquireLock(lock);
+  assert.equal(release.stillHeld(), true);
+  const inode = fs.statSync(lock).ino;
+
+  fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, token: "someone-else" }));
+  assert.equal(fs.statSync(lock).ino, inode, "same inode, different owner");
+  assert.equal(release.stillHeld(), false, "ownership is by token, not inode");
+
+  release();
+  assert.equal(fs.existsSync(lock), true, "we must not unlink another owner's lock");
+  fs.unlinkSync(lock);
+});
+
+// A dead owner is recovered at once, without waiting for the age backstop.
+test("a crashed writer's fresh lock is recovered immediately without evicting a live owner", () => {
+  const lock = path.join(root, "crashed.lock");
+  require("node:child_process").execFileSync(process.execPath, ["-e", `
+    require(${JSON.stringify(require.resolve("../lib/credential-lock"))})
+      .acquireLock(${JSON.stringify(lock)});
+  `]);
+  const release = acquireLock(lock);
+  assert.equal(typeof release, "function");
+  try { assert.equal(acquireLock(lock), null); }
+  finally { release(); }
+  assert.equal(fs.existsSync(lock), false);
 });

@@ -267,39 +267,6 @@ test("writers read current state after waiting for the lock", async () => {
   assert.equal(readSession().signed_out, true);
 });
 
-// A lock can still disappear under its holder (removed by hand, or by an
-// older client that reaped by age), so a writer re-checks ownership before it
-// persists.
-test("a holder can tell that its lock was reaped", () => {
-  const lock = `${sessionFile}.lock.fence`;
-  const release = acquireLock(lock);
-  assert.equal(release.stillHeld(), true);
-
-  fs.unlinkSync(lock);
-  assert.equal(release.stillHeld(), false);
-
-  const replacement = acquireLock(lock);
-  assert.equal(release.stillHeld(), false, "the replacement owner is not us");
-  replacement();
-});
-
-// A replacement owner can land on a recycled inode; rewriting the owner file in
-// place reproduces that on any filesystem.
-test("a replacement owner is not mistaken for us when the inode is recycled", () => {
-  const lock = `${sessionFile}.lock.recycled`;
-  const release = acquireLock(lock);
-  assert.equal(release.stillHeld(), true);
-  const inode = fs.statSync(lock).ino;
-
-  fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, token: "someone-else" }));
-  assert.equal(fs.statSync(lock).ino, inode, "same inode, different owner");
-  assert.equal(release.stillHeld(), false, "ownership is by token, not inode");
-
-  release();
-  assert.equal(fs.existsSync(lock), true, "we must not unlink another owner's lock");
-  fs.unlinkSync(lock);
-});
-
 test("a mutation preempted mid-flight retries on the newer state instead of clobbering", () => {
   let calls = 0;
   const outcome = credstore.mutateSession(session => {
@@ -318,41 +285,3 @@ test("a mutation preempted mid-flight retries on the newer state instead of clob
   assert.equal(readSession().custom_field, "other", "the other writer's change survived");
 });
 
-// The lock protocol is shared with SkillMeter for Claude Code, which writes the
-// same credentials.json: only a dead owner is reaped. Age proves nothing, and a
-// malformed owner holds the lock, so neither client can evict the other's live
-// writer.
-const liveOwner = JSON.stringify({ version: 2, pid: process.pid, token: "00000000-0000-4000-8000-000000000000" });
-for (const [name, owner] of [["a live process", liveOwner], ["an unparseable owner file", "not json"]]) {
-  test(`an old lock naming ${name} is not reaped`, () => {
-    const lock = `${sessionFile}.lock.old`;
-    fs.writeFileSync(lock, owner);
-    const old = Date.now() - 120_000;
-    fs.utimesSync(lock, old / 1000, old / 1000);
-    assert.equal(acquireLock(lock), null, "age alone must not evict an owner");
-    assert.equal(fs.readFileSync(lock, "utf8"), owner, "the owner file is untouched");
-    fs.unlinkSync(lock);
-  });
-}
-
-test("a fresh lock naming a live process is still respected", () => {
-  const lock = `${sessionFile}.lock.fresh`;
-  fs.writeFileSync(lock, JSON.stringify({ pid: process.pid }));
-
-  assert.equal(acquireLock(lock), null, "a live owner is never evicted early");
-  fs.unlinkSync(lock);
-});
-
-// A dead owner is recovered at once, without waiting for the age backstop.
-test("a crashed writer's fresh lock is recovered immediately without evicting a live owner", () => {
-  const lock = `${sessionFile}.lock`;
-  childProcess.execFileSync(process.execPath, ["-e", `
-    require(${JSON.stringify(require.resolve("../../../plugins/skillmeter/scripts/lib/credential-lock"))})
-      .acquireLock(${JSON.stringify(lock)});
-  `]);
-  const release = acquireLock(lock);
-  assert.equal(typeof release, "function");
-  try { assert.equal(acquireLock(lock), null); }
-  finally { release(); }
-  assert.equal(fs.existsSync(lock), false);
-});
