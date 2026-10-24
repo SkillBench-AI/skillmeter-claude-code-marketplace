@@ -19,98 +19,17 @@ const telemetryStore = require("./lib/telemetry-store");
 
 const SESSION_FILE = path.join(ACCOUNT_DIR, "session.json");
 
-// ---------------------------------------------------------------------------
-// Low-level file helpers, one implementation for both stores
-// ---------------------------------------------------------------------------
-
-// A store that exists but is not a JSON object (truncated, emptied, a foreign
-// non-atomic writer caught mid-write) reads as empty, so the next write
-// re-creates it. The original bytes are kept first; see mutateFile.
-function isStoreObject(value) {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function readObject(file) {
-  const store = safeReadJson(file, null);
-  return isStoreObject(store) ? store : {};
-}
-
-// This dead-owner-only lock protocol is shared with Codex for CRED_FILE.
-// Older clients that ignore it or reclaim live locks by age must be stopped
-// before use. The session file is ours alone, but takes the same lock so every
-// process of this client serializes on it.
-function withFileLock(file, fn) {
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const { acquireLock } = require("./lib/credential-lock");
-  const deadline = Date.now() + 1000;
-  let release;
-  while (!(release = acquireLock(`${file}.lock`))) {
-    if (Date.now() >= deadline) throw new Error("credential-store-busy");
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-  }
-  try { return fn(release); }
-  finally { release(); }
-}
-
-// null when the file does not exist. A file that exists but cannot be read
-// throws: writing over it would replace a device identity or session this
-// process simply could not see.
-function readRaw(file) {
-  try { return fs.readFileSync(file, "utf8"); }
-  catch (err) {
-    if (err?.code === "ENOENT") return null;
-    throw new Error(`credential store unreadable (${err?.code || "error"})`);
-  }
-}
-
-function isCorrupt(raw) {
-  if (raw == null) return false;
-  try { return !isStoreObject(JSON.parse(raw)); }
-  catch { return true; }
-}
-
-// Keep a corrupt store's exact bytes before it is replaced, and say so: what
-// it held is gone, so the user must sign in again. Throws when the copy cannot
-// be made, so the caller does not reset a store it failed to preserve. Runs
-// under the file's lock.
-function preserveCorrupt(file) {
-  const bytes = fs.readFileSync(file); // a Buffer: invalid UTF-8 survives
-  const aside =
-    `${file}.corrupt-${Date.now()}-${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
-  fs.writeFileSync(aside, bytes, { mode: 0o600, flag: "wx" });
-  console.error(
-    `[skillmeter] Credential store was unreadable and has been reset; the original is kept at ${aside}. Run /skillmeter:signin to sign in again.`
-  );
-}
-
-const PREEMPTED = Symbol("credential-store-preempted");
-function mutateFile(file, fn, afterCommit) {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const result = withFileLock(file, (release) => {
-      const baseline = readRaw(file);
-      const store = readObject(file);
-      const result = fn(store);
-      if (result === false) return false;
-      // These checks detect visible preemption, not an atomic rename fence.
-      if (!release.stillHeld() || readRaw(file) !== baseline) return PREEMPTED;
-      if (isCorrupt(baseline)) preserveCorrupt(file);
-      atomicWriteJson(file, store);
-      if (afterCommit) afterCommit();
-      return result === undefined ? true : result;
-    });
-    if (result !== PREEMPTED) return result;
-  }
-  throw new Error("credential-store-busy");
-}
+// Locked store I/O, shared with the Codex client (shared/lib/store-file.js):
+// both clients write CRED_FILE, under the same dead-owner lock.
+const { readObject, withFileLock, mutateFile } = require("./lib/store-file");
+// The device identity in CRED_FILE, shared with the Codex client.
+const deviceIdentity = require("./lib/device-identity");
 
 // The shared store: identity plus other clients' fields.
 function readStore() {
   return readObject(CRED_FILE);
 }
 
-function mutateStore(fn) {
-  return mutateFile(CRED_FILE, fn);
-}
 
 // The session. Before ADR 005 it lived in the shared store, so the first read
 // without a session file copies sign-out and sign-in intent from there, once.
@@ -310,27 +229,16 @@ function markUploadNotified() {
 // Public API
 // ---------------------------------------------------------------------------
 
-function ensureIdentityField(key, create) {
-  const existing = readStore()[key];
-  if (existing) return existing;
-  let value;
-  mutateStore((store) => {
-    if (!store[key]) store[key] = create();
-    value = store[key];
-  });
-  return value;
-}
-
 function getDeviceId() {
-  return ensureIdentityField("device_id", () => crypto.randomUUID().toUpperCase());
+  return deviceIdentity.getDeviceId();
 }
 
 function getOrCreateHashSalt() {
-  return ensureIdentityField("hash_salt", () => crypto.randomBytes(16).toString("hex"));
+  return deviceIdentity.getOrCreateHashSalt();
 }
 
 function getHashSalt() {
-  return readStore().hash_salt || "";
+  return deviceIdentity.readHashSalt();
 }
 
 function getLicenseToken() {

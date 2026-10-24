@@ -123,6 +123,8 @@ module.exports = {
   readChannel,
   STATE_DIR,
   CRED_FILE,
+  // The name the shared device identity module uses (shared/lib/device-identity.js).
+  credentialsFile: () => CRED_FILE,
   TELEMETRY_POLICY_FILE,
   getActivateUrl,
   getDeviceCodeUrl,

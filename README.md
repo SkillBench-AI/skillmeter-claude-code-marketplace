@@ -42,8 +42,10 @@ Moving from the archived `skillmeter-codex-marketplace`: see
 ## Shared code
 
 Code both clients must run identically lives once in [`shared/lib`](shared/lib):
-today the sanitizer (`sanitize.js`, `rules.js`, `path-vocabulary.json`) and the
-`credentials.json` lock (`credential-lock.js`). Both CLIs install only the
+what leaves the machine (the sanitizer), sign-in and license renewal, endpoint
+trust, the device identity and store I/O for `~/.skillbench`, repository scope,
+and the status card. Each client keeps its own session, license and consent.
+See [shared/README.md](shared/README.md). Both CLIs install only the
 plugin directory, so each plugin carries a generated copy at the same path in
 its `scripts/lib`. Edit `shared/lib`, then run:
 
