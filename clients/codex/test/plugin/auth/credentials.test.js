@@ -133,20 +133,20 @@ test("the global pause blocks event-log uploads without consuming the queue", as
   }
 });
 
-test("getBackendUrl: a trusted env override wins, then the JWT tenant, then the shipped default", () => {
+// No shared default host: without the tenant's own host there is nowhere to send.
+test("getBackendUrl: a trusted env override wins, then the JWT tenant, else none", () => {
   credstore.markEngaged();
-  const DEFAULT = logger.DEFAULT_BACKEND_URL;
-  assert.match(DEFAULT, /^https:\/\/api\.meter\.skillbench\.ai\/logs\/codex$/);
   for (const [name, { env, aud, exp = FUTURE, settings }, expected] of [
     ["trusted env override over the JWT", { env: "https://api.meter.skillbench.com/logs/codex", aud: "https://jwt.meter.skillbench.com" }, "https://api.meter.skillbench.com/logs/codex"],
-    ["untrusted env override", { env: "https://evil.example.com/logs/codex" }, DEFAULT],
-    ["non-https env override", { env: "http://api.meter.skillbench.com/logs/codex" }, DEFAULT],
+    ["untrusted env override", { env: "https://evil.example.com/logs/codex", aud: "https://jwt.meter.skillbench.com" }, null],
+    ["non-https env override", { env: "http://api.meter.skillbench.com/logs/codex" }, null],
     ["JWT tenant on skillbench.com", { aud: "https://acme.meter.skillbench.com" }, "https://acme.meter.skillbench.com/logs/codex"],
     ["JWT tenant on skillbench.ai", { aud: "https://acme.meter.skillbench.ai" }, "https://acme.meter.skillbench.ai/logs/codex"],
     ["expired JWT still routes", { aud: "https://acme.meter.skillbench.com", exp: PAST }, "https://acme.meter.skillbench.com/logs/codex"],
-    ["untrusted JWT tenant", { aud: "https://evil.example.com" }, DEFAULT],
+    ["untrusted JWT tenant", { aud: "https://evil.example.com" }, null],
+    ["JWT tenant on a .meter.dev domain", { aud: "https://acme.meter.dev" }, null],
     ["a backendUrl settings key is ignored", { aud: "https://jwt.meter.skillbench.com", settings: { backendUrl: "https://acme.meter.dev.skillbench.com/logs/codex" } }, "https://jwt.meter.skillbench.com/logs/codex"],
-    ["unauthenticated", {}, DEFAULT],
+    ["unauthenticated", {}, null],
   ]) {
     const cwd = tempDir("sk-auth-cwd");
     if (settings) writeSettings(cwd, settings);
@@ -158,6 +158,24 @@ test("getBackendUrl: a trusted env override wins, then the JWT tenant, then the 
       delete process.env.SKILLMETER_BACKEND_URL;
       setToken("");
     }
+  }
+});
+
+test("an event log whose license has no trusted tenant host is held, and nothing is sent", async () => {
+  credstore.markEngaged();
+  setToken(makeJwt({ aud: "https://evil.example.com", exp: FUTURE }));
+  const logFile = tmpLogFile('{"a":1}\n');
+  const realFetch = global.fetch;
+  let requests = 0;
+  global.fetch = async () => { requests++; throw new Error("no request expected"); };
+  try {
+    assert.equal(await logger.transferEventLog(logFile, undefined, 5000), "held");
+    assert.equal(requests, 0);
+    assert.equal(fs.existsSync(logFile), true, "queued batch remains for later");
+  } finally {
+    global.fetch = realFetch;
+    setToken("");
+    try { fs.unlinkSync(logFile); } catch {}
   }
 });
 

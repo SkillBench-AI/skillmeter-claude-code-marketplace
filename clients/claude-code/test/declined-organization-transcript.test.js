@@ -1,10 +1,9 @@
 "use strict";
 
-// A license covers two organizations and the user turned one off. Capture is
-// allowed for a repository of the other one, but sending needs every licensed
-// organization, so nothing is recorded. Content from that period must not be
-// sent once the organization is turned on, as for any period that was not
-// recorded.
+// A license covers two organizations and the user turned one off. A repository
+// of the other one still records and sends: each repository needs only its own
+// organization authorized (ADR 004, decision 2). A period that was not
+// recorded is never sent later.
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
@@ -16,39 +15,31 @@ const OTHER = "beta";
 const BOTH_ENABLED = { orgs: { [ORG]: true, [OTHER]: true }, repositories: { [REPO_KEY]: true } };
 const OTHER_OFF = { orgs: { [ORG]: true, [OTHER]: false }, repositories: { [REPO_KEY]: true } };
 
-test("turns from while another licensed organization was off are not sent once it is on", async (t) => {
+test("another licensed organization turned off does not stop this repository's turns", async (t) => {
   const c = await collector();
   t.after(c.close);
   const f = session(c.url, { orgs: [ORG, OTHER], policy: OTHER_OFF });
 
   await f.sessionStart("startup");
   await f.turn("off-1");
+  await f.drained(() => c.transcript().includes("off-1-a"));
   await f.turn("off-2");
-  assert.deepEqual(c.transcript(), [], "nothing is sent while the other organization is off");
-
-  f.setPolicy(BOTH_ENABLED);
-  await f.turn("on");
-  await f.drained(() => c.transcript().includes("on-a"));
-  assert.deepEqual(c.transcript(), ["on-u", "on-a"]);
+  await f.drained(() => c.transcript().includes("off-2-a"));
+  assert.deepEqual(c.transcript(), ["off-1-u", "off-1-a", "off-2-u", "off-2-a"]);
 });
 
-test("a resumed session does not send what came before it, once the other organization is on", async (t) => {
+test("a resumed session sends only its own turns while another organization is off", async (t) => {
   const c = await collector();
   t.after(c.close);
   const f = session(c.url, { orgs: [ORG, OTHER], policy: OTHER_OFF, history: HISTORY });
 
   await f.sessionStart("resume");
   await f.turn("off");
-
-  f.setPolicy(BOTH_ENABLED);
-  await f.turn("on");
-  await f.drained(() => c.transcript().includes("on-a"));
-  assert.deepEqual(c.transcript(), ["on-u", "on-a"]);
+  await f.drained(() => c.transcript().includes("off-a"));
+  assert.deepEqual(c.transcript(), ["off-u", "off-a"]);
 });
 
-// Here the repository was recording before the other organization was turned
-// off, so its cursor already exists when sending is refused.
-test("turns refused after recording began are not sent once the other organization is on", async (t) => {
+test("turning another organization off and on again leaves this repository's recording unbroken", async (t) => {
   const c = await collector();
   t.after(c.close);
   const f = session(c.url, { orgs: [ORG, OTHER], policy: BOTH_ENABLED });
@@ -58,14 +49,15 @@ test("turns refused after recording began are not sent once the other organizati
   await f.drained(() => c.transcript().includes("first-a"));
   f.setPolicy(OTHER_OFF);
   await f.turn("off");
+  await f.drained(() => c.transcript().includes("off-a"));
   f.setPolicy(BOTH_ENABLED);
   await f.turn("on");
   await f.drained(() => c.transcript().includes("on-a"));
-  assert.deepEqual(c.transcript(), ["first-u", "first-a", "on-u", "on-a"]);
+  assert.deepEqual(c.transcript(), ["first-u", "first-a", "off-u", "off-a", "on-u", "on-a"]);
 });
 
-// The baseline the two tests above rely on: a session that records normally
-// never sends what its transcript held before it started.
+// A session that records normally never sends what its transcript held before
+// it started.
 test("a resumed session that records normally sends only its own turns", async (t) => {
   const c = await collector();
   t.after(c.close);

@@ -292,26 +292,27 @@ function normalizeOrg(org) {
 /**
  * Network-side consent check. Token expiry is deliberately handled by the
  * transfer layer after its refresh attempt; this check answers only whether
- * the current license org(s) are authorized to transmit at all.
+ * the current license may transmit at all.
+ *
+ * A repository needs its own organization licensed and authorized, and itself
+ * enabled (ADR 004, decision 2); another licensed organization left unset does
+ * not block it. Organization-level data (`repoKey` empty) is not tied to one
+ * organization, so it needs every licensed organization authorized.
  */
 function isTelemetryTransmissionAllowed(repoKey = "") {
   const policy = telemetryStore.readPolicy();
   if (policy.global.enabled === false) return false;
   const session = readSession();
   if (session.signed_out === true) return false;
-  const orgs = session.license_jwt ? getLicenseOrgs(session.license_jwt) : [];
+  const orgs = session.license_jwt ? getLicenseOrgs(session.license_jwt).map(normalizeOrg) : [];
   if (orgs.length === 0) return false;
-  if (!orgs.every((org) => policy.organizations[normalizeOrg(org)]?.enabled === true)) {
-    return false;
-  }
-  if (repoKey) {
-    const normalizedKey = telemetryStore.normalizeRepoKey(repoKey);
-    if (!normalizedKey) return false;
-    const org = normalizedKey.split("/")[1];
-    if (!orgs.map(normalizeOrg).includes(org)) return false;
-    if (policy.repositories[normalizedKey]?.enabled !== true) return false;
-  }
-  return true;
+  const authorized = (org) => policy.organizations[org]?.enabled === true;
+  if (!repoKey) return orgs.every(authorized);
+  const normalizedKey = telemetryStore.normalizeRepoKey(repoKey);
+  if (!normalizedKey) return false;
+  const org = normalizedKey.split("/")[1];
+  return orgs.includes(org) && authorized(org) &&
+    policy.repositories[normalizedKey]?.enabled === true;
 }
 
 // Drop the license JWT atomically (the validated org lives in the JWT, so

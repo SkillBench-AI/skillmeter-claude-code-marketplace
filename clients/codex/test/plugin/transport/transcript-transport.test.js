@@ -60,6 +60,22 @@ for (const [name, change] of [
   assert.equal(stage(), null);
 });
 
+// The queue owner is the same for the same user's next sign-in, so a staged
+// chunk left behind would be sent under it.
+test("sign-out deletes staged chunks, and the same user's next sign-in does not send them", async () => {
+  const file = stage(); assert.ok(file);
+  save({ signed_out: true });
+  assert.equal(logger.purgeUnsentTelemetry(), true);
+  assert.equal(fs.existsSync(file), false);
+  save({});
+  const pending = queue.queueDirectories(logger.TRANSCRIPT_CHUNKS_DIR).flatMap(queue.pendingFiles);
+  assert.deepEqual(pending, []);
+  fs.appendFileSync(source, line("after sign-in"));
+  const next = stage();
+  const sent = next ? require("node:zlib").gunzipSync(fs.readFileSync(next)).toString() : "";
+  assert.doesNotMatch(sent, /synthetic first message/);
+});
+
 test("token refresh for the same principal resumes pending chunks", async () => {
   const file = stage(); save({ license_jwt: jwt("synthetic-user", 4102444800, { jti: "rotated" }) });
   global.fetch = async (_, options) => { assert.equal(options.headers.Authorization, `Bearer ${jwt("synthetic-user", 4102444800, { jti: "rotated" })}`); return { ok: true }; };

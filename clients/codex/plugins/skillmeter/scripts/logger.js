@@ -115,18 +115,27 @@ async function tryRefreshLicense(deviceId) {
   const before = credstore.getLicenseToken();
   const token = await licenseActivation.ensureFreshLicense(deviceId, {
     force: isLicenseRejected(),
-    onRevoked: () => purgeEventLogs(),
+    onRevoked: () => purgeUnsentTelemetry(),
   });
   if (token && token !== before) clearLicenseRejected();
   return token;
 }
 
-// Event batches are not bound to the license they were recorded under, so a
-// session that ends for good (sign-out, or a workspace that no longer licenses
-// the user) deletes them rather than sending them under the next sign-in.
-// Transcripts need no purge: their queue owner includes the license's tenant
-// and user, and delivery refuses a mismatch. Batches locked by an upload in
-// flight are left; returns false when any were.
+// A session that ends for good (sign-out, or a workspace that no longer
+// licenses the user) deletes what was recorded but not sent, rather than
+// sending it under the next sign-in. A transcript's queue owner does not tell
+// the same user's next sign-in apart, so staged chunks go too; the cursor and
+// consent journal stay, so nothing before the sign-out is staged again.
+// Payloads locked by an upload in flight are left; returns false when any were.
+function purgeUnsentTelemetry() {
+  let complete = purgeEventLogs();
+  for (const dir of transcriptQueue.queueDirectories(TRANSCRIPT_CHUNKS_DIR)) {
+    try { if (!transcriptQueue.purgeRevoked(dir, () => true)) complete = false; }
+    catch { complete = false; }
+  }
+  return complete;
+}
+
 function eventQueueNames() {
   try { return fs.readdirSync(LOG_DIR); }
   catch (error) { if (error.code === "ENOENT") return []; throw error; }
@@ -228,11 +237,11 @@ function getTimestamp() {
 // transcript handler.
 const INGEST_ROUTE = "/logs/codex";
 
-// Resolve the ingest URL from a trusted override, then the token audience,
-// then the default below. Both overrides and token-derived URLs are validated.
-// An expired audience can supply routing information, but sending still requires
-// a fresh license; an override does not bypass authentication.
-const DEFAULT_BACKEND_URL = "https://api.meter.skillbench.ai/logs/codex";
+// Resolve the ingest URL from a trusted override, then the token audience.
+// Both are validated. An expired audience can supply routing information, but
+// sending still requires a fresh license; an override does not bypass
+// authentication. There is no shared default: the license is the bearer token,
+// so without its tenant's host the data waits rather than going anywhere else.
 
 // Trusted domain patterns for backend URL validation. Prod tenants are on
 // *.meter.skillbench.ai; dev/non-prod on *.meter.dev.skillbench.com (the
@@ -243,7 +252,6 @@ const TRUSTED_BACKEND_PATTERNS = [
   /^https:\/\/api\.meter\.skillbench\.com\//,
   /^https:\/\/[a-z0-9-]+\.meter\.skillbench\.com\//,
   /^https:\/\/[a-z0-9-]+\.skillbench\.com\//,
-  /^https:\/\/[a-z0-9-]+\.meter\.dev\//,
   /^https:\/\/[a-z0-9-]+\.meter\.dev\.skillbench\.com\//,
 ];
 
@@ -265,16 +273,14 @@ function isValidBackendUrl(url) {
  * sign-in cannot pair one tenant's endpoint with another tenant's token.
  *
  * @param {string|null} token
- * @returns {string} validated HTTPS ingest URL.
+ * @returns {string|null} validated HTTPS ingest URL, or null when there is none.
  */
 function getBackendUrlForToken(token) {
   const override = process.env.SKILLMETER_BACKEND_URL;
   if (override) {
     if (!isValidBackendUrl(override)) {
-      console.error(
-        `[skillmeter] SKILLMETER_BACKEND_URL rejected (untrusted domain), using default`
-      );
-      return DEFAULT_BACKEND_URL;
+      console.error(`[skillmeter] SKILLMETER_BACKEND_URL rejected (untrusted domain); uploads held`);
+      return null;
     }
     return override;
   }
@@ -282,22 +288,16 @@ function getBackendUrlForToken(token) {
   // Per-tenant routing: a signed-in user's license JWT carries the tenant's
   // meter host in its `aud` (audience) claim. Prefer a fresh token, but fall
   // back to the claim of an expired one (allow-expired) so a drain still reaches
-  // the correct tenant host while a refresh is pending. Append the Codex ingest
-  // route, then fall through to the prod default when there's no usable token.
+  // the correct tenant host while a refresh is pending.
   const endpoint =
     getEndpointFromToken(token) || getEndpointFromTokenAllowExpired(token);
-  if (endpoint) {
-    const fullUrl = `${endpoint}${INGEST_ROUTE}`;
-    if (!isValidBackendUrl(fullUrl)) {
-      console.error(
-        `[skillmeter] JWT-derived endpoint rejected (untrusted domain), using default`
-      );
-      return DEFAULT_BACKEND_URL;
-    }
-    return fullUrl;
+  if (!endpoint) return null;
+  const fullUrl = `${endpoint}${INGEST_ROUTE}`;
+  if (!isValidBackendUrl(fullUrl)) {
+    console.error(`[skillmeter] JWT-derived endpoint rejected (untrusted domain); uploads held`);
+    return null;
   }
-
-  return DEFAULT_BACKEND_URL;
+  return fullUrl;
 }
 
 /**
@@ -305,7 +305,7 @@ function getBackendUrlForToken(token) {
  * that have no token in hand; the upload path uses getBackendUrlForToken with
  * its own uncached read instead.
  *
- * @returns {string} a validated https ingest URL.
+ * @returns {string|null} a validated https ingest URL, or null.
  */
 function getBackendUrl() {
   return getBackendUrlForToken(getLicenseToken());
@@ -500,6 +500,10 @@ function transferAuthorizedEventLog(logFile, backendUrl, timeoutMs = EVENT_TIMEO
   // the host up front could otherwise pair tenant A's endpoint with tenant B's
   // JWT after a concurrent sign-in.
   const url = backendUrl || getBackendUrlForToken(token);
+  if (!url) {
+    console.error(`[skillmeter] Event log: no trusted endpoint for this license — ${baseName} kept queued`);
+    return Promise.resolve("held");
+  }
 
   try { filtered = filtered || repositoryQueue.pruneFile(logFile); }
   catch { console.error("[skillmeter] Event delivery held; repository routing unavailable"); }
@@ -667,8 +671,10 @@ function stageTranscriptForUpload(transcriptPath, context = {}) {
 async function sendTranscriptChunk(meta, compressed, backendUrl, timeoutMs) {
   const token = getLicenseTokenUncached();
   if (!token || isJwtExpired(token) || !scopeStillAllowed(meta.scope, token)) return "skip";
+  const url = backendUrl || getBackendUrlForToken(token);
+  if (!url) return "held";
   try {
-    const res = await fetch(`${backendUrl || getBackendUrlForToken(token)}/transcript`, {
+    const res = await fetch(`${url}/transcript`, {
       method: "POST",
       headers: commonHeaders(token, {
         "X-Device-ID": meta.scope.deviceId,
@@ -1827,6 +1833,7 @@ module.exports = {
   setTelemetryGloballyDisabled,
   tryRefreshLicense,
   purgeEventLogs,
+  purgeUnsentTelemetry,
   eventQueueEmpty,
   hashHmac,
   sanitizeToolData,
@@ -1920,7 +1927,6 @@ module.exports = {
   ACTIVE_LOG_STALE_MS,
   DRAIN_ONCE_LOCK_FILE,
   RETRY_DAEMON_LOCK_FILE,
-  DEFAULT_BACKEND_URL,
   getBackendUrl,
   getBackendUrlForToken,
   markLicenseRejected,

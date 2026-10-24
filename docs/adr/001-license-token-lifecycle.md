@@ -492,8 +492,9 @@ separates capture policy from delivery readiness (#47).
 - Sign-out sets `signed_out` and a new `auth_generation` in this plugin's
   session file and revokes the refresh token; the consent journal reads the
   generation. It does not pause other clients. Sign-out and a 402 (or a 404 for
-  the pinned tenant) delete unsent event batches; transcripts are held by their
-  queue owner, which names the tenant and user, instead of being deleted.
+  the pinned tenant) delete unsent event batches and transcript chunks, as in
+  the Claude Code plugin. The transcript cursor and consent journal are kept,
+  so what was recorded before is not staged again.
 - There is no `/refresh` and no re-activation without a stored session: the
   license is renewed only through the broker refresh token (ADR 005).
 - Same-principal sign-out and sign-in closes a consent-journal interval

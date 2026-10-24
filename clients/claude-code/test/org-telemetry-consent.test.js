@@ -401,6 +401,30 @@ test("transmission authorization requires org consent and honors the global kill
   assert.equal(runProbe().stdout, "false");
 });
 
+test("with several licensed organizations, a repository needs only its own organization authorized", () => {
+  const stateDir = makeTempDir("skm-multi-org-");
+  writeCredentials(stateDir, {
+    license_jwt: makeJwt({
+      exp: Math.floor(Date.now() / 1000) + 3600,
+      org: { login: "tenant" },
+      orgs: ["alpha", "beta"],
+    }),
+  });
+  writeTelemetryPolicy(stateDir, {
+    orgs: { alpha: true },
+    repositories: { "github.com/alpha/app": true, "github.com/beta/app": true },
+  });
+  const env = isolatedEnv({ SKILLMETER_STATE_DIR: stateDir });
+  const allowed = (repoKey) => runNode("-e", [
+    `process.stdout.write(String(require('./skillmeter/scripts/credstore').isTelemetryTransmissionAllowed(${JSON.stringify(repoKey)})));`,
+  ], { cwd: path.resolve(__dirname, ".."), env }).stdout;
+
+  assert.equal(allowed("github.com/alpha/app"), "true", "its organization is authorized");
+  assert.equal(allowed("github.com/beta/app"), "false", "its organization is unset");
+  assert.equal(allowed("github.com/gamma/app"), "false", "not a licensed organization");
+  assert.equal(allowed(""), "false", "organization-level data needs every organization");
+});
+
 test("SessionStart does not silently activate a token-less install", () => {
   const stateDir = makeTempDir("skm-org-consent-");
   const dataDir = makeTempDir("skm-org-consent-");
