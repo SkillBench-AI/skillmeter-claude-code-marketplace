@@ -106,5 +106,5 @@ npm run check
 ```
 
 See the [transport and recovery guide](integration/README.md)
-for local integration checks and [RELEASING.md](RELEASING.md) for versioning and
+for local integration checks and [RELEASING.md](../../RELEASING.md) for versioning and
 release steps. Do not commit credentials or generated telemetry.

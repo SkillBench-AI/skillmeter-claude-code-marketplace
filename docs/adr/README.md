@@ -1,6 +1,9 @@
 # Architectural Decision Records
 
-Decisions that shape this plugin. IaC and platform-level ADRs live in
+Decisions that shape both SkillMeter clients. Each ADR states the decision
+once; where the Codex client implements it differently, a **Codex client**
+section at the end of the ADR says how. Since ADR 005 and ADR 006, sessions and
+consent are per client. IaC and platform-level ADRs live in
 `skillbench-infra/docs/adr/` and `skillbench-docs/adr/`.
 
 Conventions: ADRs are point-in-time artifacts. Amend with a dated note or

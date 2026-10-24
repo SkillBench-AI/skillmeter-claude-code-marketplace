@@ -2,9 +2,10 @@
 
 ## Supported version
 
-Security fixes are applied to the latest released SkillMeter plugin version.
-Users should update to the latest version before reporting an issue that may
-already be resolved.
+This policy covers both SkillMeter clients in this repository: SkillMeter for
+Claude Code and SkillMeter for Codex. Security fixes are applied to the latest
+released version of each client. Update to it before reporting an issue that
+may already be resolved.
 
 ## Report a vulnerability
 
@@ -14,7 +15,8 @@ vulnerability.
 
 Include:
 
-- the affected SkillMeter and Claude Code versions;
+- the affected client (Claude Code or Codex), its SkillMeter version, and the
+  Claude Code or Codex version;
 - the operating system;
 - a minimal reproduction using synthetic data;
 - expected and observed behavior; and

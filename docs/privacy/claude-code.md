@@ -293,7 +293,7 @@ SkillBench or the applicable organization for a server-side request.
 
 ## Security and incident reporting
 
-See [SECURITY.md](SECURITY.md). Do not include credentials, raw transcripts, or
+See [SECURITY.md](../../SECURITY.md). Do not include credentials, raw transcripts, or
 other sensitive data in a public issue.
 
 ## Changes

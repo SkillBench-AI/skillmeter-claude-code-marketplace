@@ -79,3 +79,23 @@ existing retention limit; it is never sent under the new record.
 |---|---|---|
 | This plugin | None; its record and controls already cover only this plugin | Done |
 | Codex | Own record, organization control, no local-only grant | Done in 0.12.1 ([skillmeter-codex-marketplace#109](https://github.com/SkillBench-AI/skillmeter-codex-marketplace/pull/109)) |
+
+## Codex client
+
+**Codex status:** Adopted by reference to the decisions above
+(Proposed 2026-09-28). Implemented in Codex 0.12.1 (#109). Supersedes the
+shared-record decisions of
+[ADR 004](004-shared-consent.md#codex-client).
+**Related:** `docs/repository-consent.md` (the boundary it documents)
+
+### In the Codex plugin
+
+| Area | Codex |
+| --- | --- |
+| Record | `<state>/clients/codex/telemetry-policy.json`, next to the session (ADR 005). `<state>/telemetry-policy.json` is never read. |
+| Grant | Organization ON and repository ON, both at `consent_version: 2`, recorded by `consent-set` with `--acknowledge-machine-scope`. |
+| Organization control | `consent-set on\|off --organization ORG`; the organization must be covered by the license after narrowing. |
+| Local settings | `.codex/settings.local.json` OFF or invalid restricts; local ON grants nothing. |
+| Global pause | `global.enabled` in the Codex record; pauses only Codex. |
+| Observation marker | `<PLUGIN_DATA>/logs/consent-policy-observed`, a new name so a marker left by the shared record does not make the new record look deleted. |
+| Upgrade | No choices are imported. Event batches stamped under the shared record are held and expire at the 30-day limit. |

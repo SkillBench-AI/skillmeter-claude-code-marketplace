@@ -55,38 +55,9 @@ concise English for readers who do not know the team's internal history.
 - Keep upload, retry and cleanup failures best-effort so hooks can return.
   Preserve existing validation, privacy boundaries and recovery behavior.
 
-## Release notes
+## Releases
 
-Release notes are public. They say what changed for the user; the PR holds the
-rest. Read the latest published release before writing one;
-[0.42.0](https://github.com/SkillBench-AI/skillmeter-plugins/releases/tag/v0.42.0)
-is the model for length and tone.
+Follow [RELEASING.md](../../RELEASING.md): branches, version bump, the `vX.Y.Z`
+tag and its workflow, and the Claude Code release-note rules.
 
-- Title `SkillMeter X.Y.Z`, then `### What changed`, `### After updating`,
-  `### Known limitations`, and a final `Details: #PR, #PR` line.
-- **What changed**: the user-visible outcome, at most three bullets, one change
-  each. Each bullet is one short sentence, about 20 words or fewer, in the
-  present tense. No semicolons, no second clause after a colon, no "and"
-  joining two changes. No retry counts, line counts, algorithms, file or
-  module names, policy or schema versions, or ADR references.
-- **After updating**: always `1. claude plugin update skillmeter@skillbench`
-  and `2. Quit and reopen Claude Code` (hooks load per session).
-  Add a sign-in step only when the release requires one. Do not add sentences
-  about what is not needed.
-- **Known limitations**: only what this release adds or changes, under the
-  same sentence rule, each saying what the user will see. End with
-  `Otherwise unchanged from X.Y.Z.`, or use only `Unchanged from X.Y.Z.`,
-  naming the release that lists them.
-- **Details**: PR numbers only. ADRs and privacy documents are reachable from
-  the PRs.
-- Pull requests target `next`, the development branch; the internal channel
-  follows it. `main` is what the marketplace installs and moves only at
-  releases: bump `skillmeter/.claude-plugin/plugin.json` on `next`, then open a
-  pull request from `next` to `main` and merge it with a merge commit, not a
-  squash, so both branches keep one history. Cut the release on that merge:
-  push the annotated tag `vX.Y.Z` there, and `release-claude-code.yml` checks it
-  against `plugin.json`, runs the tests and validation, and publishes
-  `SkillMeter X.Y.Z` as Latest; then replace its generated body with the
-  approved notes. A hotfix goes to `main` in its own release pull request and
-  is merged back into `next` right after.
 - Obtain approval before publishing unless already authorized.

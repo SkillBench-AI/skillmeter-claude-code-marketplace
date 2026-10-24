@@ -1,7 +1,7 @@
 # Codex sanitizer parity
 
 The on-device engine, rule table and path vocabulary follow
-[ADR 002](../../claude-code/docs/adr/002-two-stage-sanitization.md). Both
+[ADR 002](../../../docs/adr/002-two-stage-sanitization.md). Both
 clients run the same files: `sanitize.js`, `rules.js` and `path-vocabulary.json`
 live once in [`shared/lib`](../../../shared/lib), and
 `node scripts/sync-shared.mjs` copies them into each plugin. CI fails if a copy

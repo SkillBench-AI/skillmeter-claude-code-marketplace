@@ -7,7 +7,7 @@ point at them.
 | Client | Plugin | Marketplace (read by) | Docs |
 | --- | --- | --- | --- |
 | Claude Code | [`clients/claude-code/skillmeter`](clients/claude-code/skillmeter) | [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json) (Claude Code) | [README](clients/claude-code/README.md) |
-| Codex | [`clients/codex/plugins/skillmeter`](clients/codex/plugins/skillmeter) | [`.agents/plugins/marketplace.json`](.agents/plugins/marketplace.json) (Codex) | [README](clients/codex/README.md), [releasing](clients/codex/RELEASING.md) |
+| Codex | [`clients/codex/plugins/skillmeter`](clients/codex/plugins/skillmeter) | [`.agents/plugins/marketplace.json`](.agents/plugins/marketplace.json) (Codex) | [README](clients/codex/README.md) |
 
 Codex reads `.agents/plugins/marketplace.json` and falls back to
 `.claude-plugin/marketplace.json` only when it is missing, which would offer the
@@ -31,6 +31,13 @@ codex plugin add skillmeter@skillbench
 
 Moving from the archived `skillmeter-codex-marketplace`: see
 [clients/codex/README.md](clients/codex/README.md#update).
+
+## Documentation
+
+- [Architectural decisions](docs/adr/README.md): one set for both clients; each
+  ADR ends with how the Codex client implements it where that differs.
+- [Releasing](RELEASING.md), [Privacy](PRIVACY.md), [Security](SECURITY.md) and
+  [Support](SUPPORT.md) cover both clients.
 
 ## Shared code
 
