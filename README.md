@@ -55,7 +55,11 @@ live in [`shared/fixtures`](shared/fixtures).
 - `internal`: rebuilt from each green `next` push for both clients by
   [`make-internal-channel.mjs`](.github/scripts/make-internal-channel.mjs).
 
-Release tags: `v*` for Claude Code, `codex-v*` for Codex.
+Release tags: `v*` for Claude Code, `codex-v*` for Codex. Pushing one runs
+that client's release workflow (`release-claude-code.yml` or
+`release-codex.yml`), which validates the tag against the plugin version, runs
+the checks and publishes the GitHub Release; the Claude Code release is always
+Latest.
 
 ## Development
 

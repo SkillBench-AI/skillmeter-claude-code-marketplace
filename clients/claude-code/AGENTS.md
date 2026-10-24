@@ -83,7 +83,10 @@ is the model for length and tone.
   follows it. `main` is what the marketplace installs and moves only at
   releases: bump `skillmeter/.claude-plugin/plugin.json` on `next`, then open a
   pull request from `next` to `main` and merge it with a merge commit, not a
-  squash, so both branches keep one history. Cut the release on that merge. A
-  hotfix goes to `main` in its own release pull request and is merged back into
-  `next` right after.
+  squash, so both branches keep one history. Cut the release on that merge:
+  push the annotated tag `vX.Y.Z` there, and `release-claude-code.yml` checks it
+  against `plugin.json`, runs the tests and validation, and publishes
+  `SkillMeter X.Y.Z` as Latest; then replace its generated body with the
+  approved notes. A hotfix goes to `main` in its own release pull request and
+  is merged back into `next` right after.
 - Obtain approval before publishing unless already authorized.
