@@ -1,7 +1,7 @@
 {
   "name": "skillmeter",
-  "version": "0.14.0",
-  "description": "Live SkillBench telemetry for Codex \u2014 lifecycle-hook session analytics, plus sanitized export and review skills.",
+  "version": "0.14.1-internal.71",
+  "description": "Live SkillBench telemetry for Codex — lifecycle-hook session analytics, plus sanitized export and review skills.",
   "author": {
     "name": "SkillBench",
     "url": "https://github.com/SkillBench-AI"

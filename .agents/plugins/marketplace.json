@@ -1,7 +1,7 @@
 {
-  "name": "skillbench",
+  "name": "skillbench-internal",
   "interface": {
-    "displayName": "SkillBench"
+    "displayName": "SkillBench (internal)"
   },
   "plugins": [
     {
