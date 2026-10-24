@@ -41,6 +41,9 @@ const credentialsFile = () => path.join(stateDir(), "credentials.json");
 const sessionDir = () => path.join(stateDir(), "clients", "codex");
 const sessionFile = () => path.join(sessionDir(), "session.json");
 
+// What the user runs to sign in again, quoted by the shared broker.
+const SIGNIN_COMMAND = "$skillmeter:signin";
+
 const brokerUrl = () => trustedEndpoint(process.env.SKILLMETER_BROKER_URL, defaults().broker, "broker");
 const activateUrl = () => trustedEndpoint(process.env.SKILLMETER_ACTIVATE_URL, defaults().activate, "activation");
 
@@ -56,8 +59,12 @@ module.exports = {
   sessionFile,
   brokerUrl,
   activateUrl,
-  deviceCodeUrl: () => `${brokerUrl()}/oauth2/device/auth`,
-  tokenUrl: () => `${brokerUrl()}/oauth2/token`,
-  revokeUrl: () => `${brokerUrl()}/oauth2/revoke`,
+  SIGNIN_COMMAND,
+  // The names the shared broker and license-exchange modules use.
+  getActivateUrl: () => activateUrl(),
+  getDeviceCodeUrl: () => `${brokerUrl()}/oauth2/device/auth`,
+  getTokenUrl: () => `${brokerUrl()}/oauth2/token`,
+  getRevokeUrl: () => `${brokerUrl()}/oauth2/revoke`,
+  getOAuthClientId: () => oauthClientId(),
   trustedEndpoint,
 };

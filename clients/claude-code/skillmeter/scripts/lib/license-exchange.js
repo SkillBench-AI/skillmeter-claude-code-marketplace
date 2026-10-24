@@ -1,3 +1,4 @@
+// GENERATED from shared/lib/license-exchange.js by scripts/sync-shared.mjs. Edit that file, not this copy.
 /**
  * Exchange a broker ID token for a license at /activate: the one place a
  * license is issued, at sign-in and at every renewal (ADR 005). Never throws.

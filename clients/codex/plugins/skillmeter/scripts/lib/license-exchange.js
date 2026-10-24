@@ -1,6 +1,4 @@
-// Vendored from skillmeter-claude-code-marketplace
-// skillmeter/scripts/lib/license-exchange.js at c9c5537 (ADR 005). Keep behavior in step with
-// the canonical copy; only the configuration wiring differs.
+// GENERATED from shared/lib/license-exchange.js by scripts/sync-shared.mjs. Edit that file, not this copy.
 /**
  * Exchange a broker ID token for a license at /activate: the one place a
  * license is issued, at sign-in and at every renewal (ADR 005). Never throws.
@@ -17,34 +15,8 @@
  * user who was removed from one workspace into another one silently.
  */
 
-const config = require("./config");
-
-const getActivateUrl = config.activateUrl;
-
-/**
- * POST a JSON body with a `Bearer <token>` Authorization header and a timeout.
- *
- * Returns the raw Response; the caller owns status mapping and body parsing.
- * Throws on network error or timeout.
- *
- * @param {string} url
- * @param {string} bearer         token for the Authorization header
- * @param {object} body           JSON-serializable request body
- * @param {object} opts
- * @param {number} opts.timeoutMs abort after this many ms
- * @returns {Promise<Response>}
- */
-function postBearerJson(url, bearer, body, { timeoutMs }) {
-  return fetch(url, {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${bearer}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-}
+const { getActivateUrl } = require("./config");
+const { postBearerJson } = require("./http");
 
 async function exchangeIdToken(idToken, deviceId, { org } = {}) {
   const body = { device_id: deviceId };

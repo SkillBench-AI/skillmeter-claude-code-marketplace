@@ -78,7 +78,6 @@ async function exchangeForLicense(idToken, deviceId) {
 async function completeSignin(deviceId, deviceCode, interval, generation) {
   const { idToken, refreshToken } = await pollDeviceToken(deviceCode, interval);
   const licenseJwt = await exchangeForLicense(idToken, deviceId);
-  if (!refreshToken) throw new Error("Sign-in returned no refresh token; the offline scope was not granted.");
   const committed = credstore.commitSignin({ jwt: licenseJwt, refreshToken, generation });
   return committed ? licenseJwt : null;
 }

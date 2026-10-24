@@ -92,6 +92,9 @@ function getBackendUrlOverride() {
   return trustedEndpoint(url, null, "backend");
 }
 
+// What the user runs to sign in again, quoted by the shared broker.
+const SIGNIN_COMMAND = "/skillmeter:signin";
+
 // --- Eager path config (env + os only, matching former paths.js) ---
 const STATE_DIR =
   process.env.SKILLMETER_STATE_DIR ||
@@ -131,4 +134,5 @@ module.exports = {
   getRetryBaseMs,
   getTranscriptChunkMaxBytes,
   OAUTH_SCOPE,
+  SIGNIN_COMMAND,
 };

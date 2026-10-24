@@ -198,8 +198,8 @@ test("getBackendUrl: a trusted env override wins, then the JWT tenant, then the 
 
 test("sign-in and renewal default to the prod skillbench.ai services", () => {
   assert.equal(config.brokerUrl(), "https://id.skillbench.ai");
-  assert.equal(config.tokenUrl(), "https://id.skillbench.ai/oauth2/token");
-  assert.equal(config.revokeUrl(), "https://id.skillbench.ai/oauth2/revoke");
+  assert.equal(config.getTokenUrl(), "https://id.skillbench.ai/oauth2/token");
+  assert.equal(config.getRevokeUrl(), "https://id.skillbench.ai/oauth2/revoke");
   assert.equal(config.activateUrl(), "https://api.skillbench.ai/activate");
   assert.equal(config.stateDir(), path.join(tmpHome, ".skillbench"));
 });
