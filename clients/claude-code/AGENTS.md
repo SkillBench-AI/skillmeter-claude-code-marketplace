@@ -58,6 +58,6 @@ concise English for readers who do not know the team's internal history.
 ## Releases
 
 Follow [RELEASING.md](../../RELEASING.md): branches, version bump, the `vX.Y.Z`
-tag and its workflow, and the Claude Code release-note rules.
+tag and its workflow, and the release-note rules.
 
 - Obtain approval before publishing unless already authorized.

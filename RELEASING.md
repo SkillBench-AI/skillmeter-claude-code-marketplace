@@ -65,50 +65,34 @@ rest. Prepare and review them before pushing the tag; the workflow publishes
 with generated notes, which you then replace with the approved ones. Keep
 internal coordination and rollout history in Linear.
 
-Every release ends with `Details: #PR, #PR`: PR numbers only. ADRs and privacy
-documents are reachable from the PRs.
-
-### Claude Code
-
 Read the latest published release before writing one;
-[0.42.0](https://github.com/SkillBench-AI/skillmeter-plugins/releases/tag/v0.42.0)
-is the model for length and tone.
+[SkillMeter 0.42.0](https://github.com/SkillBench-AI/skillmeter-plugins/releases/tag/v0.42.0)
+is the model for length and tone. Both clients follow the same rules:
 
-- Title `SkillMeter X.Y.Z`, then `### What changed`, `### After updating`,
-  `### Known limitations`, and the `Details` line.
+- Title: `SkillMeter X.Y.Z` for Claude Code, `SkillMeter for Codex X.Y.Z` for
+  Codex. Then `### What changed`, `### After updating`, `### Known
+  limitations`, and a final `Details: #PR, #PR` line.
 - **What changed**: the user-visible outcome, at most three bullets, one change
   each. Each bullet is one short sentence, about 20 words or fewer, in the
   present tense. No semicolons, no second clause after a colon, no "and"
-  joining two changes. No retry counts, line counts, algorithms, file or
-  module names, policy or schema versions, or ADR references.
-- **After updating**: always `1. claude plugin update skillmeter@skillbench`
-  and `2. Quit and reopen Claude Code` (hooks load per session).
-  Add a sign-in step only when the release requires one. Do not add sentences
-  about what is not needed.
+  joining two changes. No command flags, retry counts, line counts,
+  algorithms, file or module names, policy or schema versions, or ADR
+  references. A change users cannot notice stays in its PR.
+- **After updating**: numbered steps, the only part that differs by client.
+  Do not add sentences about what is not needed.
+  - Claude Code: always `1. claude plugin update skillmeter@skillbench` and
+    `2. Quit and reopen Claude Code` (hooks load per session). Add a sign-in
+    step only when the release requires one.
+  - Codex: command blocks for `codex plugin marketplace upgrade skillbench`
+    and `codex plugin add skillmeter@skillbench`, then restarting Codex and
+    starting a new session; distinguish Git marketplaces from local checkouts
+    where needed.
 - **Known limitations**: only what this release adds or changes, under the
   same sentence rule, each saying what the user will see. End with
   `Otherwise unchanged from X.Y.Z.`, or use only `Unchanged from X.Y.Z.`,
   naming the release that lists them.
-
-### Codex
-
-Use [0.12.3](https://github.com/SkillBench-AI/skillmeter-codex-marketplace/releases/tag/v0.12.3)
-as the model for length and tone.
-
-- Title: `SkillMeter for Codex X.Y.Z`
-- `### What changed`: at most four bullets, one change each. Each bullet is one
-  short sentence, about 15 words or fewer, in the present tense, saying what
-  the user can now do or will notice. No semicolons, no second clause after a
-  colon, no "and" joining two changes. No command flags, file or module names,
-  policy or schema versions, retry counts, algorithms or ADR references. A
-  change users cannot notice stays in its PR.
-- `### After updating`: numbered steps with command blocks; distinguish Git
-  marketplaces from local checkouts where needed. Do not add sentences about
-  what is not needed.
-- `### Known limitations`: at most three items that this release adds or
-  changes, under the same sentence rule, each saying what the user will see.
-  End with `Otherwise unchanged from X.Y.Z.`, or use only
-  `Unchanged from X.Y.Z.` when nothing changed.
+- **Details**: PR numbers only. ADRs and privacy documents are reachable from
+  the PRs.
 
 ## Internal channel
 
