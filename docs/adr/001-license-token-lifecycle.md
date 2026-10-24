@@ -4,7 +4,9 @@
 **Status:** Accepted (PR #104, merged 2026-09-10). Amended 2026-09-16: sign-in
 moved off GitHub, which retires decision 4; see the
 [amendment](#amendment-2026-09-16-sign-in-moves-to-the-broker-and-decision-4-is-retired)
-at the end.
+at the end. Amended 2026-10-24: both clients renew through one shared flow, and
+a dead-owner lock replaces the cooldown lock; see the
+[amendment](#amendment-2026-10-24-one-renewal-flow-and-a-dead-owner-lock).
 Shared consent across clients is decided in
 [ADR 004](004-shared-consent.md), not here; see the
 [2026-09-25 note](#amendment-2026-09-25-shared-consent-is-decided-in-adr-004)
@@ -449,6 +451,25 @@ from the state the session found, before that clear.
 
 An upload rejected with 401 is not charged against the chunk's retry budget:
 the token, not the chunk, was refused.
+
+
+## Amendment 2026-10-24: one renewal flow and a dead-owner lock
+
+Both clients now renew through `shared/lib/license-renewal.js`: the refresh
+token grant, /activate pinned to the tenant, and the same outcomes, terminal
+states and backoff (2 minutes, doubling, capped at 30). Each client keeps its
+own status record.
+
+Single-flight is now the dead-owner lock of `credential-lock.js`, at the
+session's `.renew.lock`, instead of `.license-refresh.lock` with a 60-second
+cooldown. The broker revokes the whole refresh chain if a spent refresh token
+is used twice, so a live renewal is never taken over, however long it runs; a
+crashed one is recovered at once. A transient failure waits for the backoff,
+not a cooldown. The cooldown lock that earlier versions left in place is
+removed: read as a dead-owner lock, its format would be held forever.
+
+A session without a refresh token records "re-activation required" in both
+clients.
 
 ## Codex client
 

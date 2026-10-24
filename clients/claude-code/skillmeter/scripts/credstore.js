@@ -472,6 +472,8 @@ module.exports = {
   commitRefresh,
   commitRotation,
   dropRevokedLicense,
+  // The shared renewal flow's name (license-renewal.js), as in the Codex client.
+  dropSession: dropRevokedLicense,
   withRecoveryCurrent,
   getDeviceId,
   getOrCreateHashSalt,
