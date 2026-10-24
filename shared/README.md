@@ -12,5 +12,9 @@ A plugin cannot load files outside its own directory once installed, so
 difference, missing copy, or copy whose source was removed.
 
 A module belongs here when both clients implement the same contract: a file
-they share on disk, a server API, or a policy. Platform-specific code (hooks,
-consent stores, backfill) stays in its client.
+they share on disk, a server API, or a policy. Code that follows its host's
+contract stays in its client, even when it looks similar: hooks, consent stores
+(ADR 006), backfill, and `plugin-data-root.js`, since Claude Code and Codex
+hand plugins their data directory in different ways. When only part of a
+module is common, share that part: `card.js` draws the status card, and each
+client's `banner.js` decides what the card says.
