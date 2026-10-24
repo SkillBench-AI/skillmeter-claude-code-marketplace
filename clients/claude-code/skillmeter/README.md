@@ -140,9 +140,13 @@ drain cannot send is retried by the next turn's drain or the next session start.
 gzip and the license's tenant endpoint, with consent checked again before sending.
 
 Successful event batches become `.sent`; acknowledged transcript chunks are
-deleted. Transcript failures share a per-chunk retry budget across all drains:
-waits double from one minute to a 30-minute cap, then the eighth failed attempt
-quarantines the body and metadata. Quarantined files and delivered event logs
+deleted. A transcript's chunks are sent in order, and one that is not
+delivered holds back the rest of that transcript. Chunks are split so each
+request stays under the collector's size limit; a single record too large for
+any request is left out. Waits after a failure double from one minute to a
+30-minute cap. No network, HTTP 402, 403, 408, 429, 502, 503 or 504 only back
+off; other failures spend a per-chunk retry budget, and the eighth such
+failure quarantines the body and metadata. Quarantined files and delivered event logs
 are eligible for cleanup after 30 days. Pending event logs and chunks are
 retained for retry unless an applicable policy change, sign-out or a revoked
 license removes them, and are deleted once they are older than 7 days.

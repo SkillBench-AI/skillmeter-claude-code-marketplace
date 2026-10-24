@@ -110,9 +110,9 @@ function getEventTimeoutMs() {
 function getRetryBaseMs() {
   return parseInt(process.env.SKILLMETER_RETRY_BASE_MS || "", 10) || 120_000;
 }
-// Per-chunk UNCOMPRESSED byte budget for delta transcript upload. Conservative
-// default so the gzipped body stays well under the backend's 6 MB request limit
-// (JSONL gzips ~4x+).
+// Per-chunk UNCOMPRESSED byte budget for delta transcript upload. Chunks are
+// split further until the encoded body fits the collector's request limit
+// (transcript-delta.js splitByEnvelope).
 function getTranscriptChunkMaxBytes() {
   return parseInt(process.env.SKILLMETER_TRANSCRIPT_CHUNK_MAX_BYTES || "", 10) || 20 * 1024 * 1024;
 }

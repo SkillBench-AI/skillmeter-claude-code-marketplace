@@ -4,9 +4,15 @@
  * only after chunks are durable. No filesystem, network or credential access.
  */
 
+const zlib = require("zlib");
 const { sanitizeLine } = require("./sanitize");
 
 const DEFAULT_CHUNK_MAX_BYTES = 20 * 1024 * 1024;
+// The collector runs behind API Gateway and Lambda, whose event carries the
+// gzipped body base64-encoded and is capped at 6 MiB. A chunk's encoded body
+// plus this reserve for headers and the event wrapper stays under MAX_ENVELOPE.
+const MAX_ENVELOPE = 5 * 1024 * 1024;
+const ENVELOPE_RESERVE = 128 * 1024;
 
 /**
  * Parse JSONL text into ordered objects. Blank lines are skipped and malformed
@@ -134,9 +140,8 @@ function turnDestinations(objs, placeOf, seenUnrecorded = () => false) {
 
 /**
  * Split serialized JSONL strings into groups whose UNCOMPRESSED size stays
- * under `maxUncompressedBytes` (a conservative proxy so the gzipped body stays
- * well under the backend's hard limit). A single line larger than the budget
- * becomes its own group — it is never dropped.
+ * under `maxUncompressedBytes`. A single line larger than the budget becomes
+ * its own group. splitByEnvelope then enforces the collector's request limit.
  */
 function splitLinesByBudget(lines, maxUncompressedBytes = DEFAULT_CHUNK_MAX_BYTES) {
   const groups = [];
@@ -156,20 +161,57 @@ function splitLinesByBudget(lines, maxUncompressedBytes = DEFAULT_CHUNK_MAX_BYTE
   return groups;
 }
 
+function envelopeBytes(body) {
+  return 4 * Math.ceil(body / 3) + ENVELOPE_RESERVE;
+}
+
+/**
+ * Split a group until each part's gzipped, base64-encoded body fits the
+ * envelope. Gzip is skipped for a group too small to exceed it even when
+ * incompressible. A single line that cannot fit can never be accepted and is
+ * returned in `oversized` instead of a group.
+ */
+function splitByEnvelope(lines, maxEnvelope = MAX_ENVELOPE) {
+  const body = lines.join("\n") + "\n";
+  const bytes = Buffer.byteLength(body, "utf8");
+  // Gzip adds at most 5 bytes per 16 KiB block plus a small header.
+  const worstCase = bytes + Math.ceil(bytes / 16384) * 5 + 64;
+  if (envelopeBytes(worstCase) <= maxEnvelope ||
+      envelopeBytes(zlib.gzipSync(body).length) <= maxEnvelope) {
+    return { groups: [lines], oversized: 0 };
+  }
+  if (lines.length === 1) return { groups: [], oversized: 1 };
+  const middle = Math.ceil(lines.length / 2);
+  const head = splitByEnvelope(lines.slice(0, middle), maxEnvelope);
+  const tail = splitByEnvelope(lines.slice(middle), maxEnvelope);
+  return {
+    groups: [...head.groups, ...tail.groups],
+    oversized: head.oversized + tail.oversized,
+  };
+}
+
 /**
  * Build the full chunk plan plus the cursor to persist AFTER the chunks are
  * durably sealed.
  *
+ * Every chunk carries its generation's baseline: the seq of the reset that
+ * started the generation, or 0 before any reset. The collector discards an
+ * object for a higher baseline, appends for an equal one and ignores a lower
+ * one, so a chunk of a generation can never be merged into another.
+ *
  * @param {object[]} objs  parsed transcript lines (in file order)
- * @param {object|null} cursor  prior cursor { lastUuid, seq } or null
+ * @param {object|null} cursor  prior cursor { lastUuid, seq, baseline } or null
  * @param {string} salt  hash salt for per-line sanitization
- * @param {{seqStart?: number, maxUncompressedBytes?: number, keep?: function(number): boolean}} [opts]
+ * @param {{seqStart?: number, maxUncompressedBytes?: number, maxEnvelope?: number,
+ *          keep?: function(number): boolean}} [opts]
  *   `keep(index)` selects which delta records are sent; the cursor still
  *   moves past the others.
  * @returns {{ chunks: Array<{lines:string[], seq:number, reset:boolean, resetBaselineSeq:number|null}>,
- *             newCursor: {lastUuid: string|null, seq: number} | null }}
+ *             newCursor: {lastUuid: string|null, seq: number, baseline: number} | null,
+ *             oversized: number }}
  *   newCursor is null when the delta is empty (nothing to send; leave the
- *   cursor untouched).
+ *   cursor untouched). `oversized` counts records left out because no chunk
+ *   holding them could be accepted.
  */
 function buildChunkPlan(objs, cursor, salt, opts = {}) {
   // Continue the sequence from the cursor unless explicitly overridden.
@@ -179,16 +221,22 @@ function buildChunkPlan(objs, cursor, salt, opts = {}) {
   const { startIndex, reset } = computeDelta(objs, cursor);
   const deltaObjs = objs.slice(startIndex);
   if (deltaObjs.length === 0) {
-    return { chunks: [], newCursor: null };
+    return { chunks: [], newCursor: null, oversized: 0 };
   }
 
   const kept = opts.keep
     ? deltaObjs.filter((o, offset) => opts.keep(startIndex + offset))
     : deltaObjs;
   const lines = kept.map((o) => JSON.stringify(sanitizeLine(o, salt)));
-  const groups = splitLinesByBudget(lines, maxUncompressedBytes);
+  const groups = [];
+  let oversized = 0;
+  for (const group of splitLinesByBudget(lines, maxUncompressedBytes)) {
+    const split = splitByEnvelope(group, opts.maxEnvelope);
+    groups.push(...split.groups);
+    oversized += split.oversized;
+  }
 
-  const firstSeq = seqStart + 1;
+  const baseline = reset ? seqStart + 1 : (cursor && cursor.baseline) || 0;
   let seq = seqStart;
   const chunks = groups.map((groupLines) => {
     seq += 1;
@@ -196,17 +244,14 @@ function buildChunkPlan(objs, cursor, salt, opts = {}) {
       lines: groupLines,
       seq,
       reset,
-      // Every sub-chunk of a reset carries the SAME baseline so the server can
-      // truncate rows with seq < baseline idempotently, regardless of the order
-      // parallel chunk uploads arrive in.
-      resetBaselineSeq: reset ? firstSeq : null,
+      resetBaselineSeq: baseline || null,
     };
   });
 
   // Metadata-only delta keeps the previous anchor (no new content uuid).
   const newLastUuid = lastContentUuid(deltaObjs) || (cursor && cursor.lastUuid) || null;
 
-  return { chunks, newCursor: { lastUuid: newLastUuid, seq } };
+  return { chunks, newCursor: { lastUuid: newLastUuid, seq, baseline }, oversized };
 }
 
 module.exports = {
@@ -216,5 +261,7 @@ module.exports = {
   turnNumbers,
   turnDestinations,
   splitLinesByBudget,
+  splitByEnvelope,
   buildChunkPlan,
+  MAX_ENVELOPE,
 };
